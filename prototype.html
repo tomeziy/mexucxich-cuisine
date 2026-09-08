@@ -1,0 +1,828 @@
+<!DOCTYPE html>
+<html lang="vi">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>MexucxichCuisine - UI Prototype (3 Variants)</title>
+  <script src="https://cdn.tailwindcss.com"></script>
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=Plus+Jakarta+Sans:wght@400;500;600;700;800&display=swap" rel="stylesheet">
+  <script>
+    tailwind.config = {
+      theme: {
+        extend: {
+          fontFamily: {
+            sans: ['"Plus Jakarta Sans"', 'sans-serif'],
+          },
+          colors: {
+            brand: {
+              50: '#fffbeb',
+              100: '#fef3c7',
+              200: '#fde68a',
+              300: '#fcd34d',
+              400: '#fbbf24',
+              500: '#f59e0b',
+              600: '#d97706',
+              700: '#b45309',
+              800: '#92400e',
+              900: '#78350f',
+            }
+          }
+        }
+      }
+    }
+  </script>
+  <style>
+    body { font-family: 'Plus Jakarta Sans', sans-serif; }
+    .custom-scroll::-webkit-scrollbar { width: 4px; height: 4px; }
+    .custom-scroll::-webkit-scrollbar-thumb { background-color: #cbd5e1; border-radius: 4px; }
+    @media print {
+      body * { visibility: hidden; }
+      #receipt-modal-content, #receipt-modal-content * { visibility: visible; }
+      #receipt-modal-content { position: absolute; left: 0; top: 0; width: 80mm; margin: 0; padding: 10px; box-shadow: none; border: none; }
+    }
+  </style>
+</head>
+<body class="bg-slate-100 text-slate-800 min-h-screen flex flex-col antialiased select-none">
+
+  <!-- ================= TOP HEADER (SHARED) ================= -->
+  <header class="bg-white border-b border-slate-200 sticky top-0 z-30 shadow-xs">
+    <div class="max-w-7xl mx-auto px-4 py-2.5 flex items-center justify-between">
+      <div class="flex items-center gap-3">
+        <div class="w-10 h-10 rounded-xl bg-amber-500 flex items-center justify-center text-white font-extrabold text-xl shadow-md shadow-amber-500/20">
+          🌭
+        </div>
+        <div>
+          <div class="flex items-center gap-2">
+            <h1 class="font-extrabold text-lg text-slate-900 leading-tight">MexucxichCuisine</h1>
+            <span class="text-[10px] uppercase font-bold tracking-wider px-2 py-0.5 rounded-full bg-amber-100 text-amber-800 border border-amber-300">
+              Prototype Mockup
+            </span>
+          </div>
+          <p class="text-xs text-slate-500">Tiệm Ẩm thực Thủ công & Đặc sản Tuyển chọn</p>
+        </div>
+      </div>
+
+      <div class="flex items-center gap-2">
+        <div class="hidden sm:flex items-center gap-2 bg-slate-50 border border-slate-200 rounded-lg px-3 py-1.5 text-xs text-slate-600">
+          <span class="w-2 h-2 rounded-full bg-emerald-500 animate-pulse"></span>
+          <span>Dữ liệu thử nghiệm: <strong>8 món ăn • 3 khách hàng</strong></span>
+        </div>
+        <button onclick="resetData()" class="text-xs text-slate-500 hover:text-slate-800 px-2.5 py-1.5 rounded-lg border border-slate-200 hover:bg-slate-50 transition">
+          Làm mới dữ liệu
+        </button>
+      </div>
+    </div>
+  </header>
+
+  <!-- ================= MAIN ROOT CONTAINER ================= -->
+  <main id="app-root" class="flex-1 max-w-7xl w-full mx-auto p-3 sm:p-4 pb-24">
+    <!-- Variants will be injected here dynamically -->
+  </main>
+
+  <!-- ================= RECEIPT PREVIEW MODAL (K80 THERMAL) ================= -->
+  <div id="receipt-modal" class="fixed inset-0 bg-black/60 backdrop-blur-xs z-50 flex items-center justify-center p-4 hidden">
+    <div class="bg-white rounded-2xl max-w-md w-full overflow-hidden shadow-2xl flex flex-col max-h-[90vh]">
+      <div class="p-3.5 bg-amber-500 text-white flex items-center justify-between">
+        <div class="flex items-center gap-2 font-bold text-sm">
+          <span>🖨️</span>
+          <span>Xem trước Hóa đơn in nhiệt (Khổ K80 - 80mm)</span>
+        </div>
+        <button onclick="closeReceiptModal()" class="w-7 h-7 rounded-lg bg-white/20 hover:bg-white/30 flex items-center justify-center text-sm font-bold">✕</button>
+      </div>
+
+      <div class="p-5 overflow-y-auto custom-scroll bg-slate-50 flex justify-center">
+        <!-- Thermal Receipt Paper Mock -->
+        <div id="receipt-modal-content" class="w-[80mm] min-h-[120mm] bg-white p-4 shadow-md text-slate-900 font-mono text-[11px] leading-relaxed border-t-4 border-amber-500">
+          <div class="text-center pb-2 border-b border-dashed border-slate-300">
+            <h2 class="font-bold text-sm uppercase">MexucxichCuisine</h2>
+            <p class="text-[10px] text-slate-500">Ẩm thực Thủ công & Tuyển chọn</p>
+            <p class="text-[10px] mt-0.5">Đ/c: 02 Ngõ Trạm, Hoàn Kiếm, HN</p>
+            <p class="text-[10px]">Hotline: 0859 136 899</p>
+          </div>
+
+          <div class="py-2 border-b border-dashed border-slate-300 text-[10px]">
+            <div class="flex justify-between"><span>Số HĐ:</span> <strong id="rec-order-id">#HD-8892</strong></div>
+            <div class="flex justify-between"><span>Ngày in:</span> <span id="rec-date">08/09/2026 14:45</span></div>
+            <div class="flex justify-between"><span>Khách hàng:</span> <strong id="rec-customer">Khách lẻ tại quầy</strong></div>
+            <div class="flex justify-between"><span>Loại đơn:</span> <span id="rec-type" class="font-semibold text-amber-700">Tại chỗ</span></div>
+          </div>
+
+          <!-- Items Table -->
+          <div class="py-2 border-b border-dashed border-slate-300">
+            <div class="flex justify-between font-bold text-[10px] mb-1">
+              <span class="w-1/2">Tên món</span>
+              <span class="w-1/6 text-center">SL</span>
+              <span class="w-1/3 text-right">T.Tiền</span>
+            </div>
+            <div id="rec-items-list" class="space-y-1">
+              <!-- Rendered items -->
+            </div>
+          </div>
+
+          <!-- Summary -->
+          <div class="py-2 border-b border-dashed border-slate-300 space-y-1 text-[10px]">
+            <div class="flex justify-between">
+              <span>Tổng tiền hàng:</span>
+              <span id="rec-subtotal" class="font-bold">0đ</span>
+            </div>
+            <div class="flex justify-between text-slate-600">
+              <span>Giảm giá:</span>
+              <span id="rec-discount">-0đ</span>
+            </div>
+            <div class="flex justify-between text-slate-600">
+              <span>Phí vận chuyển:</span>
+              <span id="rec-shipping">+0đ</span>
+            </div>
+            <div class="flex justify-between text-xs font-bold pt-1 border-t border-slate-200">
+              <span>KHÁCH PHẢI TRẢ:</span>
+              <span id="rec-total" class="text-amber-800 font-extrabold text-sm">0đ</span>
+            </div>
+            <div class="flex justify-between text-slate-600">
+              <span>Phương thức:</span>
+              <span id="rec-payment" class="font-semibold">Tiền mặt</span>
+            </div>
+            <div id="rec-debt-row" class="flex justify-between text-rose-600 font-bold hidden">
+              <span>Ghi nợ đơn này:</span>
+              <span id="rec-debt-amount">0đ</span>
+            </div>
+          </div>
+
+          <!-- Dynamic VietQR Placeholder -->
+          <div id="rec-vietqr-box" class="py-3 text-center border-b border-dashed border-slate-300">
+            <p class="text-[9px] text-slate-500 mb-1">Quét mã VietQR chuyển khoản chính xác:</p>
+            <div class="w-28 h-28 mx-auto bg-slate-100 border border-slate-300 rounded p-1 flex flex-col items-center justify-center">
+              <img id="rec-qr-img" src="https://api.qrserver.com/v1/create-qr-code/?size=110x110&data=VietQR_MexucxichCuisine" alt="VietQR" class="w-24 h-24 object-contain">
+            </div>
+            <p class="text-[9px] font-bold text-slate-700 mt-1">MB Bank • STK: 0859136899</p>
+          </div>
+
+          <div class="text-center pt-3 text-[10px] text-slate-500">
+            <p>Cảm ơn quý khách & Hẹn gặp lại!</p>
+            <p class="text-[8px] mt-0.5 italic">MexucxichCuisine - Ngon từ tâm</p>
+          </div>
+        </div>
+      </div>
+
+      <div class="p-3 bg-white border-t border-slate-200 flex gap-2 justify-end">
+        <button onclick="closeReceiptModal()" class="px-4 py-2 rounded-xl text-xs font-semibold text-slate-600 hover:bg-slate-100">Đóng</button>
+        <button onclick="window.print()" class="px-5 py-2 rounded-xl text-xs font-bold bg-amber-500 hover:bg-amber-600 text-white shadow-md shadow-amber-500/20 flex items-center gap-1.5">
+          <span>🖨️</span> In Hóa Đơn (window.print)
+        </button>
+      </div>
+    </div>
+  </div>
+
+  <!-- ================= FLOATING PROTOTYPE SWITCHER ================= -->
+  <aside class="fixed bottom-4 left-1/2 -translate-x-1/2 z-40 bg-slate-900/90 backdrop-blur-md text-white px-3 py-2 rounded-full shadow-2xl border border-slate-700/60 flex items-center gap-2 sm:gap-3 transition-all">
+    <button onclick="prevVariant()" title="Phím tắt: Mũi tên trái" class="w-8 h-8 rounded-full bg-slate-800 hover:bg-amber-500 text-slate-200 hover:text-white flex items-center justify-center transition text-sm font-bold">
+      ←
+    </button>
+    <div class="flex items-center gap-2 px-1 text-xs">
+      <span class="w-2 h-2 rounded-full bg-amber-400 animate-ping"></span>
+      <span class="text-slate-400 font-medium">Bản mẫu:</span>
+      <span id="variant-label" class="font-bold text-amber-300">Variant A (KiotViet Cột đôi)</span>
+    </div>
+    <button onclick="nextVariant()" title="Phím tắt: Mũi tên phải" class="w-8 h-8 rounded-full bg-slate-800 hover:bg-amber-500 text-slate-200 hover:text-white flex items-center justify-center transition text-sm font-bold">
+      →
+    </button>
+  </aside>
+
+  <!-- ================= LOGIC & VARIANTS SCRIPTS ================= -->
+  <script>
+    // ----------------- DATA STORE -----------------
+    const INITIAL_PRODUCTS = [
+      { id: 'SP01', name: 'Xúc xích Phô mai Tươi (500g)', category: 'Đồ tự làm', unit: 'Gói 500g', price: 145000, cost: 95000, stock: 18, image: '🧀' },
+      { id: 'SP02', name: 'Xúc xích Bò Tiêu Đen (500g)', category: 'Đồ tự làm', unit: 'Gói 500g', price: 160000, cost: 105000, stock: 12, image: '🥩' },
+      { id: 'SP03', name: 'Pate Gan Gà Truffle (250g)', category: 'Đồ tự làm', unit: 'Hũ 250g', price: 120000, cost: 75000, stock: 4, image: '🥣' }, // low stock
+      { id: 'SP04', name: 'Lạp xưởng Tươi Trứng Muối (500g)', category: 'Đặc sản tuyển chọn', unit: 'Hộp 500g', price: 175000, cost: 125000, stock: 25, image: '🍳' },
+      { id: 'SP05', name: 'Khô Bò Miếng Thượng Hạng (300g)', category: 'Ăn vặt & Khô', unit: 'Hũ 300g', price: 210000, cost: 155000, stock: 8, image: '🥓' },
+      { id: 'SP06', name: 'Sốt Chấm Thịt Nướng Bí Quyết', category: 'Gia vị & Sốt', unit: 'Chai 300ml', price: 65000, cost: 35000, stock: 30, image: '🌶️' },
+      { id: 'SP07', name: 'Chả Tai Nấm Đông Cô (500g)', category: 'Đồ tự làm', unit: 'Cây 500g', price: 135000, cost: 90000, stock: 3, image: '🍄' }, // low stock
+      { id: 'SP08', name: 'Nem Nướng Nha Trang Phết Mật', category: 'Đặc sản tuyển chọn', unit: 'Khay 500g', price: 150000, cost: 100000, stock: 15, image: '🍢' }
+    ];
+
+    const INITIAL_CUSTOMERS = [
+      { id: 'KH01', name: 'Khách lẻ vãng lai', phone: '', address: '', debt: 0 },
+      { id: 'KH02', name: 'Chị Lan (Zalo Đội Cấn)', phone: '0988123456', address: '12 Đội Cấn, Ba Đình', debt: 250000 },
+      { id: 'KH03', name: 'Anh Tuấn (Quán nhậu Phố Cổ)', phone: '0912345678', address: '45 Hàng Bè, Hoàn Kiếm', debt: 1450000 },
+      { id: 'KH04', name: 'Bạn Mai Anh (Khách quen)', phone: '0904567890', address: 'Tòa Landmark 72', debt: 0 }
+    ];
+
+    let products = JSON.parse(localStorage.getItem('mxc_proto_products')) || INITIAL_PRODUCTS;
+    let customers = JSON.parse(localStorage.getItem('mxc_proto_customers')) || INITIAL_CUSTOMERS;
+    
+    // POS State
+    let cart = [];
+    let selectedCustomerId = 'KH01';
+    let discountType = 'cash'; // 'cash' or 'percent'
+    let discountValue = 0;
+    let shippingFee = 0;
+    let cashGiven = 0;
+    let paymentMethod = 'cash'; // 'cash', 'transfer', 'debt', 'partial'
+    let partialPaid = 0;
+    let orderType = 'direct'; // 'direct' or 'delivery'
+    let searchQuery = '';
+    let selectedCategory = 'Tất cả';
+
+    const VARIANTS = [
+      { id: 'A', name: 'Variant A (KiotViet Cột đôi Tối giản)' },
+      { id: 'B', name: 'Variant B (Chạm nhanh Touch POS & Numpad)' },
+      { id: 'C', name: 'Variant C (Mobile-First & Đơn Online Sheet)' }
+    ];
+
+    function getVariantFromUrl() {
+      const urlParams = new URLSearchParams(window.location.search);
+      return urlParams.get('variant') || 'A';
+    }
+
+    let currentVariant = getVariantFromUrl();
+
+    function setVariant(v) {
+      currentVariant = v;
+      const url = new URL(window.location);
+      url.searchParams.set('variant', v);
+      window.history.replaceState({}, '', url);
+      render();
+    }
+
+    function nextVariant() {
+      const idx = VARIANTS.findIndex(v => v.id === currentVariant);
+      const nextIdx = (idx + 1) % VARIANTS.length;
+      setVariant(VARIANTS[nextIdx].id);
+    }
+
+    function prevVariant() {
+      const idx = VARIANTS.findIndex(v => v.id === currentVariant);
+      const prevIdx = (idx - 1 + VARIANTS.length) % VARIANTS.length;
+      setVariant(VARIANTS[prevIdx].id);
+    }
+
+    window.addEventListener('keydown', (e) => {
+      if (['input', 'textarea', 'select'].includes(document.activeElement?.tagName?.toLowerCase())) return;
+      if (e.key === 'ArrowRight') nextVariant();
+      if (e.key === 'ArrowLeft') prevVariant();
+    });
+
+    function resetData() {
+      if (confirm('Làm mới lại toàn bộ dữ liệu thử nghiệm về ban đầu?')) {
+        localStorage.removeItem('mxc_proto_products');
+        localStorage.removeItem('mxc_proto_customers');
+        products = [...INITIAL_PRODUCTS];
+        customers = [...INITIAL_CUSTOMERS];
+        cart = [];
+        render();
+      }
+    }
+
+    // ----------------- CART & CALCULATIONS -----------------
+    function addToCart(productId) {
+      const prod = products.find(p => p.id === productId);
+      if (!prod) return;
+      if (prod.stock <= 0) {
+        alert('Sản phẩm đã hết hàng trong kho!');
+        return;
+      }
+      const existing = cart.find(item => item.id === productId);
+      if (existing) {
+        if (existing.qty + 1 > prod.stock) {
+          alert(`Chỉ còn ${prod.stock} sản phẩm trong kho!`);
+          return;
+        }
+        existing.qty += 1;
+      } else {
+        cart.push({ ...prod, qty: 1 });
+      }
+      render();
+    }
+
+    function updateCartQty(productId, delta) {
+      const idx = cart.findIndex(item => item.id === productId);
+      if (idx === -1) return;
+      const prod = products.find(p => p.id === productId);
+      const newQty = cart[idx].qty + delta;
+      if (newQty <= 0) {
+        cart.splice(idx, 1);
+      } else {
+        if (newQty > prod.stock) {
+          alert(`Chỉ còn ${prod.stock} sản phẩm trong kho!`);
+          return;
+        }
+        cart[idx].qty = newQty;
+      }
+      render();
+    }
+
+    function clearCart() {
+      if (cart.length === 0) return;
+      cart = [];
+      discountValue = 0;
+      shippingFee = 0;
+      cashGiven = 0;
+      render();
+    }
+
+    function calculateTotals() {
+      const subtotal = cart.reduce((sum, item) => sum + (item.price * item.qty), 0);
+      let discountAmount = 0;
+      if (discountType === 'percent') {
+        discountAmount = Math.round((subtotal * discountValue) / 100);
+      } else {
+        discountAmount = Number(discountValue) || 0;
+      }
+      const netProducts = Math.max(0, subtotal - discountAmount);
+      const totalToPay = netProducts + (Number(shippingFee) || 0);
+      
+      let changeAmount = 0;
+      let remainingDebt = 0;
+
+      if (paymentMethod === 'cash') {
+        changeAmount = Math.max(0, (Number(cashGiven) || 0) - totalToPay);
+      } else if (paymentMethod === 'debt') {
+        remainingDebt = totalToPay;
+      } else if (paymentMethod === 'partial') {
+        remainingDebt = Math.max(0, totalToPay - (Number(partialPaid) || 0));
+      }
+
+      return { subtotal, discountAmount, shippingFee: Number(shippingFee) || 0, totalToPay, changeAmount, remainingDebt };
+    }
+
+    function formatVND(amount) {
+      return new Intl.NumberFormat('vi-VN').format(amount) + 'đ';
+    }
+
+    // ----------------- RECEIPT MODAL -----------------
+    function openReceiptModal() {
+      if (cart.length === 0) {
+        alert('Giỏ hàng trống! Vui lòng chọn món trước khi thanh toán.');
+        return;
+      }
+      const totals = calculateTotals();
+      const customer = customers.find(c => c.id === selectedCustomerId) || customers[0];
+
+      document.getElementById('rec-order-id').innerText = '#MXC-' + Math.floor(1000 + Math.random() * 9000);
+      const now = new Date();
+      document.getElementById('rec-date').innerText = now.toLocaleDateString('vi-VN') + ' ' + now.toLocaleTimeString('vi-VN', { hour: '2-digit', minute: '2-digit' });
+      document.getElementById('rec-customer').innerText = customer.name + (customer.phone ? ` (${customer.phone})` : '');
+      document.getElementById('rec-type').innerText = orderType === 'direct' ? 'Tại chỗ' : 'Giao hàng';
+
+      const itemsContainer = document.getElementById('rec-items-list');
+      itemsContainer.innerHTML = cart.map(item => `
+        <div class="flex justify-between py-0.5">
+          <span class="w-1/2 truncate">${item.name}</span>
+          <span class="w-1/6 text-center">x${item.qty}</span>
+          <span class="w-1/3 text-right font-semibold">${formatVND(item.price * item.qty)}</span>
+        </div>
+      `).join('');
+
+      document.getElementById('rec-subtotal').innerText = formatVND(totals.subtotal);
+      document.getElementById('rec-discount').innerText = '-' + formatVND(totals.discountAmount);
+      document.getElementById('rec-shipping').innerText = '+' + formatVND(totals.shippingFee);
+      document.getElementById('rec-total').innerText = formatVND(totals.totalToPay);
+
+      let methodLabel = 'Tiền mặt';
+      if (paymentMethod === 'transfer') methodLabel = 'Chuyển khoản (VietQR)';
+      if (paymentMethod === 'debt') methodLabel = 'Ghi nợ 100%';
+      if (paymentMethod === 'partial') methodLabel = `Trả trước: ${formatVND(partialPaid)}`;
+      document.getElementById('rec-payment').innerText = methodLabel;
+
+      const debtRow = document.getElementById('rec-debt-row');
+      if (totals.remainingDebt > 0) {
+        debtRow.classList.remove('hidden');
+        document.getElementById('rec-debt-amount').innerText = '+' + formatVND(totals.remainingDebt);
+      } else {
+        debtRow.classList.add('hidden');
+      }
+
+      // Update QR Code Amount
+      const qrBox = document.getElementById('rec-vietqr-box');
+      if (paymentMethod === 'transfer' || paymentMethod === 'partial') {
+        qrBox.classList.remove('hidden');
+        const payAmount = paymentMethod === 'partial' ? partialPaid : totals.totalToPay;
+        const qrUrl = `https://api.qrserver.com/v1/create-qr-code/?size=110x110&data=VietQR_MBBank_0859136899_${payAmount}`;
+        document.getElementById('rec-qr-img').src = qrUrl;
+      } else {
+        qrBox.classList.add('hidden');
+      }
+
+      document.getElementById('receipt-modal').classList.remove('hidden');
+    }
+
+    function closeReceiptModal() {
+      document.getElementById('receipt-modal').classList.add('hidden');
+    }
+
+    // ----------------- RENDER VARIANTS -----------------
+    function render() {
+      // Update switcher label
+      const currentObj = VARIANTS.find(v => v.id === currentVariant) || VARIANTS[0];
+      document.getElementById('variant-label').innerText = currentObj.name;
+
+      const root = document.getElementById('app-root');
+      if (currentVariant === 'A') {
+        root.innerHTML = renderVariantA();
+      } else if (currentVariant === 'B') {
+        root.innerHTML = renderVariantB();
+      } else {
+        root.innerHTML = renderVariantC();
+      }
+    }
+
+    // ================================================================
+    // VARIANT A: KIOTVIET MINIMALIST SPLIT (CỘT ĐÔI KINH ĐIỂN 60/40)
+    // ================================================================
+    function renderVariantA() {
+      const totals = calculateTotals();
+      const categories = ['Tất cả', 'Đồ tự làm', 'Đặc sản tuyển chọn', 'Ăn vặt & Khô', 'Gia vị & Sốt'];
+      
+      const filtered = products.filter(p => {
+        const matchesCat = selectedCategory === 'Tất cả' || p.category === selectedCategory;
+        const matchesSearch = p.name.toLowerCase().includes(searchQuery.toLowerCase()) || p.id.toLowerCase().includes(searchQuery.toLowerCase());
+        return matchesCat && matchesSearch;
+      });
+
+      return `
+        <div class="grid grid-cols-1 lg:grid-cols-12 gap-4 items-start">
+          <!-- LEFT: PRODUCTS GRID (7 Cols) -->
+          <div class="lg:col-span-7 bg-white rounded-2xl p-4 shadow-xs border border-slate-200">
+            <!-- Search & Filters -->
+            <div class="space-y-3 mb-4">
+              <div class="relative">
+                <input 
+                  type="text" 
+                  value="${searchQuery}"
+                  oninput="searchQuery = this.value; render();" 
+                  placeholder="🔍 Tìm nhanh theo tên món, mã SP (ví dụ: xuc xich, pate, sp01)..." 
+                  class="w-full bg-slate-50 border border-slate-200 rounded-xl px-4 py-2.5 text-sm focus:outline-none focus:ring-2 focus:ring-amber-500/30 focus:border-amber-500"
+                />
+                ${searchQuery ? `<button onclick="searchQuery=''; render();" class="absolute right-3 top-2.5 text-slate-400 hover:text-slate-600 text-xs">✕</button>` : ''}
+              </div>
+
+              <!-- Categories Pill Bar -->
+              <div class="flex items-center gap-1.5 overflow-x-auto pb-1 custom-scroll">
+                ${categories.map(cat => {
+                  const count = cat === 'Tất cả' ? products.length : products.filter(p => p.category === cat).length;
+                  const active = selectedCategory === cat;
+                  return `
+                    <button 
+                      onclick="selectedCategory = '${cat}'; render();"
+                      class="shrink-0 px-3 py-1.5 rounded-lg text-xs font-semibold transition ${active ? 'bg-amber-500 text-white shadow-xs' : 'bg-slate-100 text-slate-600 hover:bg-slate-200'}"
+                    >
+                      ${cat} <span class="opacity-75 text-[10px]">(${count})</span>
+                    </button>
+                  `;
+                }).join('')}
+              </div>
+            </div>
+
+            <!-- Product Cards Grid -->
+            <div class="grid grid-cols-2 sm:grid-cols-3 gap-3">
+              ${filtered.map(p => `
+                <div 
+                  onclick="addToCart('${p.id}')"
+                  class="bg-white border ${p.stock <= 5 ? 'border-rose-300 ring-1 ring-rose-300/50' : 'border-slate-200'} rounded-xl p-3 hover:shadow-md hover:border-amber-400 transition cursor-pointer flex flex-col justify-between group relative overflow-hidden"
+                >
+                  ${p.stock <= 5 ? `
+                    <div class="absolute top-0 right-0 bg-rose-500 text-white text-[9px] font-bold px-1.5 py-0.5 rounded-bl-lg">
+                      Sắp hết (${p.stock})
+                    </div>
+                  ` : ''}
+                  <div>
+                    <div class="text-3xl mb-2 text-center group-hover:scale-110 transition transform">${p.image}</div>
+                    <h3 class="font-bold text-xs text-slate-800 line-clamp-2 leading-snug">${p.name}</h3>
+                    <p class="text-[10px] text-slate-500 mt-0.5">${p.unit}</p>
+                  </div>
+                  <div class="mt-2 pt-2 border-t border-slate-100 flex items-center justify-between">
+                    <span class="text-xs font-extrabold text-amber-600">${formatVND(p.price)}</span>
+                    <span class="text-[10px] text-slate-400">Kho: ${p.stock}</span>
+                  </div>
+                </div>
+              `).join('')}
+            </div>
+            ${filtered.length === 0 ? `<div class="py-12 text-center text-slate-400 text-xs">Không tìm thấy món ăn nào khớp từ khóa</div>` : ''}
+          </div>
+
+          <!-- RIGHT: ORDER & BILLING (5 Cols) -->
+          <div class="lg:col-span-5 bg-white rounded-2xl p-4 shadow-xs border border-slate-200 flex flex-col sticky top-20">
+            <!-- Customer & Order Mode -->
+            <div class="flex items-center justify-between pb-3 border-b border-slate-200 gap-2">
+              <div class="flex-1">
+                <label class="text-[10px] font-bold uppercase tracking-wider text-slate-500 block mb-1">Khách hàng</label>
+                <select 
+                  onchange="selectedCustomerId = this.value; render();"
+                  class="w-full bg-slate-50 border border-slate-200 rounded-lg px-2.5 py-1.5 text-xs font-medium focus:outline-none focus:ring-1 focus:ring-amber-500"
+                >
+                  ${customers.map(c => `
+                    <option value="${c.id}" ${c.id === selectedCustomerId ? 'selected' : ''}>
+                      ${c.name} ${c.debt > 0 ? `(Nợ: ${formatVND(c.debt)})` : ''}
+                    </option>
+                  `).join('')}
+                </select>
+              </div>
+              <div class="w-28">
+                <label class="text-[10px] font-bold uppercase tracking-wider text-slate-500 block mb-1">Hình thức</label>
+                <div class="grid grid-cols-2 bg-slate-100 p-0.5 rounded-lg text-[11px] font-semibold">
+                  <button onclick="orderType='direct'; render();" class="py-1 rounded-md transition ${orderType === 'direct' ? 'bg-amber-500 text-white shadow-xs' : 'text-slate-600'}">Tại chỗ</button>
+                  <button onclick="orderType='delivery'; render();" class="py-1 rounded-md transition ${orderType === 'delivery' ? 'bg-amber-500 text-white shadow-xs' : 'text-slate-600'}">Giao hàng</button>
+                </div>
+              </div>
+            </div>
+
+            <!-- Cart Items Table -->
+            <div class="py-3 flex-1 min-h-[160px] max-h-[220px] overflow-y-auto custom-scroll divide-y divide-slate-100">
+              ${cart.length === 0 ? `
+                <div class="h-36 flex flex-col items-center justify-center text-slate-400 text-xs">
+                  <span class="text-3xl mb-1">🛒</span>
+                  <span>Chưa có món nào được chọn</span>
+                  <span class="text-[10px] text-slate-400">Bấm vào món bên trái để thêm</span>
+                </div>
+              ` : cart.map(item => `
+                <div class="py-2 flex items-center justify-between gap-2 text-xs">
+                  <div class="flex-1 min-w-0">
+                    <h4 class="font-bold text-slate-800 truncate">${item.name}</h4>
+                    <span class="text-[10px] text-amber-700 font-semibold">${formatVND(item.price)}</span>
+                  </div>
+                  <div class="flex items-center gap-1.5 bg-slate-50 border border-slate-200 rounded-lg p-0.5">
+                    <button onclick="updateCartQty('${item.id}', -1)" class="w-6 h-6 rounded bg-white text-slate-700 hover:bg-slate-200 font-bold flex items-center justify-center">-</button>
+                    <span class="w-6 text-center font-bold text-slate-800 text-xs">${item.qty}</span>
+                    <button onclick="updateCartQty('${item.id}', 1)" class="w-6 h-6 rounded bg-white text-slate-700 hover:bg-slate-200 font-bold flex items-center justify-center">+</button>
+                  </div>
+                  <div class="w-20 text-right font-extrabold text-slate-900">
+                    ${formatVND(item.price * item.qty)}
+                  </div>
+                </div>
+              `).join('')}
+            </div>
+
+            <!-- Billing Calculations -->
+            <div class="pt-3 border-t border-slate-200 space-y-2 text-xs">
+              <div class="flex justify-between text-slate-600">
+                <span>Tiền hàng:</span>
+                <span class="font-bold text-slate-800">${formatVND(totals.subtotal)}</span>
+              </div>
+
+              <!-- Discount Row -->
+              <div class="flex items-center justify-between gap-2">
+                <span class="text-slate-600">Giảm giá:</span>
+                <div class="flex items-center gap-1">
+                  <input 
+                    type="number" 
+                    value="${discountValue || ''}" 
+                    oninput="discountValue = this.value; render();"
+                    placeholder="0"
+                    class="w-20 bg-slate-50 border border-slate-200 rounded px-2 py-0.5 text-right font-semibold focus:outline-none"
+                  />
+                  <button onclick="discountType = discountType === 'cash' ? 'percent' : 'cash'; render();" class="text-[10px] font-bold px-1.5 py-1 rounded bg-slate-100 border text-slate-600">
+                    ${discountType === 'cash' ? 'đ' : '%'}
+                  </button>
+                </div>
+              </div>
+
+              <!-- Shipping Fee if Delivery -->
+              ${orderType === 'delivery' ? `
+                <div class="flex items-center justify-between gap-2">
+                  <span class="text-slate-600">Phí ship (thu hộ):</span>
+                  <input 
+                    type="number" 
+                    value="${shippingFee || ''}" 
+                    oninput="shippingFee = this.value; render();"
+                    placeholder="25000"
+                    class="w-24 bg-slate-50 border border-slate-200 rounded px-2 py-0.5 text-right font-semibold focus:outline-none"
+                  />
+                </div>
+              ` : ''}
+
+              <!-- Total To Pay -->
+              <div class="flex justify-between items-baseline pt-2 border-t border-slate-200">
+                <span class="font-extrabold text-slate-800 text-sm">KHÁCH PHẢI TRẢ:</span>
+                <span class="text-lg font-extrabold text-amber-600">${formatVND(totals.totalToPay)}</span>
+              </div>
+
+              <!-- Payment Method Tabs -->
+              <div class="pt-1">
+                <label class="text-[10px] font-bold uppercase tracking-wider text-slate-500 block mb-1">Phương thức thanh toán</label>
+                <div class="grid grid-cols-4 gap-1 text-[11px] font-semibold">
+                  <button onclick="paymentMethod='cash'; render();" class="py-1.5 rounded-lg border text-center transition ${paymentMethod === 'cash' ? 'bg-amber-500 border-amber-500 text-white shadow-xs' : 'bg-slate-50 text-slate-600 border-slate-200'}">Tiền mặt</button>
+                  <button onclick="paymentMethod='transfer'; render();" class="py-1.5 rounded-lg border text-center transition ${paymentMethod === 'transfer' ? 'bg-amber-500 border-amber-500 text-white shadow-xs' : 'bg-slate-50 text-slate-600 border-slate-200'}">VietQR</button>
+                  <button onclick="paymentMethod='debt'; render();" class="py-1.5 rounded-lg border text-center transition ${paymentMethod === 'debt' ? 'bg-amber-500 border-amber-500 text-white shadow-xs' : 'bg-slate-50 text-slate-600 border-slate-200'}">Ghi nợ</button>
+                  <button onclick="paymentMethod='partial'; render();" class="py-1.5 rounded-lg border text-center transition ${paymentMethod === 'partial' ? 'bg-amber-500 border-amber-500 text-white shadow-xs' : 'bg-slate-50 text-slate-600 border-slate-200'}">Trả 1 phần</button>
+                </div>
+              </div>
+
+              <!-- Cash Given & Change Calculation -->
+              ${paymentMethod === 'cash' ? `
+                <div class="flex items-center justify-between gap-2 pt-1">
+                  <span class="text-slate-600">Tiền khách đưa:</span>
+                  <input 
+                    type="number" 
+                    value="${cashGiven || ''}" 
+                    oninput="cashGiven = this.value; render();"
+                    placeholder="0"
+                    class="w-28 bg-slate-50 border border-slate-200 rounded px-2 py-1 text-right font-bold text-slate-800 focus:outline-none"
+                  />
+                </div>
+                <div class="flex justify-between text-slate-600 text-[11px]">
+                  <span>Tiền thừa trả khách:</span>
+                  <span class="font-bold text-emerald-600">${formatVND(totals.changeAmount)}</span>
+                </div>
+              ` : ''}
+
+              <!-- Partial Paid -->
+              ${paymentMethod === 'partial' ? `
+                <div class="flex items-center justify-between gap-2 pt-1">
+                  <span class="text-slate-600">Khách trả trước:</span>
+                  <input 
+                    type="number" 
+                    value="${partialPaid || ''}" 
+                    oninput="partialPaid = this.value; render();"
+                    placeholder="0"
+                    class="w-28 bg-slate-50 border border-slate-200 rounded px-2 py-1 text-right font-bold text-slate-800 focus:outline-none"
+                  />
+                </div>
+                <div class="flex justify-between text-rose-600 text-[11px] font-bold">
+                  <span>Còn nợ lại:</span>
+                  <span>${formatVND(totals.remainingDebt)}</span>
+                </div>
+              ` : ''}
+
+              ${paymentMethod === 'debt' ? `
+                <div class="p-2 bg-rose-50 border border-rose-200 rounded-lg text-rose-700 text-[11px] font-medium">
+                  ⚠️ Số tiền <strong>${formatVND(totals.totalToPay)}</strong> sẽ được cộng trực tiếp vào sổ dư nợ của khách.
+                </div>
+              ` : ''}
+            </div>
+
+            <!-- Actions Buttons -->
+            <div class="pt-4 flex gap-2">
+              <button onclick="clearCart()" class="px-3 py-2.5 rounded-xl border border-slate-200 text-slate-600 hover:bg-slate-50 text-xs font-bold transition">
+                Xóa giỏ
+              </button>
+              <button onclick="openReceiptModal()" class="flex-1 py-2.5 rounded-xl bg-amber-500 hover:bg-amber-600 text-white font-extrabold text-sm shadow-md shadow-amber-500/20 transition flex items-center justify-center gap-2">
+                <span>Thanh toán & In K80</span>
+                <span>➔</span>
+              </button>
+            </div>
+          </div>
+        </div>
+      `;
+    }
+
+    // ================================================================
+    // VARIANT B: FAST-FOOD TOUCH POS & VIRTUAL NUMPAD (CHẠM NHANH CAO TỐC)
+    // ================================================================
+    function renderVariantB() {
+      const totals = calculateTotals();
+      const categories = ['Tất cả', 'Đồ tự làm', 'Đặc sản tuyển chọn', 'Ăn vặt & Khô'];
+      const filtered = products.filter(p => selectedCategory === 'Tất cả' || p.category === selectedCategory);
+
+      return `
+        <div class="grid grid-cols-1 lg:grid-cols-12 gap-4">
+          <!-- LEFT CATEGORY VERTICAL STRIP (2 Cols) -->
+          <div class="lg:col-span-2 space-y-2">
+            <p class="text-[10px] font-bold uppercase tracking-wider text-slate-400 px-1">Danh mục</p>
+            ${categories.map(cat => `
+              <button 
+                onclick="selectedCategory = '${cat}'; render();"
+                class="w-full text-left p-3 rounded-xl text-xs font-bold transition border ${selectedCategory === cat ? 'bg-amber-500 border-amber-500 text-white shadow-md' : 'bg-white border-slate-200 text-slate-700 hover:bg-slate-50'}"
+              >
+                ${cat}
+              </button>
+            `).join('')}
+          </div>
+
+          <!-- CENTER: BIG TOUCH BUTTONS (6 Cols) -->
+          <div class="lg:col-span-6 bg-white rounded-2xl p-4 border border-slate-200 shadow-xs">
+            <div class="flex items-center justify-between mb-3">
+              <span class="text-xs font-bold text-slate-700">Thực đơn chạm nhanh</span>
+              <span class="text-xs text-slate-400">${filtered.length} món</span>
+            </div>
+            <div class="grid grid-cols-2 sm:grid-cols-3 gap-2.5">
+              ${filtered.map(p => `
+                <button 
+                  onclick="addToCart('${p.id}')"
+                  class="p-3.5 rounded-xl border border-slate-200 hover:border-amber-500 hover:bg-amber-50/50 transition active:scale-95 flex flex-col items-center text-center group"
+                >
+                  <span class="text-4xl mb-1 group-hover:scale-110 transition transform">${p.image}</span>
+                  <span class="font-bold text-xs text-slate-900 line-clamp-1">${p.name}</span>
+                  <span class="text-[11px] font-extrabold text-amber-600 mt-1">${formatVND(p.price)}</span>
+                </button>
+              `).join('')}
+            </div>
+          </div>
+
+          <!-- RIGHT: CART + VIRTUAL NUMPAD FOR CASH (4 Cols) -->
+          <div class="lg:col-span-4 bg-white rounded-2xl p-4 border border-slate-200 shadow-xs flex flex-col justify-between">
+            <div>
+              <div class="flex items-center justify-between pb-2 border-b border-slate-100">
+                <span class="font-bold text-xs text-slate-800">Đơn hàng hiện tại (${cart.reduce((s, i) => s + i.qty, 0)})</span>
+                <button onclick="clearCart()" class="text-[11px] text-rose-500 font-semibold hover:underline">Xóa</button>
+              </div>
+
+              <!-- Compact Cart List -->
+              <div class="py-2 max-h-40 overflow-y-auto custom-scroll divide-y divide-slate-100 text-xs">
+                ${cart.length === 0 ? `<p class="py-6 text-center text-slate-400 text-xs">Chạm vào món để thêm</p>` : cart.map(i => `
+                  <div class="py-1.5 flex justify-between items-center">
+                    <span class="font-medium truncate w-32">${i.name}</span>
+                    <span class="font-bold text-amber-700">x${i.qty}</span>
+                    <span class="font-bold text-slate-900">${formatVND(i.price * i.qty)}</span>
+                  </div>
+                `).join('')}
+              </div>
+
+              <div class="pt-2 border-t border-slate-200">
+                <div class="flex justify-between text-xs font-extrabold">
+                  <span>TỔNG TIỀN:</span>
+                  <span class="text-amber-600 text-base">${formatVND(totals.totalToPay)}</span>
+                </div>
+              </div>
+            </div>
+
+            <!-- Quick Cash Given Numpad -->
+            <div class="mt-4 pt-3 border-t border-slate-100">
+              <label class="text-[10px] font-bold text-slate-400 uppercase tracking-wider block mb-1">Tiền khách đưa: ${formatVND(cashGiven)}</label>
+              <div class="grid grid-cols-3 gap-1.5 text-xs font-bold">
+                <button onclick="cashGiven = totals.totalToPay; render();" class="py-2 rounded-lg bg-slate-100 hover:bg-slate-200 text-slate-700">Đủ tiền</button>
+                <button onclick="cashGiven = 200000; render();" class="py-2 rounded-lg bg-slate-100 hover:bg-slate-200 text-slate-700">200k</button>
+                <button onclick="cashGiven = 500000; render();" class="py-2 rounded-lg bg-slate-100 hover:bg-slate-200 text-slate-700">500k</button>
+              </div>
+              <div class="mt-2 text-xs flex justify-between text-slate-600">
+                <span>Tiền thừa:</span>
+                <span class="font-bold text-emerald-600">${formatVND(totals.changeAmount)}</span>
+              </div>
+            </div>
+
+            <button onclick="openReceiptModal()" class="w-full mt-4 py-3 rounded-xl bg-amber-500 hover:bg-amber-600 text-white font-extrabold text-sm shadow-md transition">
+              In Hóa Đơn K80 (Chạm nhanh)
+            </button>
+          </div>
+        </div>
+      `;
+    }
+
+    // ================================================================
+    // VARIANT C: MOBILE-FIRST DELIVERY & ORDER MASTER (ĐƠN ONLINE SHEET)
+    // ================================================================
+    function renderVariantC() {
+      const totals = calculateTotals();
+      const filtered = products.filter(p => p.name.toLowerCase().includes(searchQuery.toLowerCase()));
+
+      return `
+        <div class="max-w-xl mx-auto space-y-3">
+          <!-- Mobile Status Pill Tabs -->
+          <div class="grid grid-cols-3 bg-white p-1 rounded-2xl border border-slate-200 text-xs font-bold shadow-xs">
+            <button class="py-2 rounded-xl bg-amber-500 text-white shadow-xs text-center">Bán tại quầy</button>
+            <button class="py-2 rounded-xl text-slate-600 hover:bg-slate-100 text-center">Đang chuẩn bị (2)</button>
+            <button class="py-2 rounded-xl text-slate-600 hover:bg-slate-100 text-center">Đang giao (1)</button>
+          </div>
+
+          <!-- Quick Search -->
+          <input 
+            type="text" 
+            value="${searchQuery}" 
+            oninput="searchQuery = this.value; render();" 
+            placeholder="🔍 Tìm nhanh món trên điện thoại..." 
+            class="w-full bg-white border border-slate-200 rounded-2xl px-4 py-3 text-xs shadow-xs focus:outline-none"
+          />
+
+          <!-- Mobile Compact List with Thumbnails -->
+          <div class="bg-white rounded-2xl border border-slate-200 shadow-xs divide-y divide-slate-100 overflow-hidden">
+            ${filtered.map(p => `
+              <div class="p-3 flex items-center justify-between gap-3 hover:bg-amber-50/30 transition">
+                <div class="w-10 h-10 rounded-xl bg-slate-100 flex items-center justify-center text-xl shrink-0">
+                  ${p.image}
+                </div>
+                <div class="flex-1 min-w-0">
+                  <h4 class="font-bold text-xs text-slate-900 truncate">${p.name}</h4>
+                  <p class="text-[10px] text-slate-400">${p.unit} • Còn: ${p.stock}</p>
+                  <span class="text-xs font-extrabold text-amber-600">${formatVND(p.price)}</span>
+                </div>
+                <button 
+                  onclick="addToCart('${p.id}')"
+                  class="w-8 h-8 rounded-xl bg-amber-100 hover:bg-amber-500 hover:text-white text-amber-700 font-extrabold text-base flex items-center justify-center transition shadow-xs"
+                >
+                  +
+                </button>
+              </div>
+            `).join('')}
+          </div>
+
+          <!-- Bottom Sticky Floating Sheet Bar -->
+          <div class="sticky bottom-20 bg-slate-900 text-white p-3.5 rounded-2xl shadow-xl flex items-center justify-between">
+            <div>
+              <p class="text-[10px] text-slate-400">Giỏ hàng: <strong>${cart.reduce((s, i) => s + i.qty, 0)} món</strong></p>
+              <p class="text-sm font-extrabold text-amber-400">${formatVND(totals.totalToPay)}</p>
+            </div>
+            <button onclick="openReceiptModal()" class="px-5 py-2.5 rounded-xl bg-amber-500 hover:bg-amber-600 text-white font-extrabold text-xs shadow-md transition">
+              Xem đơn & In K80 ➔
+            </button>
+          </div>
+        </div>
+      `;
+    }
+
+    // Initial load
+    render();
+  </script>
+</body>
+</html>
