@@ -1,0 +1,37 @@
+{
+  "id": "TC-001",
+  "title": "Khảo sát nghiệp vụ & Xây dựng Interactive Prototype 3 biến thể",
+  "status": "deployed",
+  "created_at": "2026-09-08T14:40:00+07:00",
+  "updated_at": "2026-09-08T16:00:00+07:00",
+  "state_history": [
+    { "state": "planned", "timestamp": "2026-09-08T14:40:00+07:00", "actor": "Antigravity & User" },
+    { "state": "in_progress", "timestamp": "2026-09-08T14:55:00+07:00", "actor": "Antigravity" },
+    { "state": "implemented", "timestamp": "2026-09-08T14:57:00+07:00", "actor": "Antigravity" },
+    { "state": "tested", "timestamp": "2026-09-08T15:00:00+07:00", "actor": "User & Antigravity" },
+    { "state": "deployed", "timestamp": "2026-09-08T15:05:00+07:00", "actor": "Antigravity (GitHub Pages)" }
+  ],
+  "context": {
+    "client": "Bạn Hằng (MexucxichCuisine)",
+    "job_title": "Artisan Food Curator & Merchant",
+    "theme": "Vàng mật ong & Trắng",
+    "live_url": "https://tomeziy.github.io/mexucxich-cuisine/",
+    "repo_url": "https://github.com/tomeziy/mexucxich-cuisine"
+  },
+  "progress_summary": "Hoàn tất 2 vòng Grilling (Q1-Q9), xác lập thuật ngữ CONTEXT.md, 3 bản ghi ADRs, xây dựng prototype tương tác gồm 3 biến thể A/B/C với giỏ hàng, in hóa đơn nhiệt K80 và VietQR động, deploy thành công lên GitHub Pages.",
+  "files_in_progress": [
+    "projects/MexucxichCuisine/CONTEXT.md",
+    "projects/MexucxichCuisine/docs/adr/0001-offline-first-storage-and-backup.md",
+    "projects/MexucxichCuisine/docs/adr/0002-order-lifecycle-and-debt-ledger.md",
+    "projects/MexucxichCuisine/docs/adr/0003-inventory-deduction-and-shipping-revenue.md",
+    "projects/MexucxichCuisine/prototype.html",
+    "projects/MexucxichCuisine/index.html",
+    "projects/MexucxichCuisine/AGENTS.md"
+  ],
+  "blockers": [],
+  "next_steps": [
+    "Nhận phản hồi từ bạn Hằng về biến thể giao diện yêu thích (Variant A, B, hoặc C)",
+    "Kích hoạt /to-spec để lập tài liệu đặc tả kỹ thuật chi tiết",
+    "Bắt tay vào xây dựng mã nguồn chính thức (POS, Kho hàng, Báo cáo, Công nợ, Cài đặt in, Nhập/Xuất Excel)"
+  ]
+}
