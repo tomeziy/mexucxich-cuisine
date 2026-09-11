@@ -8,5 +8,5 @@ export default defineConfig({
     react(),
     tailwindcss(),
   ],
-  base: './', // Ensures assets load correctly on GitHub Pages and local folders
+  base: '/mexucxich-cuisine/', // Standard path for GitHub Project Pages
 });
