@@ -4,13 +4,14 @@
 
 **Blocked by:** None (can start immediately).
 
-**Status:** ready-for-agent
+**Status:** completed
 
-- [ ] `npm create vite` + React + TypeScript + Tailwind CSS 4 + Lucide React icons
-- [ ] React Router v7 với 5 route: `/`, `/products`, `/reports`, `/customers`, `/settings`
-- [ ] Thanh menu sidebar (desktop) hoặc bottom tab bar (mobile) chuyển trang
-- [ ] Layout component Variant C responsive (Mobile-First compact list + Desktop 2-col split)
-- [ ] Bảng màu Vàng/Trắng (`#F59E0B`, `#D97706`, `#FFFFFF`, `#F8FAFC`), font Plus Jakarta Sans
-- [ ] LocalStorage wrapper: `useStore` hook cho products, customers, orders, settings
-- [ ] Mock data khởi tạo: 8 Sản phẩm (emoji thumbnail, giá, danh mục, tồn kho), 4 Khách hàng (1 có Dư nợ 250k, 1 có Dư nợ 1.45tr)
-- [ ] `npm run build` xuất `dist/` thành công, không lỗi TypeScript
+- [x] `npm create vite` + React + TypeScript + Tailwind CSS 4 + Lucide React icons
+- [x] React Router v7 với 5 route: `/`, `/products`, `/reports`, `/customers`, `/settings`
+- [x] Thanh menu sidebar (desktop) hoặc bottom tab bar (mobile) chuyển trang
+- [x] Layout component Variant C responsive (Mobile-First compact list + Desktop 2-col split)
+- [x] Bảng màu Vàng/Trắng (`#F59E0B`, `#D97706`, `#FFFFFF`, `#F8FAFC`), font Plus Jakarta Sans
+- [x] LocalStorage wrapper: `useStore` hook cho products, customers, orders, settings
+- [x] Mock data khởi tạo: 8 Sản phẩm (emoji thumbnail, giá, danh mục, tồn kho), 4 Khách hàng (1 có Dư nợ 250k, 1 có Dư nợ 1.45tr)
+- [x] `npm run build` xuất `dist/` thành công, không lỗi TypeScript
+

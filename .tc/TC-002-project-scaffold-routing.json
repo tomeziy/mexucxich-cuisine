@@ -1,0 +1,45 @@
+{
+  "id": "TC-002",
+  "title": "Khởi tạo Project Vite + React + Tailwind & Cấu trúc Routing (Ticket 01)",
+  "status": "implemented",
+  "created_at": "2026-09-11T15:22:00+07:00",
+  "updated_at": "2026-09-11T15:26:00+07:00",
+  "state_history": [
+    { "state": "planned", "timestamp": "2026-09-11T15:22:00+07:00", "actor": "Antigravity" },
+    { "state": "in_progress", "timestamp": "2026-09-11T15:22:30+07:00", "actor": "Antigravity" },
+    { "state": "implemented", "timestamp": "2026-09-11T15:25:30+07:00", "actor": "Antigravity" },
+    { "state": "tested", "timestamp": "2026-09-11T15:25:40+07:00", "actor": "Antigravity" }
+  ],
+  "context": {
+    "ticket": "01-project-scaffold-routing.md",
+    "theme": "Vàng Mật Ong & Trắng, Font Plus Jakarta Sans",
+    "variant": "Variant C (Mobile-First + Desktop 2-Col Split)"
+  },
+  "progress_summary": "Thiết lập thành công Vite + React 19 + TypeScript + Tailwind CSS v4 + React Router v7 (HashRouter) + Lucide Icons. Tạo StoreContext bao quát toàn bộ dữ liệu (Products, Customers, Orders, DebtPayments, ReceiptSettings) lưu trữ LocalStorage. Hoàn thành Layout responsive và 5 routes chính. Lệnh npm run build thành công 100%.",
+  "files_in_progress": [
+    "src/types/index.ts",
+    "src/data/initialData.ts",
+    "src/context/StoreContext.tsx",
+    "src/components/layout/Navbar.tsx",
+    "src/components/layout/Sidebar.tsx",
+    "src/components/layout/MobileTabBar.tsx",
+    "src/components/layout/Layout.tsx",
+    "src/pages/PosPage.tsx",
+    "src/pages/ProductsPage.tsx",
+    "src/pages/ReportsPage.tsx",
+    "src/pages/CustomersPage.tsx",
+    "src/pages/SettingsPage.tsx",
+    "src/App.tsx",
+    "src/main.tsx",
+    "src/index.css",
+    "src/vite-env.d.ts",
+    "vite.config.ts",
+    "tsconfig.json",
+    ".github/workflows/deploy.yml"
+  ],
+  "blockers": [],
+  "next_steps": [
+    "Triển khai Ticket 02: Màn hình POS - Chọn Sản phẩm & Tạo Đơn hàng Tại chỗ",
+    "Triển khai Ticket 05: Màn hình Quản lý Sản phẩm & Kho"
+  ]
+}

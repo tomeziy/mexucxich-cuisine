@@ -2,14 +2,20 @@
   "project": "MexucxichCuisine",
   "version": "1.0.0",
   "created_at": "2026-09-08T16:00:00+07:00",
-  "last_updated": "2026-09-08T16:00:00+07:00",
-  "active_tc": "TC-001",
+  "last_updated": "2026-09-11T15:26:00+07:00",
+  "active_tc": "TC-002",
   "changes": [
     {
       "id": "TC-001",
       "title": "Khảo sát nghiệp vụ & Xây dựng Interactive Prototype 3 biến thể",
       "status": "deployed",
       "file": "TC-001-interactive-prototype.json"
+    },
+    {
+      "id": "TC-002",
+      "title": "Khởi tạo Project Vite + React + Tailwind & Cấu trúc Routing (Ticket 01)",
+      "status": "implemented",
+      "file": "TC-002-project-scaffold-routing.json"
     }
   ]
 }
