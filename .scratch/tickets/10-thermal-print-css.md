@@ -10,11 +10,12 @@
 
 **Blocked by:** 09: Cài đặt Mẫu Hóa đơn & Xem trước Trực quan (Live Preview)
 
-**Status:** ready-for-agent
+**Status:** completed
 
-- [ ] Hàm kích hoạt in ấn gọi `window.print()` chuẩn xác trên cả Chrome, Safari, Edge
-- [ ] CSS `@media print` ẩn 100% các thành phần giao diện không liên quan
-- [ ] Căn chỉnh kích thước chính xác cho khổ in nhiệt K80 (80mm) và K57 (57mm)
-- [ ] Xử lý ngắt trang (`page-break-inside: avoid`), không bị cắt ngang dòng chữ giữa chừng
-- [ ] Ảnh mã VietQR và logo hiển thị rõ ràng trên bản in nhiệt đơn sắc
-- [ ] Kiểm thử in thử trên trình duyệt (Print Preview) đạt độ nét cao
+- [x] Hàm kích hoạt in ấn gọi `window.print()` chuẩn xác trên cả Chrome, Safari, Edge
+- [x] CSS `@media print` ẩn 100% các thành phần giao diện không liên quan
+- [x] Căn chỉnh kích thước chính xác cho khổ in nhiệt K80 (80mm) và K57 (57mm)
+- [x] Xử lý ngắt trang (`page-break-inside: avoid`), không bị cắt ngang dòng chữ giữa chừng
+- [x] Ảnh mã VietQR và logo hiển thị rõ ràng trên bản in nhiệt đơn sắc
+- [x] Kiểm thử in thử trên trình duyệt (Print Preview) đạt độ nét cao
+

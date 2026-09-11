@@ -4,12 +4,13 @@
 
 **Blocked by:** 01: Khởi tạo Project Vite + React + Tailwind & Cấu trúc Routing
 
-**Status:** ready-for-agent
+**Status:** completed
 
-- [ ] Bảng danh sách Sản phẩm hiển thị đầy đủ thông tin: Ảnh/emoji, Mã SP, Tên món, Danh mục, Đơn vị tính, Giá vốn, Giá bán, Tồn kho
-- [ ] Cảnh báo đỏ nổi bật đối với các sản phẩm có Tồn kho <= 5
-- [ ] Thanh tìm kiếm Sản phẩm theo Tên/Mã và bộ lọc theo Danh mục
-- [ ] Modal "Thêm sản phẩm mới" đầy đủ các trường: Tên, Mã, Giá vốn, Giá bán, Danh mục, Đơn vị tính, Tồn kho ban đầu, Tải ảnh (hoặc chọn emoji)
-- [ ] Modal "Chỉnh sửa sản phẩm" cập nhật thông tin và số lượng tồn kho
-- [ ] Tính năng "Xóa sản phẩm" có cảnh báo xác nhận để tránh bấm nhầm
-- [ ] Dữ liệu thay đổi tự động đồng bộ tức thì với màn hình POS và LocalStorage
+- [x] Bảng danh sách Sản phẩm hiển thị đầy đủ thông tin: Ảnh/emoji, Mã SP, Tên món, Danh mục, Đơn vị tính, Giá vốn, Giá bán, Tồn kho
+- [x] Cảnh báo đỏ nổi bật đối với các sản phẩm có Tồn kho <= 5
+- [x] Thanh tìm kiếm Sản phẩm theo Tên/Mã và bộ lọc theo Danh mục
+- [x] Modal "Thêm sản phẩm mới" đầy đủ các trường: Tên, Mã, Giá vốn, Giá bán, Danh mục, Đơn vị tính, Tồn kho ban đầu, Tải ảnh (hoặc chọn emoji)
+- [x] Modal "Chỉnh sửa sản phẩm" cập nhật thông tin và số lượng tồn kho
+- [x] Tính năng "Xóa sản phẩm" có cảnh báo xác nhận để tránh bấm nhầm
+- [x] Dữ liệu thay đổi tự động đồng bộ tức thì với màn hình POS và LocalStorage
+

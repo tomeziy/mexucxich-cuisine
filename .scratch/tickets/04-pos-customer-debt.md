@@ -4,12 +4,13 @@
 
 **Blocked by:** 02: Màn hình POS: Chọn Sản phẩm & Tạo Đơn hàng Tại chỗ
 
-**Status:** ready-for-agent
+**Status:** completed
 
-- [ ] Dropdown chọn Khách hàng hiển thị Tên, SĐT và Dư nợ hiện tại (nếu có)
-- [ ] Modal/Popup "Thêm nhanh Khách hàng mới" (Tên, SĐT, Địa chỉ) không làm mất giỏ hàng đang chọn
-- [ ] 4 Phương thức thanh toán: Tiền mặt / Chuyển khoản / Ghi nợ / Trả 1 phần
-- [ ] Trường nhập "Khách trả trước" khi chọn "Trả 1 phần", tự tính "Còn nợ lại"
-- [ ] Cảnh báo rõ ràng khi chọn Ghi nợ cho khách hàng
-- [ ] Tự động cập nhật cộng dồn Dư nợ vào hồ sơ Khách hàng khi đơn hàng phát sinh nợ
-- [ ] Lưu vết khoản nợ phát sinh gắn liền với Mã Đơn hàng
+- [x] Dropdown chọn Khách hàng hiển thị Tên, SĐT và Dư nợ hiện tại (nếu có)
+- [x] Modal/Popup "Thêm nhanh Khách hàng mới" (Tên, SĐT, Địa chỉ) không làm mất giỏ hàng đang chọn
+- [x] 4 Phương thức thanh toán: Tiền mặt / Chuyển khoản / Ghi nợ / Trả 1 phần
+- [x] Trường nhập "Khách trả trước" khi chọn "Trả 1 phần", tự tính "Còn nợ lại"
+- [x] Cảnh báo rõ ràng khi chọn Ghi nợ cho khách hàng
+- [x] Tự động cập nhật cộng dồn Dư nợ vào hồ sơ Khách hàng khi đơn hàng phát sinh nợ
+- [x] Lưu vết khoản nợ phát sinh gắn liền với Mã Đơn hàng
+

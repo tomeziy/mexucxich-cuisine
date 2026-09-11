@@ -4,11 +4,12 @@
 
 **Blocked by:** 02: Màn hình POS: Chọn Sản phẩm & Tạo Đơn hàng Tại chỗ
 
-**Status:** ready-for-agent
+**Status:** completed
 
-- [ ] 3 Thẻ chỉ số tổng quan: Tổng doanh thu hôm nay, Số đơn hàng hôm nay, Lợi nhuận ước tính
-- [ ] Công thức tính Lợi nhuận ước tính chuẩn xác: Doanh thu thuần (Tổng tiền trừ Phí ship) - Tổng giá vốn
-- [ ] Bảng lịch sử Đơn hàng đầy đủ cột: Mã đơn, Thời gian, Tên KH, Loại đơn, Món đã mua, Phí ship, Tổng tiền, Trạng thái đơn, Trạng thái thanh toán
-- [ ] Bộ lọc đơn hàng theo Ngày, Tháng, hoặc tùy chọn Hôm nay / Hôm qua / 7 ngày qua / Tháng này
-- [ ] Bộ lọc theo trạng thái: Tất cả, Đang chuẩn bị, Đang giao, Đã hoàn thành, Đã hủy
-- [ ] Bấm vào dòng đơn hàng để mở popup xem chi tiết và nút "In lại hóa đơn"
+- [x] 3 Thẻ chỉ số tổng quan: Tổng doanh thu hôm nay, Số đơn hàng hôm nay, Lợi nhuận ước tính
+- [x] Công thức tính Lợi nhuận ước tính chuẩn xác: Doanh thu thuần (Tổng tiền trừ Phí ship) - Tổng giá vốn
+- [x] Bảng lịch sử Đơn hàng đầy đủ cột: Mã đơn, Thời gian, Tên KH, Loại đơn, Món đã mua, Phí ship, Tổng tiền, Trạng thái đơn, Trạng thái thanh toán
+- [x] Bộ lọc đơn hàng theo Ngày, Tháng, hoặc tùy chọn Hôm nay / Hôm qua / 7 ngày qua / Tháng này
+- [x] Bộ lọc theo trạng thái: Tất cả, Đang chuẩn bị, Đang giao, Đã hoàn thành, Đã hủy
+- [x] Bấm vào dòng đơn hàng để mở popup xem chi tiết và nút "In lại hóa đơn"
+

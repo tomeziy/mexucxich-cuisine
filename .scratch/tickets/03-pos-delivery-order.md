@@ -4,12 +4,13 @@
 
 **Blocked by:** 02: Màn hình POS: Chọn Sản phẩm & Tạo Đơn hàng Tại chỗ
 
-**Status:** ready-for-agent
+**Status:** completed
 
-- [ ] Công tắc chuyển đổi hình thức: "Tại chỗ" vs "Giao hàng"
-- [ ] Trường nhập "Phí vận chuyển (Phí ship)" và ghi chú Shipper (Ahamove, Grab, GHTK, Ship nhà...)
-- [ ] Đơn giao hàng tạo mới trừ Tồn kho ngay lập tức để tránh bán trùng hàng thực phẩm tươi sống
-- [ ] Thanh tab trạng thái trên đỉnh POS: hiển thị số lượng đơn "Đang chuẩn bị" và "Đang giao"
-- [ ] Nút cập nhật trạng thái đơn nhanh: Đang chuẩn bị ➔ Đang giao ➔ Đã hoàn thành
-- [ ] Nút "Hủy đơn" kích hoạt cơ chế Hoàn kho tự động (cộng trả lại tồn kho vào kệ)
-- [ ] Phí vận chuyển được lưu riêng trong đối tượng Đơn hàng, sẵn sàng cho báo cáo tài chính
+- [x] Công tắc chuyển đổi hình thức: "Tại chỗ" vs "Giao hàng"
+- [x] Trường nhập "Phí vận chuyển (Phí ship)" và ghi chú Shipper (Ahamove, Grab, GHTK, Ship nhà...)
+- [x] Đơn giao hàng tạo mới trừ Tồn kho ngay lập tức để tránh bán trùng hàng thực phẩm tươi sống
+- [x] Thanh tab trạng thái trên đỉnh POS: hiển thị số lượng đơn "Đang chuẩn bị" và "Đang giao"
+- [x] Nút cập nhật trạng thái đơn nhanh: Đang chuẩn bị ➔ Đang giao ➔ Đã hoàn thành
+- [x] Nút "Hủy đơn" kích hoạt cơ chế Hoàn kho tự động (cộng trả lại tồn kho vào kệ)
+- [x] Phí vận chuyển được lưu riêng trong đối tượng Đơn hàng, sẵn sàng cho báo cáo tài chính
+

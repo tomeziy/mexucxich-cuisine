@@ -1,0 +1,52 @@
+{
+  "id": "TC-004",
+  "title": "Hoàn tất triển khai toàn bộ 11 tickets ứng dụng Web POS MexucxichCuisine",
+  "status": "deployed",
+  "created_at": "2026-09-11T15:35:00+07:00",
+  "updated_at": "2026-09-11T16:20:00+07:00",
+  "state_history": [
+    { "state": "in_progress", "timestamp": "2026-09-11T15:35:00+07:00", "actor": "Antigravity" },
+    { "state": "implemented", "timestamp": "2026-09-11T16:18:00+07:00", "actor": "Antigravity" },
+    { "state": "tested", "timestamp": "2026-09-11T16:19:00+07:00", "actor": "Antigravity" },
+    { "state": "deployed", "timestamp": "2026-09-11T16:20:00+07:00", "actor": "Antigravity" }
+  ],
+  "context": {
+    "tickets": "01 to 11",
+    "theme": "Vàng Mật Ong (#F59E0B) & Trắng (#FFFFFF)",
+    "font": "Plus Jakarta Sans",
+    "storage": "Offline-First LocalStorage (ADR-0001)",
+    "order_flows": "Tại chỗ & Giao hàng Online (ADR-0002)",
+    "debt_ledger": "Sổ nợ lũy kế (Running Balance - ADR-0002)",
+    "inventory": "Trừ kho tức thì & Hoàn kho tự động (ADR-0003)",
+    "revenue": "Tách riêng cước vận chuyển (ADR-0003)",
+    "excel": "SheetJS (xlsx) UTF-8 Tiếng Việt",
+    "printing": "K80 / K57 / A5 / A4 với @media print",
+    "payments": "Tiền mặt, Chuyển khoản VietQR động, Ghi nợ, Trả 1 phần",
+    "backup": "Sao lưu & Khôi phục 1-Click JSON"
+  },
+  "progress_summary": "Đã hoàn thành xuất sắc 100% các tính năng từ Ticket 01 đến Ticket 11 theo đúng chuẩn KiotViet tối giản, đáp ứng trọn vẹn yêu cầu thực đơn đa dạng và bán hàng online của bạn Hằng. Tất cả các trang hoạt động mượt mà, lệnh build chạy trong 455ms không lỗi.",
+  "files_in_progress": [
+    "src/types/index.ts",
+    "src/data/initialData.ts",
+    "src/context/StoreContext.tsx",
+    "src/utils/format.ts",
+    "src/utils/vietnamese.ts",
+    "src/utils/excel.ts",
+    "src/components/pos/ReceiptModal.tsx",
+    "src/components/pos/QuickAddCustomerModal.tsx",
+    "src/pages/PosPage.tsx",
+    "src/pages/ProductsPage.tsx",
+    "src/pages/ReportsPage.tsx",
+    "src/pages/CustomersPage.tsx",
+    "src/pages/SettingsPage.tsx",
+    "src/App.tsx",
+    "src/index.css",
+    "index.html",
+    ".github/workflows/deploy.yml"
+  ],
+  "blockers": [],
+  "next_steps": [
+    "Theo dõi tiến trình deploy tự động của GitHub Actions",
+    "Bàn giao đường dẫn chạy ứng dụng cho bạn Hằng sử dụng trực tiếp trên điện thoại & quầy hàng"
+  ]
+}

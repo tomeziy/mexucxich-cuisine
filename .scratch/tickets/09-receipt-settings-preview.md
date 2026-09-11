@@ -13,12 +13,13 @@
 
 **Blocked by:** 02: Màn hình POS: Chọn Sản phẩm & Tạo Đơn hàng Tại chỗ
 
-**Status:** ready-for-agent
+**Status:** completed
 
-- [ ] Form nhập thông tin cửa hàng: Tên tiệm, Địa chỉ, Hotline, Lời chúc/cảm ơn footer, tải ảnh logo
-- [ ] Lựa chọn khổ giấy in: K80 (mặc định), K57, A5, A4
-- [ ] Dropdown chọn Ngân hàng (danh sách chuẩn VietQR), ô nhập STK và Tên chủ tài khoản
-- [ ] 4 Công tắc bật/tắt: Logo, Tên nhân viên, Thông tin khách & nợ, Mã VietQR
-- [ ] Khung Live Preview hiển thị hóa đơn mẫu cập nhật thời gian thực theo cấu hình
-- [ ] Tích hợp API VietQR mở tạo ảnh QR động đúng chuẩn Napas theo số tiền mẫu
-- [ ] Cài đặt được lưu bền vững vào LocalStorage
+- [x] Form nhập thông tin cửa hàng: Tên tiệm, Địa chỉ, Hotline, Lời chúc/cảm ơn footer, tải ảnh logo
+- [x] Lựa chọn khổ giấy in: K80 (mặc định), K57, A5, A4
+- [x] Dropdown chọn Ngân hàng (danh sách chuẩn VietQR), ô nhập STK và Tên chủ tài khoản
+- [x] 4 Công tắc bật/tắt: Logo, Tên nhân viên, Thông tin khách & nợ, Mã VietQR
+- [x] Khung Live Preview hiển thị hóa đơn mẫu cập nhật thời gian thực theo cấu hình
+- [x] Tích hợp API VietQR mở tạo ảnh QR động đúng chuẩn Napas theo số tiền mẫu
+- [x] Cài đặt được lưu bền vững vào LocalStorage
+

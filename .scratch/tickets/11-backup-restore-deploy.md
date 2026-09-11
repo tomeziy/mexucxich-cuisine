@@ -11,11 +11,12 @@
 
 **Blocked by:** 08: Xuất / Nhập Dữ liệu Excel & CSV (SheetJS)
 
-**Status:** ready-for-agent
+**Status:** completed
 
-- [ ] Nút "Sao lưu toàn bộ dữ liệu" xuất tệp JSON đầy đủ cấu trúc
-- [ ] Nút "Khôi phục dữ liệu" đọc tệp JSON, kiểm tra tính hợp lệ và cập nhật LocalStorage
-- [ ] Tính năng "Đặt lại dữ liệu mẫu (Mock Data)" tiện lợi cho việc demo
-- [ ] Tệp GitHub Actions workflow tự động deploy lên GitHub Pages khi push `main`
-- [ ] Lệnh `npm run build` thành công, tạo thư mục `dist/` tối ưu
-- [ ] Ứng dụng chạy mượt mà trên URL chính thức của bạn Hằng
+- [x] Nút "Sao lưu toàn bộ dữ liệu" xuất tệp JSON đầy đủ cấu trúc
+- [x] Nút "Khôi phục dữ liệu" đọc tệp JSON, kiểm tra tính hợp lệ và cập nhật LocalStorage
+- [x] Tính năng "Đặt lại dữ liệu mẫu (Mock Data)" tiện lợi cho việc demo
+- [x] Tệp GitHub Actions workflow tự động deploy lên GitHub Pages khi push `main`
+- [x] Lệnh `npm run build` thành công, tạo thư mục `dist/` tối ưu
+- [x] Ứng dụng chạy mượt mà trên URL chính thức của bạn Hằng
+

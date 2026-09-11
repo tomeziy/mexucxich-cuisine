@@ -14,12 +14,13 @@
 
 **Blocked by:** 05: Màn hình Quản lý Sản phẩm & Kho, 06: Màn hình Khách hàng & Quản lý Công nợ, 07: Màn hình Báo cáo & Lịch sử Đơn hàng
 
-**Status:** ready-for-agent
+**Status:** completed
 
-- [ ] Cài đặt và tích hợp thư viện `xlsx` (SheetJS) hoạt động 100% trên trình duyệt
-- [ ] Tính năng Xuất Excel cho Sản phẩm, Báo cáo Đơn hàng, và Danh sách Công nợ
-- [ ] Đảm bảo file Excel xuất ra hiển thị đúng font tiếng Việt có dấu và định dạng cột đẹp mắt
-- [ ] Tính năng Nhập Excel cho Sản phẩm có bảng xem trước (Preview) dữ liệu trước khi lưu
-- [ ] Tính năng Nhập Excel cho Khách hàng có bảng xem trước dữ liệu
-- [ ] Cung cấp nút tải về File mẫu Excel chuẩn để người dùng nhập liệu dễ dàng
-- [ ] Kiểm tra và xử lý lỗi dữ liệu (dòng trống, giá sai định dạng, thiếu tên...) kèm thông báo thân thiện
+- [x] Cài đặt và tích hợp thư viện `xlsx` (SheetJS) hoạt động 100% trên trình duyệt
+- [x] Tính năng Xuất Excel cho Sản phẩm, Báo cáo Đơn hàng, và Danh sách Công nợ
+- [x] Đảm bảo file Excel xuất ra hiển thị đúng font tiếng Việt có dấu và định dạng cột đẹp mắt
+- [x] Tính năng Nhập Excel cho Sản phẩm có bảng xem trước (Preview) dữ liệu trước khi lưu
+- [x] Tính năng Nhập Excel cho Khách hàng có bảng xem trước dữ liệu
+- [x] Cung cấp nút tải về File mẫu Excel chuẩn để người dùng nhập liệu dễ dàng
+- [x] Kiểm tra và xử lý lỗi dữ liệu (dòng trống, giá sai định dạng, thiếu tên...) kèm thông báo thân thiện
+

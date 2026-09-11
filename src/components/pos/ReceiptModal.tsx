@@ -1,7 +1,7 @@
 import React from 'react';
 import { Order, ReceiptSettings } from '../../types';
 import { formatVND, formatDate } from '../../utils/format';
-import { Printer, X } from 'lucide-react';
+import { Printer, X, QrCode } from 'lucide-react';
 
 interface ReceiptModalProps {
   order: Order | null;
@@ -22,8 +22,23 @@ export const ReceiptModal: React.FC<ReceiptModalProps> = ({
     window.print();
   };
 
+  // VietQR Dynamic URL (Standard Napas format)
+  const vietQrAmount = order.paymentMethod === 'partial' ? (order.paidAmount || order.total) : order.total;
+  const qrUrl = settings.bankAccount && settings.bankCode
+    ? `https://img.vietqr.io/image/${settings.bankCode}-${settings.bankAccount}-compact2.png?amount=${vietQrAmount}&addInfo=${encodeURIComponent(order.id)}&accountName=${encodeURIComponent(settings.bankAccountName || '')}`
+    : '';
+
+  const paperWidthClass =
+    settings.paperSize === 'k57'
+      ? 'w-[57mm]'
+      : settings.paperSize === 'a5'
+      ? 'w-[148mm]'
+      : settings.paperSize === 'a4'
+      ? 'w-[210mm]'
+      : 'w-[80mm]'; // default k80
+
   return (
-    <div className="fixed inset-0 bg-black/60 backdrop-blur-xs z-50 flex items-center justify-center p-3 sm:p-4">
+    <div className="fixed inset-0 bg-black/60 backdrop-blur-2xs z-50 flex items-center justify-center p-3 sm:p-4">
       <div className="bg-white rounded-2xl max-w-md w-full overflow-hidden shadow-2xl flex flex-col max-h-[92vh] animate-in fade-in zoom-in duration-150">
         {/* Header */}
         <div className="p-3.5 bg-amber-500 text-white flex items-center justify-between">
@@ -43,7 +58,7 @@ export const ReceiptModal: React.FC<ReceiptModalProps> = ({
         <div className="p-4 sm:p-6 overflow-y-auto custom-scroll bg-slate-100 flex justify-center">
           <div
             id="thermal-receipt-print"
-            className="w-[80mm] min-h-[120mm] bg-white p-4 shadow-sm text-slate-900 font-mono text-[11px] leading-relaxed border-t-4 border-amber-500 rounded-xs"
+            className={`${paperWidthClass} min-h-[120mm] bg-white p-4 shadow-sm text-slate-900 font-mono text-[11px] leading-relaxed border-t-4 border-amber-500 rounded-xs`}
           >
             {/* Store Branding */}
             <div className="text-center pb-2.5 border-b border-dashed border-slate-300">
@@ -75,17 +90,37 @@ export const ReceiptModal: React.FC<ReceiptModalProps> = ({
                 <span>{formatDate(order.createdAt)}</span>
               </div>
               {settings.showCustomer && (
-                <div className="flex justify-between">
-                  <span>Khách hàng:</span>
-                  <strong className="text-slate-900">{order.customerName || 'Khách lẻ tại quầy'}</strong>
-                </div>
+                <>
+                  <div className="flex justify-between">
+                    <span>Khách hàng:</span>
+                    <strong className="text-slate-900">{order.customerName || 'Khách lẻ tại quầy'}</strong>
+                  </div>
+                  {order.customerPhone && (
+                    <div className="flex justify-between">
+                      <span>Điện thoại:</span>
+                      <span>{order.customerPhone}</span>
+                    </div>
+                  )}
+                  {order.customerAddress && (
+                    <div className="flex justify-between">
+                      <span className="shrink-0">Địa chỉ:</span>
+                      <span className="text-right truncate max-w-[160px]">{order.customerAddress}</span>
+                    </div>
+                  )}
+                </>
               )}
               <div className="flex justify-between">
-                <span>Loại đơn:</span>
-                <span className="font-bold text-amber-700">
-                  {order.orderType === 'direct' ? 'Bán tại chỗ' : 'Đơn giao hàng'}
+                <span>Hình thức:</span>
+                <span className={`font-bold ${order.orderType === 'direct' ? 'text-amber-700' : 'text-blue-700'}`}>
+                  {order.orderType === 'direct' ? 'Tại chỗ' : 'Đơn giao hàng (Ship)'}
                 </span>
               </div>
+              {order.shippingNote && (
+                <div className="flex justify-between text-slate-500">
+                  <span>Ghi chú ship:</span>
+                  <span>{order.shippingNote}</span>
+                </div>
+              )}
             </div>
 
             {/* Items Table */}
@@ -127,7 +162,7 @@ export const ReceiptModal: React.FC<ReceiptModalProps> = ({
 
               {order.shippingFee > 0 && (
                 <div className="flex justify-between text-slate-600">
-                  <span>Phí ship (thu hộ):</span>
+                  <span>Phí vận chuyển (thu hộ):</span>
                   <span>+{formatVND(order.shippingFee)}</span>
                 </div>
               )}
@@ -142,7 +177,8 @@ export const ReceiptModal: React.FC<ReceiptModalProps> = ({
                 <span className="font-bold text-slate-800">
                   {order.paymentMethod === 'cash' ? 'Tiền mặt' :
                    order.paymentMethod === 'transfer' ? 'Chuyển khoản (VietQR)' :
-                   order.paymentMethod === 'debt' ? 'Ghi nợ' : 'Thanh toán 1 phần'}
+                   order.paymentMethod === 'debt' ? 'Cho nợ (Ghi nợ 100%)' :
+                   `Trả một phần (Đã trả: ${formatVND(order.paidAmount)})`}
                 </span>
               </div>
 
@@ -167,6 +203,33 @@ export const ReceiptModal: React.FC<ReceiptModalProps> = ({
               )}
             </div>
 
+            {/* Dynamic VietQR Napas QR Code */}
+            {settings.showVietQR && qrUrl && (order.paymentMethod === 'transfer' || order.paymentMethod === 'partial') && (
+              <div className="py-2.5 text-center border-b border-dashed border-slate-300">
+                <div className="flex items-center justify-center gap-1 text-[9px] font-bold text-slate-700 mb-1">
+                  <QrCode className="w-3 h-3 text-amber-600" />
+                  <span>Quét mã VietQR chuyển khoản:</span>
+                </div>
+                <div className="w-28 h-28 mx-auto bg-white border border-slate-300 rounded p-1 flex flex-col items-center justify-center shadow-2xs">
+                  <img
+                    src={qrUrl}
+                    alt="VietQR"
+                    className="w-24 h-24 object-contain"
+                    onError={(e) => {
+                      // Fallback placeholder if offline or blocked
+                      (e.target as HTMLElement).style.display = 'none';
+                    }}
+                  />
+                </div>
+                <p className="text-[9px] font-bold text-slate-800 mt-1">
+                  {settings.bankCode} • STK: {settings.bankAccount}
+                </p>
+                {settings.bankAccountName && (
+                  <p className="text-[8px] text-slate-500 uppercase">{settings.bankAccountName}</p>
+                )}
+              </div>
+            )}
+
             {/* Footer Message */}
             <div className="text-center pt-3 text-[10px] text-slate-500 space-y-0.5">
               <p className="font-medium">{settings.footerMessage || 'Cảm ơn quý khách & Hẹn gặp lại!'}</p>
@@ -188,7 +251,7 @@ export const ReceiptModal: React.FC<ReceiptModalProps> = ({
             className="px-5 py-2 rounded-xl text-xs font-extrabold bg-amber-500 hover:bg-amber-600 text-white shadow-md shadow-amber-500/20 flex items-center gap-1.5 transition"
           >
             <Printer className="w-4 h-4" />
-            <span>In Hóa Đơn (K80)</span>
+            <span>In Hóa Đơn ({settings.paperSize.toUpperCase()})</span>
           </button>
         </div>
       </div>
