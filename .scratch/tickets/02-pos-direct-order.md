@@ -4,13 +4,14 @@
 
 **Blocked by:** 01: Khởi tạo Project Vite + React + Tailwind & Cấu trúc Routing
 
-**Status:** ready-for-agent
+**Status:** completed
 
-- [ ] Lưới danh sách Sản phẩm có ảnh/emoji, tên món, đơn vị tính, giá bán, số lượng tồn kho
-- [ ] Cảnh báo trực quan (badge đỏ) cho sản phẩm có Tồn kho <= 5
-- [ ] Thanh tìm kiếm siêu nhanh hỗ trợ gõ không dấu (vd: "xuc xich" tìm ra "Xúc xích")
-- [ ] Thanh lọc Danh mục ngang hiển thị số lượng sản phẩm mỗi nhóm
-- [ ] Giỏ hàng hiển thị danh sách món đã chọn, cho phép tăng giảm số lượng (+/-) hoặc xóa
-- [ ] Tự động tính Tổng tiền hàng, Giảm giá (nhập số tiền hoặc %), Tổng tiền khách phải trả
-- [ ] Ô nhập Tiền khách đưa tự động tính Tiền thừa trả khách
-- [ ] Nút "Thanh toán" lưu Đơn hàng (loại Tại chỗ, trạng thái Đã hoàn thành), trừ Tồn kho và mở Hóa đơn in xem trước
+- [x] Lưới danh sách Sản phẩm có ảnh/emoji, tên món, đơn vị tính, giá bán, số lượng tồn kho
+- [x] Cảnh báo trực quan (badge đỏ) cho sản phẩm có Tồn kho <= 5
+- [x] Thanh tìm kiếm siêu nhanh hỗ trợ gõ không dấu (vd: "xuc xich" tìm ra "Xúc xích")
+- [x] Thanh lọc Danh mục ngang hiển thị số lượng sản phẩm mỗi nhóm
+- [x] Giỏ hàng hiển thị danh sách món đã chọn, cho phép tăng giảm số lượng (+/-) hoặc xóa
+- [x] Tự động tính Tổng tiền hàng, Giảm giá (nhập số tiền hoặc %), Tổng tiền khách phải trả
+- [x] Ô nhập Tiền khách đưa tự động tính Tiền thừa trả khách
+- [x] Nút "Thanh toán" lưu Đơn hàng (loại Tại chỗ, trạng thái Đã hoàn thành), trừ Tồn kho và mở Hóa đơn in xem trước
+
