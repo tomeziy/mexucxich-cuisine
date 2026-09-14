@@ -135,7 +135,9 @@ export const ReceiptModal: React.FC<ReceiptModalProps> = ({
                   <div key={idx} className="flex justify-between items-baseline py-0.5 text-[10px]">
                     <div className="w-1/2 truncate font-medium">
                       {item.name}
-                      <span className="text-[9px] text-slate-400 block">{item.unit}</span>
+                      <span className="text-[9px] text-slate-400 block">
+                        {item.unit} • {formatVND(item.price)}
+                      </span>
                     </div>
                     <div className="w-1/6 text-center font-bold">x{item.qty}</div>
                     <div className="w-1/3 text-right font-bold text-slate-900">

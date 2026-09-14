@@ -22,6 +22,7 @@ import {
   XCircle,
   Eye,
   AlertCircle,
+  RotateCcw,
 } from 'lucide-react';
 
 interface CartItem extends OrderItem {}
@@ -113,12 +114,33 @@ export const PosPage: React.FC = () => {
           name: product.name,
           unit: product.unit,
           price: product.price,
+          originalPrice: product.price,
           cost: product.cost,
           qty: 1,
           image: product.image,
         },
       ];
     });
+  };
+
+  const handleUpdatePrice = (productId: string, newPrice: number) => {
+    setCart(prev =>
+      prev.map(item =>
+        item.productId === productId
+          ? { ...item, price: Math.max(0, newPrice) }
+          : item
+      )
+    );
+  };
+
+  const handleResetPrice = (productId: string) => {
+    setCart(prev =>
+      prev.map(item =>
+        item.productId === productId
+          ? { ...item, price: item.originalPrice ?? item.price }
+          : item
+      )
+    );
   };
 
   const handleUpdateQty = (productId: string, delta: number) => {
@@ -652,50 +674,114 @@ export const PosPage: React.FC = () => {
               </div>
 
               {/* Cart Items List */}
-              <div className="py-1 min-h-[140px] max-h-[220px] overflow-y-auto custom-scroll divide-y divide-slate-100">
+              <div className="py-1 min-h-[140px] max-h-[300px] overflow-y-auto custom-scroll divide-y divide-slate-100">
                 {cart.length === 0 ? (
                   <div className="h-32 flex flex-col items-center justify-center text-slate-400 text-xs">
                     <ShoppingBag className="w-8 h-8 text-slate-200 mb-1" />
                     <span>Chưa có món nào trong giỏ</span>
                   </div>
                 ) : (
-                  cart.map(item => (
-                    <div key={item.productId} className="py-2 flex items-center justify-between gap-2 text-xs">
-                      <div className="flex-1 min-w-0">
-                        <h5 className="font-bold text-slate-900 truncate">{item.name}</h5>
-                        <div className="text-[10px] text-slate-400">
-                          {item.unit} • <span className="text-amber-700 font-bold">{formatVND(item.price)}</span>
-                        </div>
-                      </div>
+                  cart.map(item => {
+                    const isPriceEdited = item.originalPrice !== undefined && item.price !== item.originalPrice;
+                    const isBelowCost = item.price < item.cost;
 
-                      <div className="flex items-center gap-1 bg-slate-50 border border-slate-200 rounded-lg p-0.5 shrink-0">
-                        <button
-                          onClick={() => handleUpdateQty(item.productId, -1)}
-                          className="w-5 h-5 rounded bg-white text-slate-700 hover:bg-slate-200 font-bold flex items-center justify-center"
-                        >
-                          <Minus className="w-3 h-3" />
-                        </button>
-                        <span className="w-6 text-center font-bold text-slate-800 text-xs">{item.qty}</span>
-                        <button
-                          onClick={() => handleUpdateQty(item.productId, 1)}
-                          className="w-5 h-5 rounded bg-white text-slate-700 hover:bg-slate-200 font-bold flex items-center justify-center"
-                        >
-                          <Plus className="w-3 h-3" />
-                        </button>
-                      </div>
-
-                      <div className="w-16 text-right font-black text-slate-900 shrink-0">
-                        {formatVND(item.price * item.qty)}
-                      </div>
-
-                      <button
-                        onClick={() => handleRemoveItem(item.productId)}
-                        className="text-slate-300 hover:text-rose-500 p-0.5"
+                    return (
+                      <div
+                        key={item.productId}
+                        className={`py-2 px-1.5 rounded-xl transition space-y-1 ${
+                          isBelowCost
+                            ? 'bg-amber-50/80 border border-amber-300'
+                            : isPriceEdited
+                            ? 'bg-amber-50/30'
+                            : ''
+                        }`}
                       >
-                        <Trash2 className="w-3.5 h-3.5" />
-                      </button>
-                    </div>
-                  ))
+                        <div className="flex items-center justify-between gap-2 text-xs">
+                          <div className="flex-1 min-w-0">
+                            <h5 className="font-bold text-slate-900 truncate">{item.name}</h5>
+                            <div className="flex items-center flex-wrap gap-x-2 gap-y-1 text-[11px] text-slate-500 mt-0.5">
+                              <span className="font-semibold text-slate-400 text-[10px]">{item.unit}</span>
+                              <span className="text-slate-300">•</span>
+                              <div className="inline-flex items-center gap-1">
+                                <span className="text-slate-400 text-[10px]">Đơn giá:</span>
+                                <div className="relative inline-flex items-center">
+                                  <input
+                                    type="number"
+                                    min="0"
+                                    step="1000"
+                                    value={item.price === 0 ? '0' : item.price || ''}
+                                    onChange={e => {
+                                      const val = e.target.value === '' ? 0 : Number(e.target.value);
+                                      handleUpdatePrice(item.productId, isNaN(val) ? 0 : val);
+                                    }}
+                                    className={`w-20 px-1.5 py-0.5 text-right font-black rounded border text-xs focus:outline-none transition ${
+                                      isBelowCost
+                                        ? 'border-amber-400 bg-white text-amber-900 focus:ring-1 focus:ring-amber-500'
+                                        : isPriceEdited
+                                        ? 'border-amber-400 bg-amber-50 text-amber-800'
+                                        : 'border-slate-200 bg-slate-50 text-slate-800 hover:border-slate-300 focus:border-amber-500'
+                                    }`}
+                                    title="Sửa trực tiếp đơn giá bán cho đơn này"
+                                  />
+                                  <span className="text-[10px] font-bold text-slate-500 ml-0.5">đ</span>
+                                </div>
+
+                                {isPriceEdited && (
+                                  <div className="inline-flex items-center gap-1 ml-0.5">
+                                    <span className="text-[10px] text-slate-400 line-through">
+                                      {formatVND(item.originalPrice ?? 0)}
+                                    </span>
+                                    <button
+                                      type="button"
+                                      onClick={() => handleResetPrice(item.productId)}
+                                      className="p-0.5 text-slate-400 hover:text-amber-600 rounded transition"
+                                      title="Khôi phục về giá gốc niêm yết"
+                                    >
+                                      <RotateCcw className="w-3 h-3" />
+                                    </button>
+                                  </div>
+                                )}
+                              </div>
+                            </div>
+                          </div>
+
+                          <div className="flex items-center gap-1 bg-slate-50 border border-slate-200 rounded-lg p-0.5 shrink-0">
+                            <button
+                              onClick={() => handleUpdateQty(item.productId, -1)}
+                              className="w-5 h-5 rounded bg-white text-slate-700 hover:bg-slate-200 font-bold flex items-center justify-center"
+                            >
+                              <Minus className="w-3 h-3" />
+                            </button>
+                            <span className="w-6 text-center font-bold text-slate-800 text-xs">{item.qty}</span>
+                            <button
+                              onClick={() => handleUpdateQty(item.productId, 1)}
+                              className="w-5 h-5 rounded bg-white text-slate-700 hover:bg-slate-200 font-bold flex items-center justify-center"
+                            >
+                              <Plus className="w-3 h-3" />
+                            </button>
+                          </div>
+
+                          <div className="w-16 text-right font-black text-slate-900 shrink-0">
+                            {formatVND(item.price * item.qty)}
+                          </div>
+
+                          <button
+                            onClick={() => handleRemoveItem(item.productId)}
+                            className="text-slate-300 hover:text-rose-500 p-0.5 shrink-0"
+                          >
+                            <Trash2 className="w-3.5 h-3.5" />
+                          </button>
+                        </div>
+
+                        {isBelowCost && (
+                          <div className="flex items-center gap-1 text-[10px] font-bold text-amber-800 bg-amber-100/80 px-2 py-0.5 rounded-md">
+                            <AlertTriangle className="w-3 h-3 text-amber-600 shrink-0" />
+                            <span>Đang bán dưới giá vốn ({formatVND(item.cost)}) - Đơn này sẽ giảm lãi hoặc lỗ món này!</span>
+                          </div>
+                        )}
+                      </div>
+                    );
+                  })
                 )}
               </div>
 

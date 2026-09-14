@@ -26,6 +26,7 @@ export interface OrderItem {
   name: string;
   unit: string;
   price: number;
+  originalPrice?: number;
   cost: number;
   qty: number;
   image: string;

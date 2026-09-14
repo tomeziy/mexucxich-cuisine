@@ -14,9 +14,14 @@ _Avoid_: Hàng, item, món, đồ ăn
 Giá thành tự sản xuất hoặc giá nhập từ nguồn tuyển chọn cho một đơn vị sản phẩm, dùng để tính toán lợi nhuận gộp.
 _Avoid_: Giá nhập, vốn
 
-**Giá bán (Selling Price)**:
-Mức giá niêm yết bán cho khách hàng trước khi áp dụng chiết khấu hoặc giảm giá.
-_Avoid_: Đơn giá, giá niêm yết
+**Giá bán niêm yết (List Selling Price)**:
+Mức giá chuẩn bán cho khách hàng được thiết lập cố định trong danh mục sản phẩm, làm mốc mặc định khi thêm vào giỏ hàng.
+_Avoid_: Giá catalog, giá cố định
+
+**Đơn giá bán theo đơn (Custom Order Price)**:
+Mức giá của từng món được điều chỉnh trực tiếp trong giỏ hàng của một đơn hàng cụ thể. Chỉ có hiệu lực trong đơn hàng đó, không làm thay đổi Giá bán niêm yết trong kho. Cho phép nhập giá tùy ý $\ge 0đ$ (hỗ trợ quà tặng 0đ), có cảnh báo nếu thấp hơn Giá vốn.
+_Avoid_: Giá sửa, giá phá giá, giá ưu đãi riêng
+
 
 **Tồn kho (Stock Level)**:
 Số lượng khả dụng của sản phẩm trong kho sẵn sàng để bán. Cảnh báo trực quan khi nhỏ hơn hoặc bằng 5 đơn vị.

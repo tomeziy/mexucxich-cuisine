@@ -36,7 +36,7 @@ export function exportOrdersToExcel(orders: Order[]): void {
     'Số Điện Thoại': o.customerPhone || '',
     'Hình Thức': o.orderType === 'direct' ? 'Tại chỗ' : 'Giao hàng',
     'Trạng Thái': o.status,
-    'Món Đã Mua': o.items.map(i => `${i.name} (x${i.qty})`).join(', '),
+    'Món Đã Mua': o.items.map(i => `${i.name} (x${i.qty} - ${i.price.toLocaleString('vi-VN')}đ)`).join(', '),
     'Tiền Hàng': o.subtotal,
     'Giảm Giá': o.discountAmount,
     'Phí Ship': o.shippingFee,
