@@ -57,13 +57,34 @@
     position: absolute;
     left: 0;
     top: 0;
+    width: 100% !important;
+    max-width: 100% !important;
     margin: 0 !important;
-    padding: 2mm 3mm !important;
+    padding: 0 !important;
     box-shadow: none !important;
     border: none !important;
-    page-break-after: avoid;
-    break-after: avoid;
-    page-break-inside: avoid;
-    break-inside: avoid;
+    background: #ffffff !important;
+  }
+
+  .receipt-copy {
+    width: 100% !important;
+    box-sizing: border-box !important;
+    padding: 2mm 3mm 0 3mm !important;
+    page-break-inside: avoid !important;
+    break-inside: avoid !important;
+  }
+
+  /* Trigger paper cut between copies on thermal POS printers */
+  .receipt-two-copies-wrapper .receipt-copy-1 {
+    page-break-after: always !important;
+    break-after: page !important;
+  }
+
+  /* Clearance feed so thermal knife doesn't slice through footer text */
+  .receipt-feed-clearance {
+    display: block !important;
+    height: 12mm !important;
+    min-height: 12mm !important;
   }
 }
+

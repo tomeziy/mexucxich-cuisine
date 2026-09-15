@@ -509,21 +509,24 @@ export const SettingsPage: React.FC = () => {
           {/* Paper Container */}
           <div className="w-full overflow-x-auto custom-scroll flex justify-center bg-slate-100 p-4 rounded-xl">
             <div
-              id="thermal-receipt-print"
-              className={`${paperWidthStyle} bg-white p-4 text-slate-900 font-sans ${
-                settings.fontSize === 'small'
-                  ? 'text-[11px] leading-tight'
-                  : settings.fontSize === 'large'
-                  ? 'text-[15px] leading-snug'
-                  : 'text-[13px] leading-snug'
-              } border-t-4 border-amber-500 rounded-xs shadow-sm`}
+              id="thermal-receipt-preview"
+              className={`${paperWidthStyle} bg-white p-4 text-slate-900 font-sans border-t-4 border-amber-500 rounded-xs shadow-sm`}
+              style={{
+                fontSize: `${
+                  settings.fontSize === 'small' ? 11.5 : settings.fontSize === 'large' ? 16 : 13.5
+                }px`,
+                lineHeight: 1.35,
+              }}
             >
               {(() => {
                 const renderPreviewContent = (copyLabel?: string) => (
-                  <div className="space-y-2 text-slate-900">
+                  <div className="space-y-2 text-slate-900 leading-snug">
                     {copyLabel && (
                       <div className="text-center pb-1 border-b border-dashed border-slate-300">
-                        <span className="inline-block px-2 py-0.5 rounded bg-slate-100 text-[11px] font-extrabold text-slate-700 tracking-wider uppercase">
+                        <span
+                          className="inline-block px-2.5 py-0.5 rounded bg-slate-100 font-extrabold text-slate-800 tracking-wider uppercase"
+                          style={{ fontSize: '0.85em' }}
+                        >
                           {copyLabel}
                         </span>
                       </div>
@@ -531,45 +534,45 @@ export const SettingsPage: React.FC = () => {
 
                     {/* Header */}
                     <div className="text-center pb-2 border-b border-dashed border-slate-300 space-y-0.5">
-                      {settings.showLogo && <div className="text-2xl mb-1">🌭</div>}
-                      <h2 className="font-black text-base uppercase tracking-wider text-slate-900">
+                      {settings.showLogo && <div className="mb-1 leading-none" style={{ fontSize: '1.6em' }}>🌭</div>}
+                      <h2 className="font-black uppercase tracking-wider text-slate-900 leading-tight" style={{ fontSize: '1.28em' }}>
                         {settings.storeName || 'MEXUCXICH CUISINE'}
                       </h2>
                       {settings.storeSubtitle && (
-                        <p className="text-xs text-slate-600 italic">{settings.storeSubtitle}</p>
+                        <p className="text-slate-600 italic leading-tight" style={{ fontSize: '0.88em' }}>{settings.storeSubtitle}</p>
                       )}
                       {settings.facebook && (
-                        <p className="text-xs text-slate-700 font-semibold">{settings.facebook}</p>
+                        <p className="text-slate-700 font-semibold leading-tight" style={{ fontSize: '0.92em' }}>{settings.facebook}</p>
                       )}
                       {!settings.facebook && settings.hotline && (
-                        <p className="text-xs text-slate-700 font-bold">Hotline: {settings.hotline}</p>
+                        <p className="text-slate-700 font-bold leading-tight" style={{ fontSize: '0.92em' }}>Hotline: {settings.hotline}</p>
                       )}
                       {settings.address && (
-                        <p className="text-[11px] text-slate-500">Đ/c: {settings.address}</p>
+                        <p className="text-slate-500 leading-tight" style={{ fontSize: '0.82em' }}>Đ/c: {settings.address}</p>
                       )}
                     </div>
 
                     {/* Order Info Sample */}
-                    <div className="text-center py-1 border-b border-dashed border-slate-300">
-                      <h3 className="font-black text-sm uppercase tracking-wide text-slate-900">
+                    <div className="text-center py-1 border-b border-dashed border-slate-300 space-y-0.5">
+                      <h3 className="font-black uppercase tracking-wide text-slate-900 leading-tight" style={{ fontSize: '1.22em' }}>
                         HÓA ĐƠN BÁN HÀNG
                       </h3>
-                      <p className="text-xs text-slate-700 mt-0.5">
-                        Số HĐ: <strong className="font-bold text-slate-900">#DH-SAMPLE</strong>
+                      <p className="text-slate-700 leading-tight" style={{ fontSize: '0.92em' }}>
+                        Số HĐ: <strong className="font-black text-slate-900">#DH-SAMPLE</strong>
                       </p>
-                      <p className="text-[11px] text-slate-500 italic">
+                      <p className="text-slate-500 italic leading-tight" style={{ fontSize: '0.85em' }}>
                         15/09/2026 15:30
                       </p>
                     </div>
 
                     {/* Customer Info Sample */}
                     {settings.showCustomer && (
-                      <div className="py-1.5 border-b border-dashed border-slate-300 text-xs space-y-1">
-                        <div className="flex justify-between">
+                      <div className="py-1.5 border-b border-dashed border-slate-300 space-y-1" style={{ fontSize: '0.92em' }}>
+                        <div className="flex justify-between items-baseline">
                           <span className="text-slate-600">Khách hàng:</span>
-                          <strong className="text-slate-900">Chị Lan (Zalo Đội Cấn)</strong>
+                          <strong className="text-slate-900 font-bold">Chị Lan (Zalo Đội Cấn)</strong>
                         </div>
-                        <div className="flex justify-between">
+                        <div className="flex justify-between items-baseline">
                           <span className="text-slate-600">SĐT:</span>
                           <span className="font-bold text-slate-800">0988123456</span>
                         </div>
@@ -577,7 +580,7 @@ export const SettingsPage: React.FC = () => {
                           <span className="text-slate-600 shrink-0">Địa chỉ:</span>
                           <span className="text-right text-slate-800">12 Đội Cấn, Ba Đình, Hà Nội</span>
                         </div>
-                        <div className="flex justify-between">
+                        <div className="flex justify-between items-baseline">
                           <span className="text-slate-600">Hình thức:</span>
                           <span className="font-bold text-blue-800">Giao hàng (Ship)</span>
                         </div>
@@ -586,39 +589,39 @@ export const SettingsPage: React.FC = () => {
 
                     {/* Items Table Sample (KiotViet 2-Line Layout) */}
                     <div className="py-2 border-b border-dashed border-slate-300">
-                      <div className="flex justify-between font-bold text-xs pb-1 border-b border-slate-300 text-slate-800">
+                      <div className="flex justify-between font-bold pb-1 border-b border-slate-300 text-slate-800 uppercase tracking-wider" style={{ fontSize: '0.88em' }}>
                         <span className="w-1/3 text-left">Đơn giá</span>
                         <span className="w-1/3 text-center">SL</span>
                         <span className="w-1/3 text-right">Thành tiền</span>
                       </div>
                       <div className="divide-y divide-dashed divide-slate-200">
                         <div className="py-1.5 space-y-0.5">
-                          <div className="font-bold text-slate-900 leading-snug">
+                          <div className="font-bold text-slate-900 leading-snug" style={{ fontSize: '1.02em' }}>
                             Xúc xích Heo Thảo Mộc Phô Mai Mozzarella
-                            <span className="font-normal text-slate-500 text-[11px] ml-1">(Gói 500g)</span>
+                            <span className="font-normal text-slate-500 ml-1" style={{ fontSize: '0.85em' }}>(Gói 500g)</span>
                           </div>
-                          <div className="flex justify-between items-center text-xs text-slate-700">
+                          <div className="flex justify-between items-center text-slate-700" style={{ fontSize: '0.95em' }}>
                             <span className="w-1/3 text-left font-semibold">145.000đ</span>
                             <span className="w-1/3 text-center font-bold">x1</span>
-                            <span className="w-1/3 text-right font-black text-slate-900">145.000đ</span>
+                            <span className="w-1/3 text-right font-black text-slate-900" style={{ fontSize: '1.05em' }}>145.000đ</span>
                           </div>
                         </div>
                         <div className="py-1.5 space-y-0.5">
-                          <div className="font-bold text-slate-900 leading-snug">
+                          <div className="font-bold text-slate-900 leading-snug" style={{ fontSize: '1.02em' }}>
                             Pate Gan Gà Nấm Truffle Thượng Hạng
-                            <span className="font-normal text-slate-500 text-[11px] ml-1">(Hũ 250g)</span>
+                            <span className="font-normal text-slate-500 ml-1" style={{ fontSize: '0.85em' }}>(Hũ 250g)</span>
                           </div>
-                          <div className="flex justify-between items-center text-xs text-slate-700">
+                          <div className="flex justify-between items-center text-slate-700" style={{ fontSize: '0.95em' }}>
                             <span className="w-1/3 text-left font-semibold">120.000đ</span>
                             <span className="w-1/3 text-center font-bold">x1</span>
-                            <span className="w-1/3 text-right font-black text-slate-900">120.000đ</span>
+                            <span className="w-1/3 text-right font-black text-slate-900" style={{ fontSize: '1.05em' }}>120.000đ</span>
                           </div>
                         </div>
                       </div>
                     </div>
 
                     {/* Totals */}
-                    <div className="py-2 border-b border-dashed border-slate-300 space-y-1 text-xs">
+                    <div className="py-2 border-b border-dashed border-slate-300 space-y-1" style={{ fontSize: '0.92em' }}>
                       <div className="flex justify-between text-slate-700">
                         <span>Tổng số lượng:</span>
                         <span className="font-bold text-slate-900">2</span>
@@ -631,26 +634,26 @@ export const SettingsPage: React.FC = () => {
                         <span>Phí vận chuyển:</span>
                         <span className="font-bold">+25.000đ</span>
                       </div>
-                      <div className="flex justify-between items-baseline pt-1.5 border-t border-slate-300 text-sm font-black text-slate-900">
-                        <span className="uppercase">TỔNG THANH TOÁN:</span>
-                        <span className="text-base font-black text-amber-700">290.000đ</span>
+                      <div className="flex justify-between items-baseline pt-1.5 border-t border-slate-300 font-black text-slate-900">
+                        <span className="uppercase" style={{ fontSize: '1.12em' }}>TỔNG THANH TOÁN:</span>
+                        <span className="font-black text-amber-700" style={{ fontSize: '1.28em' }}>290.000đ</span>
                       </div>
                     </div>
 
                     {/* Dynamic VietQR Preview */}
                     {settings.showVietQR && qrUrl && (
-                      <div className="py-2 text-center border-b border-dashed border-slate-300 space-y-1 text-xs">
-                        <p className="font-extrabold uppercase tracking-wide text-slate-900">
+                      <div className="py-2 text-center border-b border-dashed border-slate-300 space-y-1">
+                        <p className="font-extrabold uppercase tracking-wide text-slate-900" style={{ fontSize: '0.98em' }}>
                           THÔNG TIN CHUYỂN KHOẢN:
                         </p>
-                        <p className="font-bold text-slate-800">
+                        <p className="font-bold text-slate-800" style={{ fontSize: '0.92em' }}>
                           {settings.bankCode} - CTK: {settings.bankAccountName}
                         </p>
-                        <p className="font-black text-sm tracking-wider text-slate-900">
+                        <p className="font-black tracking-wider text-slate-900" style={{ fontSize: '1.25em' }}>
                           {settings.bankAccount}
                         </p>
                         {settings.bankNote && (
-                          <p className="text-[11px] text-slate-600 italic">
+                          <p className="text-slate-600 italic" style={{ fontSize: '0.85em' }}>
                             ({settings.bankNote})
                           </p>
                         )}
@@ -665,17 +668,17 @@ export const SettingsPage: React.FC = () => {
                               }}
                             />
                           </div>
-                          <p className="text-[10px] text-slate-500 mt-1">Quét mã VietQR chuyển khoản nhanh</p>
+                          <p className="text-slate-500 mt-1" style={{ fontSize: '0.8em' }}>Quét mã VietQR chuyển khoản nhanh</p>
                         </div>
                       </div>
                     )}
 
                     {/* Footer */}
-                    <div className="text-center pt-2 text-xs text-slate-600 space-y-0.5">
-                      <p className="font-bold text-slate-800">
+                    <div className="text-center pt-2 text-slate-600 space-y-0.5">
+                      <p className="font-bold text-slate-800" style={{ fontSize: '0.95em' }}>
                         {settings.footerMessage || 'Chúc quý khách có một bữa ăn hạnh phúc!'}
                       </p>
-                      <p className="text-[10px] text-slate-400 italic">
+                      <p className="text-slate-400 italic" style={{ fontSize: '0.8em' }}>
                         MexucxichCuisine - Ẩm thực thủ công & Đặc sản tuyển chọn
                       </p>
                     </div>
