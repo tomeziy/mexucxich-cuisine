@@ -71,17 +71,23 @@ export interface DebtPayment {
 }
 
 export type PaperSize = 'k80' | 'k57' | 'a5' | 'a4';
+export type PrintFontSize = 'small' | 'medium' | 'large';
+export type PrintCopies = 1 | 2;
 
 export interface ReceiptSettings {
   storeName: string;
   storeSubtitle: string;
   address: string;
   hotline: string;
+  facebook?: string;
   footerMessage: string;
   paperSize: PaperSize;
+  fontSize?: PrintFontSize;
+  printCopies?: PrintCopies;
   bankCode: string;
   bankAccount: string;
   bankAccountName: string;
+  bankNote?: string;
   showLogo: boolean;
   showStaff: boolean;
   showCustomer: boolean;

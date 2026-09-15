@@ -71,6 +71,18 @@ _Avoid_: Trả nợ, phiếu thu, giải ngân
 Bản in nhiệt hoặc khổ A4/A5 hiển thị chi tiết đơn hàng, thông tin tiệm và mã VietQR thanh toán.
 _Avoid_: Hóa đơn đỏ, phiếu thanh toán, bill
 
+**Số liên in (Print Copies)**:
+Số bản in ra cho một lần in hóa đơn: 1 liên (mặc định) hoặc 2 liên (kèm nhãn phân biệt Liên 1 - Lưu quầy/bếp và Liên 2 - Giao khách có đường xé đứt đoạn).
+_Avoid_: Bản sao, số bản in, copy count
+
+**Cỡ chữ in (Print Font Size)**:
+Mức kích thước phông chữ áp dụng khi xuất hóa đơn in (Nhỏ - 11px, Vừa chuẩn KiotViet - 13px, To rõ nét - 15px), đảm bảo chữ to, nét mực đậm rõ ràng trên máy in nhiệt K80.
+_Avoid_: Font size, cỡ chữ bill
+
+**Mẫu in KiotViet (KiotViet 2-Line Layout)**:
+Cấu trúc hiển thị danh sách món ăn trên hóa đơn gồm 2 dòng: dòng trên hiển thị trọn vẹn Tên món ăn (không bị cắt cụt), dòng dưới hiển thị 3 cột Đơn giá | Số lượng | Thành tiền, phân cách bằng nét đứt ngang.
+_Avoid_: Bảng 1 dòng, layout cũ
+
 **Phí vận chuyển (Shipping Fee)**:
 Khoản tiền thu hộ tài xế hoặc cước gửi hàng cho đơn giao hàng, được tách biệt khỏi doanh thu thuần của tiệm.
 _Avoid_: Tiền ship, cước xe

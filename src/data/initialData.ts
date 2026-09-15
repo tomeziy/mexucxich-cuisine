@@ -131,16 +131,20 @@ export const INITIAL_CUSTOMERS: Customer[] = [
 ];
 
 export const DEFAULT_RECEIPT_SETTINGS: ReceiptSettings = {
-  storeName: 'MexucxichCuisine',
-  storeSubtitle: 'Ẩm thực Thủ công & Đặc sản Tuyển chọn',
-  address: '02 Ngõ Trạm, Hoàn Kiếm, Hà Nội',
-  hotline: '0859 136 899',
-  footerMessage: 'Cảm ơn quý khách & Chúc quý khách ngon miệng!',
+  storeName: 'MEXUCXICH CUISINE',
+  storeSubtitle: 'Đồ ăn homemade và đặc sản vùng miền',
+  address: '',
+  hotline: '0904047976',
+  facebook: 'Hoàng Minh Hằng - 0904047976',
+  footerMessage: 'Chúc quý khách có một bữa ăn hạnh phúc!',
   paperSize: 'k80',
-  bankCode: 'MB', // MB Bank
-  bankAccount: '0859136899',
-  bankAccountName: 'NGUYEN NGOC TUNG',
-  showLogo: true,
+  fontSize: 'medium',
+  printCopies: 1,
+  bankCode: 'TCB', // Techcombank
+  bankAccount: '10520110621010',
+  bankAccountName: 'BÙI THỊ TUYẾT MAI',
+  bankNote: 'Nội dung: ghi rõ tên / Facebook / Sđt và gửi bill cho chủ shop ạ',
+  showLogo: false,
   showStaff: false,
   showCustomer: true,
   showVietQR: true,

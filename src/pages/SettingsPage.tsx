@@ -1,6 +1,6 @@
 import React, { useState } from 'react';
 import { useStore } from '../context/StoreContext';
-import { PaperSize, ReceiptSettings } from '../types';
+import { PaperSize, ReceiptSettings, PrintFontSize, PrintCopies } from '../types';
 import { formatVND } from '../utils/format';
 import {
   Settings,
@@ -184,68 +184,145 @@ export const SettingsPage: React.FC = () => {
 
             <div className="grid grid-cols-1 sm:grid-cols-2 gap-3 text-xs">
               <div>
-                <label className="font-bold text-slate-700 block mb-1">Địa chỉ cửa hàng</label>
-                <input
-                  type="text"
-                  value={settings.address}
-                  onChange={e => setSettings({ ...settings, address: e.target.value })}
-                  placeholder="02 Ngô Trạm, Hoàn Kiếm, Hà Nội"
-                  className="w-full bg-slate-50 border border-slate-200 rounded-xl px-3 py-2 text-slate-700 focus:outline-none"
-                />
-              </div>
-
-              <div>
                 <label className="font-bold text-slate-700 block mb-1">Số hotline / Zalo</label>
                 <input
                   type="text"
                   value={settings.hotline}
                   onChange={e => setSettings({ ...settings, hotline: e.target.value })}
-                  placeholder="0859 136 899"
+                  placeholder="0904047976"
                   className="w-full bg-slate-50 border border-slate-200 rounded-xl px-3 py-2 font-bold text-slate-900 focus:outline-none"
+                />
+              </div>
+
+              <div>
+                <label className="font-bold text-slate-700 block mb-1">Facebook / Thông tin liên hệ in trên bill</label>
+                <input
+                  type="text"
+                  value={settings.facebook || ''}
+                  onChange={e => setSettings({ ...settings, facebook: e.target.value })}
+                  placeholder="Hoàng Minh Hằng - 0904047976"
+                  className="w-full bg-slate-50 border border-slate-200 rounded-xl px-3 py-2 text-slate-700 focus:outline-none"
                 />
               </div>
             </div>
 
-            <div className="text-xs">
-              <label className="font-bold text-slate-700 block mb-1">Lời cảm ơn chân trang (Footer)</label>
-              <input
-                type="text"
-                value={settings.footerMessage}
-                onChange={e => setSettings({ ...settings, footerMessage: e.target.value })}
-                placeholder="Cảm ơn quý khách & Chúc quý khách ngon miệng!"
-                className="w-full bg-slate-50 border border-slate-200 rounded-xl px-3 py-2 text-slate-700 focus:outline-none"
-              />
+            <div className="grid grid-cols-1 sm:grid-cols-2 gap-3 text-xs">
+              <div>
+                <label className="font-bold text-slate-700 block mb-1">Địa chỉ cửa hàng (nếu có)</label>
+                <input
+                  type="text"
+                  value={settings.address}
+                  onChange={e => setSettings({ ...settings, address: e.target.value })}
+                  placeholder="Để trống nếu chỉ bán online"
+                  className="w-full bg-slate-50 border border-slate-200 rounded-xl px-3 py-2 text-slate-700 focus:outline-none"
+                />
+              </div>
+
+              <div>
+                <label className="font-bold text-slate-700 block mb-1">Lời cảm ơn chân trang (Footer)</label>
+                <input
+                  type="text"
+                  value={settings.footerMessage}
+                  onChange={e => setSettings({ ...settings, footerMessage: e.target.value })}
+                  placeholder="Chúc quý khách có một bữa ăn hạnh phúc!"
+                  className="w-full bg-slate-50 border border-slate-200 rounded-xl px-3 py-2 text-slate-700 focus:outline-none"
+                />
+              </div>
             </div>
           </div>
 
-          {/* Paper Size Card */}
-          <div className="bg-white p-4 rounded-2xl border border-slate-200 shadow-xs space-y-3">
+          {/* Paper Size & Print Configuration Card */}
+          <div className="bg-white p-4 rounded-2xl border border-slate-200 shadow-xs space-y-4">
             <h3 className="font-extrabold text-xs uppercase tracking-wider text-slate-400 flex items-center gap-1.5">
               <Printer className="w-3.5 h-3.5 text-amber-500" />
-              <span>Khổ giấy in hóa đơn</span>
+              <span>Cấu hình In ấn (Khổ giấy, Số liên & Cỡ chữ)</span>
             </h3>
 
-            <div className="grid grid-cols-2 sm:grid-cols-4 gap-2 text-xs">
-              {[
-                { id: 'k80', name: 'K80 (80mm)', desc: 'Máy in nhiệt quầy hàng phổ biến' },
-                { id: 'k57', name: 'K57 (57mm)', desc: 'Máy in hóa đơn cầm tay mini' },
-                { id: 'a5', name: 'A5 (148mm)', desc: 'Khổ in phiếu bán sỉ nhỏ' },
-                { id: 'a4', name: 'A4 (210mm)', desc: 'Khổ giấy in văn phòng tiêu chuẩn' },
-              ].map(paper => (
-                <button
-                  key={paper.id}
-                  type="button"
-                  onClick={() => setSettings({ ...settings, paperSize: paper.id as PaperSize })}
-                  className={`p-3 rounded-xl border text-left transition flex flex-col justify-between ${
-                    settings.paperSize === paper.id
-                      ? 'border-amber-500 bg-amber-50/50 text-amber-900 shadow-xs'
-                      : 'border-slate-200 hover:bg-slate-50 text-slate-700'
-                  }`}
-                >
-                  <strong className="block text-xs">{paper.name}</strong>
-                  <span className="text-[10px] text-slate-400 mt-1 block">{paper.desc}</span>
-                </button>
-              ))}
+            {/* Paper Size Selection */}
+            <div>
+              <label className="font-bold text-slate-700 text-xs block mb-1.5">Khổ giấy in:</label>
+              <div className="grid grid-cols-2 sm:grid-cols-4 gap-2 text-xs">
+                {[
+                  { id: 'k80', name: 'K80 (80mm)', desc: 'Máy in nhiệt quầy chuẩn KiotViet' },
+                  { id: 'k57', name: 'K57 (57mm)', desc: 'Máy in hóa đơn cầm tay mini' },
+                  { id: 'a5', name: 'A5 (148mm)', desc: 'Khổ in phiếu bán sỉ nhỏ' },
+                  { id: 'a4', name: 'A4 (210mm)', desc: 'Khổ giấy in văn phòng tiêu chuẩn' },
+                ].map(paper => (
+                  <button
+                    key={paper.id}
+                    type="button"
+                    onClick={() => setSettings({ ...settings, paperSize: paper.id as PaperSize })}
+                    className={`p-2.5 rounded-xl border text-left transition flex flex-col justify-between ${
+                      settings.paperSize === paper.id
+                        ? 'border-amber-500 bg-amber-50/50 text-amber-900 shadow-xs'
+                        : 'border-slate-200 hover:bg-slate-50 text-slate-700'
+                    }`}
+                  >
+                    <strong className="block text-xs">{paper.name}</strong>
+                    <span className="text-[10px] text-slate-400 mt-0.5 block">{paper.desc}</span>
+                  </button>
+                ))}
+              </div>
+            </div>
+
+            {/* Number of Copies & Font Size */}
+            <div className="grid grid-cols-1 sm:grid-cols-2 gap-3 pt-2 border-t border-slate-100 text-xs">
+              {/* Copies Selection */}
+              <div>
+                <label className="font-bold text-slate-700 block mb-1.5">Số liên in:</label>
+                <div className="grid grid-cols-2 gap-2">
+                  <button
+                    type="button"
+                    onClick={() => setSettings({ ...settings, printCopies: 1 })}
+                    className={`p-2.5 rounded-xl border text-center font-bold transition ${
+                      (settings.printCopies || 1) === 1
+                        ? 'border-amber-500 bg-amber-50 text-amber-900 shadow-xs'
+                        : 'border-slate-200 hover:bg-slate-50 text-slate-700'
+                    }`}
+                  >
+                    <div className="text-xs">1 liên (Mặc định)</div>
+                    <span className="text-[10px] text-slate-400 font-normal block mt-0.5">Tiết kiệm giấy</span>
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => setSettings({ ...settings, printCopies: 2 })}
+                    className={`p-2.5 rounded-xl border text-center font-bold transition ${
+                      settings.printCopies === 2
+                        ? 'border-amber-500 bg-amber-50 text-amber-900 shadow-xs'
+                        : 'border-slate-200 hover:bg-slate-50 text-slate-700'
+                    }`}
+                  >
+                    <div className="text-xs">2 liên</div>
+                    <span className="text-[10px] text-slate-400 font-normal block mt-0.5">Lưu quầy & Giao khách</span>
+                  </button>
+                </div>
+              </div>
+
+              {/* Font Size Selection */}
+              <div>
+                <label className="font-bold text-slate-700 block mb-1.5">Cỡ chữ hóa đơn in:</label>
+                <div className="grid grid-cols-3 gap-1.5">
+                  {[
+                    { id: 'small', name: 'Nhỏ', desc: '11px' },
+                    { id: 'medium', name: 'Vừa', desc: '13px (KiotViet)' },
+                    { id: 'large', name: 'To', desc: '15px (Rõ nét)' },
+                  ].map(f => (
+                    <button
+                      key={f.id}
+                      type="button"
+                      onClick={() => setSettings({ ...settings, fontSize: f.id as PrintFontSize })}
+                      className={`p-2 rounded-xl border text-center font-bold transition ${
+                        (settings.fontSize || 'medium') === f.id
+                          ? 'border-amber-500 bg-amber-50 text-amber-900 shadow-xs'
+                          : 'border-slate-200 hover:bg-slate-50 text-slate-700'
+                      }`}
+                    >
+                      <div className="text-xs">{f.name}</div>
+                      <span className="text-[9px] text-slate-400 font-normal block mt-0.5">{f.desc}</span>
+                    </button>
+                  ))}
+                </div>
+              </div>
             </div>
           </div>
 
@@ -290,10 +367,21 @@ export const SettingsPage: React.FC = () => {
                     type="text"
                     value={settings.bankAccountName}
                     onChange={e => setSettings({ ...settings, bankAccountName: e.target.value.toUpperCase() })}
-                    placeholder="NGUYEN NGOC TUNG"
+                    placeholder="BUI THI TUYET MAI"
                     className="w-full bg-slate-50 border border-slate-200 rounded-xl px-3 py-2 uppercase font-bold text-slate-900 focus:outline-none"
                   />
                 </div>
+              </div>
+
+              <div>
+                <label className="font-bold text-slate-700 block mb-1">Ghi chú chuyển khoản (in dưới STK)</label>
+                <input
+                  type="text"
+                  value={settings.bankNote || ''}
+                  onChange={e => setSettings({ ...settings, bankNote: e.target.value })}
+                  placeholder="Nội dung: ghi rõ tên / Facebook / Sđt và gửi bill cho chủ shop ạ"
+                  className="w-full bg-slate-50 border border-slate-200 rounded-xl px-3 py-2 text-slate-700 focus:outline-none"
+                />
               </div>
             </div>
           </div>
@@ -422,113 +510,192 @@ export const SettingsPage: React.FC = () => {
           <div className="w-full overflow-x-auto custom-scroll flex justify-center bg-slate-100 p-4 rounded-xl">
             <div
               id="thermal-receipt-print"
-              className={`${paperWidthStyle} bg-white p-4 shadow-sm text-slate-900 font-mono text-[11px] leading-relaxed border-t-4 border-amber-500`}
+              className={`${paperWidthStyle} bg-white p-4 text-slate-900 font-sans ${
+                settings.fontSize === 'small'
+                  ? 'text-[11px] leading-tight'
+                  : settings.fontSize === 'large'
+                  ? 'text-[15px] leading-snug'
+                  : 'text-[13px] leading-snug'
+              } border-t-4 border-amber-500 rounded-xs shadow-sm`}
             >
-              {/* Header */}
-              <div className="text-center pb-2.5 border-b border-dashed border-slate-300">
-                {settings.showLogo && <div className="text-2xl mb-1">🌭</div>}
-                <h2 className="font-extrabold text-sm uppercase tracking-wider text-slate-900">
-                  {settings.storeName || 'MexucxichCuisine'}
-                </h2>
-                {settings.storeSubtitle && (
-                  <p className="text-[10px] text-slate-500">{settings.storeSubtitle}</p>
-                )}
-                {settings.address && (
-                  <p className="text-[10px] text-slate-600 mt-0.5">Đ/c: {settings.address}</p>
-                )}
-                {settings.hotline && (
-                  <p className="text-[10px] text-slate-600 font-bold">Hotline: {settings.hotline}</p>
-                )}
-              </div>
+              {(() => {
+                const renderPreviewContent = (copyLabel?: string) => (
+                  <div className="space-y-2 text-slate-900">
+                    {copyLabel && (
+                      <div className="text-center pb-1 border-b border-dashed border-slate-300">
+                        <span className="inline-block px-2 py-0.5 rounded bg-slate-100 text-[11px] font-extrabold text-slate-700 tracking-wider uppercase">
+                          {copyLabel}
+                        </span>
+                      </div>
+                    )}
 
-              {/* Order Info Sample */}
-              <div className="py-2 border-b border-dashed border-slate-300 text-[10px] space-y-0.5">
-                <div className="flex justify-between">
-                  <span>Số HĐ:</span>
-                  <strong className="text-slate-900">#HD-SAMPLE</strong>
-                </div>
-                <div className="flex justify-between">
-                  <span>Ngày in:</span>
-                  <span>11/09/2026 15:30</span>
-                </div>
-                {settings.showCustomer && (
-                  <div className="flex justify-between">
-                    <span>Khách hàng:</span>
-                    <strong className="text-slate-900">Chị Lan (0988123456)</strong>
-                  </div>
-                )}
-                {settings.showStaff && (
-                  <div className="flex justify-between">
-                    <span>Thu ngân:</span>
-                    <span>Admin</span>
-                  </div>
-                )}
-              </div>
+                    {/* Header */}
+                    <div className="text-center pb-2 border-b border-dashed border-slate-300 space-y-0.5">
+                      {settings.showLogo && <div className="text-2xl mb-1">🌭</div>}
+                      <h2 className="font-black text-base uppercase tracking-wider text-slate-900">
+                        {settings.storeName || 'MEXUCXICH CUISINE'}
+                      </h2>
+                      {settings.storeSubtitle && (
+                        <p className="text-xs text-slate-600 italic">{settings.storeSubtitle}</p>
+                      )}
+                      {settings.facebook && (
+                        <p className="text-xs text-slate-700 font-semibold">{settings.facebook}</p>
+                      )}
+                      {!settings.facebook && settings.hotline && (
+                        <p className="text-xs text-slate-700 font-bold">Hotline: {settings.hotline}</p>
+                      )}
+                      {settings.address && (
+                        <p className="text-[11px] text-slate-500">Đ/c: {settings.address}</p>
+                      )}
+                    </div>
 
-              {/* Items Table Sample */}
-              <div className="py-2.5 border-b border-dashed border-slate-300">
-                <div className="flex justify-between font-bold text-[10px] pb-1 mb-1 border-b border-slate-100 text-slate-600">
-                  <span className="w-1/2">Tên món</span>
-                  <span className="w-1/6 text-center">SL</span>
-                  <span className="w-1/3 text-right">T.Tiền</span>
-                </div>
-                <div className="space-y-1 text-[10px]">
-                  <div className="flex justify-between items-baseline py-0.5">
-                    <span className="w-1/2 truncate font-medium">Xúc xích Phô mai Tươi</span>
-                    <span className="w-1/6 text-center font-bold">x1</span>
-                    <span className="w-1/3 text-right font-bold text-slate-900">145.000đ</span>
-                  </div>
-                  <div className="flex justify-between items-baseline py-0.5">
-                    <span className="w-1/2 truncate font-medium">Pate Gan Gà Truffle</span>
-                    <span className="w-1/6 text-center font-bold">x1</span>
-                    <span className="w-1/3 text-right font-bold text-slate-900">120.000đ</span>
-                  </div>
-                </div>
-              </div>
+                    {/* Order Info Sample */}
+                    <div className="text-center py-1 border-b border-dashed border-slate-300">
+                      <h3 className="font-black text-sm uppercase tracking-wide text-slate-900">
+                        HÓA ĐƠN BÁN HÀNG
+                      </h3>
+                      <p className="text-xs text-slate-700 mt-0.5">
+                        Số HĐ: <strong className="font-bold text-slate-900">#DH-SAMPLE</strong>
+                      </p>
+                      <p className="text-[11px] text-slate-500 italic">
+                        15/09/2026 15:30
+                      </p>
+                    </div>
 
-              {/* Totals */}
-              <div className="py-2 border-b border-dashed border-slate-300 space-y-1 text-[10px]">
-                <div className="flex justify-between text-slate-600">
-                  <span>Tổng tiền hàng:</span>
-                  <span className="font-bold text-slate-900">265.000đ</span>
-                </div>
-                <div className="flex justify-between items-baseline pt-1.5 border-t border-slate-200 text-xs font-extrabold text-slate-900">
-                  <span>KHÁCH PHẢI TRẢ:</span>
-                  <span className="text-amber-800 text-sm font-black">265.000đ</span>
-                </div>
-              </div>
+                    {/* Customer Info Sample */}
+                    {settings.showCustomer && (
+                      <div className="py-1.5 border-b border-dashed border-slate-300 text-xs space-y-1">
+                        <div className="flex justify-between">
+                          <span className="text-slate-600">Khách hàng:</span>
+                          <strong className="text-slate-900">Chị Lan (Zalo Đội Cấn)</strong>
+                        </div>
+                        <div className="flex justify-between">
+                          <span className="text-slate-600">SĐT:</span>
+                          <span className="font-bold text-slate-800">0988123456</span>
+                        </div>
+                        <div className="flex justify-between items-start gap-2">
+                          <span className="text-slate-600 shrink-0">Địa chỉ:</span>
+                          <span className="text-right text-slate-800">12 Đội Cấn, Ba Đình, Hà Nội</span>
+                        </div>
+                        <div className="flex justify-between">
+                          <span className="text-slate-600">Hình thức:</span>
+                          <span className="font-bold text-blue-800">Giao hàng (Ship)</span>
+                        </div>
+                      </div>
+                    )}
 
-              {/* Dynamic VietQR Preview */}
-              {settings.showVietQR && qrUrl && (
-                <div className="py-2.5 text-center border-b border-dashed border-slate-300">
-                  <div className="flex items-center justify-center gap-1 text-[9px] font-bold text-slate-700 mb-1">
-                    <QrCode className="w-3 h-3 text-amber-600" />
-                    <span>Quét mã VietQR chuyển khoản:</span>
-                  </div>
-                  <div className="w-28 h-28 mx-auto bg-white border border-slate-300 rounded p-1 flex flex-col items-center justify-center shadow-2xs">
-                    <img
-                      src={qrUrl}
-                      alt="VietQR Napas"
-                      className="w-24 h-24 object-contain"
-                      onError={(e) => {
-                        (e.target as HTMLElement).style.display = 'none';
-                      }}
-                    />
-                  </div>
-                  <p className="text-[9px] font-bold text-slate-800 mt-1">
-                    {settings.bankCode} • STK: {settings.bankAccount}
-                  </p>
-                  {settings.bankAccountName && (
-                    <p className="text-[8px] text-slate-500 uppercase">{settings.bankAccountName}</p>
-                  )}
-                </div>
-              )}
+                    {/* Items Table Sample (KiotViet 2-Line Layout) */}
+                    <div className="py-2 border-b border-dashed border-slate-300">
+                      <div className="flex justify-between font-bold text-xs pb-1 border-b border-slate-300 text-slate-800">
+                        <span className="w-1/3 text-left">Đơn giá</span>
+                        <span className="w-1/3 text-center">SL</span>
+                        <span className="w-1/3 text-right">Thành tiền</span>
+                      </div>
+                      <div className="divide-y divide-dashed divide-slate-200">
+                        <div className="py-1.5 space-y-0.5">
+                          <div className="font-bold text-slate-900 leading-snug">
+                            Xúc xích Heo Thảo Mộc Phô Mai Mozzarella
+                            <span className="font-normal text-slate-500 text-[11px] ml-1">(Gói 500g)</span>
+                          </div>
+                          <div className="flex justify-between items-center text-xs text-slate-700">
+                            <span className="w-1/3 text-left font-semibold">145.000đ</span>
+                            <span className="w-1/3 text-center font-bold">x1</span>
+                            <span className="w-1/3 text-right font-black text-slate-900">145.000đ</span>
+                          </div>
+                        </div>
+                        <div className="py-1.5 space-y-0.5">
+                          <div className="font-bold text-slate-900 leading-snug">
+                            Pate Gan Gà Nấm Truffle Thượng Hạng
+                            <span className="font-normal text-slate-500 text-[11px] ml-1">(Hũ 250g)</span>
+                          </div>
+                          <div className="flex justify-between items-center text-xs text-slate-700">
+                            <span className="w-1/3 text-left font-semibold">120.000đ</span>
+                            <span className="w-1/3 text-center font-bold">x1</span>
+                            <span className="w-1/3 text-right font-black text-slate-900">120.000đ</span>
+                          </div>
+                        </div>
+                      </div>
+                    </div>
 
-              {/* Footer */}
-              <div className="text-center pt-3 text-[10px] text-slate-500 space-y-0.5">
-                <p className="font-medium">{settings.footerMessage || 'Cảm ơn quý khách & Hẹn gặp lại!'}</p>
-                <p className="text-[8px] text-slate-400 italic">MexucxichCuisine - Ngon từ tâm</p>
-              </div>
+                    {/* Totals */}
+                    <div className="py-2 border-b border-dashed border-slate-300 space-y-1 text-xs">
+                      <div className="flex justify-between text-slate-700">
+                        <span>Tổng số lượng:</span>
+                        <span className="font-bold text-slate-900">2</span>
+                      </div>
+                      <div className="flex justify-between text-slate-700">
+                        <span>Tổng tiền hàng:</span>
+                        <span className="font-bold text-slate-900">265.000đ</span>
+                      </div>
+                      <div className="flex justify-between text-slate-700">
+                        <span>Phí vận chuyển:</span>
+                        <span className="font-bold">+25.000đ</span>
+                      </div>
+                      <div className="flex justify-between items-baseline pt-1.5 border-t border-slate-300 text-sm font-black text-slate-900">
+                        <span className="uppercase">TỔNG THANH TOÁN:</span>
+                        <span className="text-base font-black text-amber-700">290.000đ</span>
+                      </div>
+                    </div>
+
+                    {/* Dynamic VietQR Preview */}
+                    {settings.showVietQR && qrUrl && (
+                      <div className="py-2 text-center border-b border-dashed border-slate-300 space-y-1 text-xs">
+                        <p className="font-extrabold uppercase tracking-wide text-slate-900">
+                          THÔNG TIN CHUYỂN KHOẢN:
+                        </p>
+                        <p className="font-bold text-slate-800">
+                          {settings.bankCode} - CTK: {settings.bankAccountName}
+                        </p>
+                        <p className="font-black text-sm tracking-wider text-slate-900">
+                          {settings.bankAccount}
+                        </p>
+                        {settings.bankNote && (
+                          <p className="text-[11px] text-slate-600 italic">
+                            ({settings.bankNote})
+                          </p>
+                        )}
+                        <div className="pt-2 flex flex-col items-center justify-center">
+                          <div className="w-28 h-28 bg-white border border-slate-300 rounded p-1 flex items-center justify-center shadow-2xs">
+                            <img
+                              src={qrUrl}
+                              alt="VietQR Napas"
+                              className="w-24 h-24 object-contain"
+                              onError={(e) => {
+                                (e.target as HTMLElement).style.display = 'none';
+                              }}
+                            />
+                          </div>
+                          <p className="text-[10px] text-slate-500 mt-1">Quét mã VietQR chuyển khoản nhanh</p>
+                        </div>
+                      </div>
+                    )}
+
+                    {/* Footer */}
+                    <div className="text-center pt-2 text-xs text-slate-600 space-y-0.5">
+                      <p className="font-bold text-slate-800">
+                        {settings.footerMessage || 'Chúc quý khách có một bữa ăn hạnh phúc!'}
+                      </p>
+                      <p className="text-[10px] text-slate-400 italic">
+                        MexucxichCuisine - Ẩm thực thủ công & Đặc sản tuyển chọn
+                      </p>
+                    </div>
+                  </div>
+                );
+
+                if (settings.printCopies === 2) {
+                  return (
+                    <>
+                      {renderPreviewContent('LIÊN 1: LƯU BẾP / QUẦY')}
+                      <div className="my-5 py-2 border-b-2 border-dashed border-slate-400 text-center text-[10px] font-bold text-slate-400 uppercase tracking-widest">
+                        ✂ - - - - - - - CẮT TẠI ĐÂY - - - - - - - ✂
+                      </div>
+                      {renderPreviewContent('LIÊN 2: GIAO KHÁCH')}
+                    </>
+                  );
+                }
+
+                return renderPreviewContent();
+              })()}
             </div>
           </div>
         </div>

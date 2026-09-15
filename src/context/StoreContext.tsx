@@ -62,7 +62,13 @@ export const StoreProvider: React.FC<{ children: React.ReactNode }> = ({ childre
   // Receipt settings state
   const [receiptSettings, setReceiptSettings] = useState<ReceiptSettings>(() => {
     const saved = localStorage.getItem(STORAGE_KEYS.SETTINGS);
-    return saved ? JSON.parse(saved) : DEFAULT_RECEIPT_SETTINGS;
+    if (!saved) return DEFAULT_RECEIPT_SETTINGS;
+    try {
+      const parsed = JSON.parse(saved);
+      return { ...DEFAULT_RECEIPT_SETTINGS, ...parsed };
+    } catch {
+      return DEFAULT_RECEIPT_SETTINGS;
+    }
   });
 
   // Sync to localStorage
