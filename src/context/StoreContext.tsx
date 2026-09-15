@@ -65,6 +65,21 @@ export const StoreProvider: React.FC<{ children: React.ReactNode }> = ({ childre
     if (!saved) return DEFAULT_RECEIPT_SETTINGS;
     try {
       const parsed = JSON.parse(saved);
+      // Auto-migrate legacy placeholder data to Hang's actual shop info
+      if (parsed.bankAccount === '0859136899' || parsed.bankCode === 'MB' || !parsed.bankNote) {
+        return {
+          ...DEFAULT_RECEIPT_SETTINGS,
+          ...parsed,
+          bankCode: 'TCB',
+          bankAccount: '10520110621010',
+          bankAccountName: 'BÙI THỊ TUYẾT MAI',
+          storeName: 'MEXUCXICH CUISINE',
+          storeSubtitle: 'Đồ ăn homemade và đặc sản vùng miền',
+          facebook: 'Hoàng Minh Hằng - 0904047976',
+          bankNote: 'Nội dung: ghi rõ tên / Facebook / Sđt và gửi bill cho chủ shop ạ',
+          footerMessage: 'Chúc quý khách có một bữa ăn hạnh phúc!',
+        };
+      }
       return { ...DEFAULT_RECEIPT_SETTINGS, ...parsed };
     } catch {
       return DEFAULT_RECEIPT_SETTINGS;

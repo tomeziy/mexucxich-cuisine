@@ -1,5 +1,6 @@
 import React from 'react';
-import { Order, ReceiptSettings } from '../../types';
+import { Order, ReceiptSettings, PrintFontSize } from '../../types';
+import { useStore } from '../../context/StoreContext';
 import { formatVND, formatDate } from '../../utils/format';
 import { Printer, X, QrCode } from 'lucide-react';
 
@@ -16,6 +17,8 @@ export const ReceiptModal: React.FC<ReceiptModalProps> = ({
   isOpen,
   onClose,
 }) => {
+  const { updateReceiptSettings } = useStore();
+
   if (!isOpen || !order) return null;
 
   const handlePrint = () => {
@@ -285,6 +288,63 @@ export const ReceiptModal: React.FC<ReceiptModalProps> = ({
           >
             <X className="w-4 h-4" />
           </button>
+        </div>
+
+        {/* Quick Toolbar: Chỉnh trực tiếp Cỡ chữ & Số liên ngay trên popup */}
+        <div className="bg-amber-50 px-3.5 py-2.5 border-b border-amber-200 flex flex-wrap items-center justify-between gap-2.5 text-xs">
+          {/* Cỡ chữ in */}
+          <div className="flex items-center gap-1.5">
+            <span className="font-bold text-slate-700 text-xs">Cỡ chữ:</span>
+            <div className="inline-flex bg-white p-0.5 rounded-lg border border-amber-200 font-bold text-xs shadow-2xs">
+              {[
+                { id: 'small', label: 'Nhỏ (11px)' },
+                { id: 'medium', label: 'Vừa (13px)' },
+                { id: 'large', label: 'To (15px)' },
+              ].map(f => (
+                <button
+                  key={f.id}
+                  type="button"
+                  onClick={() => updateReceiptSettings({ fontSize: f.id as PrintFontSize })}
+                  className={`px-2.5 py-1 rounded-md transition ${
+                    (settings.fontSize || 'medium') === f.id
+                      ? 'bg-amber-500 text-white shadow-xs'
+                      : 'text-slate-600 hover:text-slate-900 hover:bg-slate-50'
+                  }`}
+                >
+                  {f.label}
+                </button>
+              ))}
+            </div>
+          </div>
+
+          {/* Số liên in */}
+          <div className="flex items-center gap-1.5">
+            <span className="font-bold text-slate-700 text-xs">Số liên:</span>
+            <div className="inline-flex bg-white p-0.5 rounded-lg border border-amber-200 font-bold text-xs shadow-2xs">
+              <button
+                type="button"
+                onClick={() => updateReceiptSettings({ printCopies: 1 })}
+                className={`px-2.5 py-1 rounded-md transition ${
+                  (settings.printCopies || 1) === 1
+                    ? 'bg-amber-500 text-white shadow-xs'
+                    : 'text-slate-600 hover:text-slate-900 hover:bg-slate-50'
+                }`}
+              >
+                1 liên
+              </button>
+              <button
+                type="button"
+                onClick={() => updateReceiptSettings({ printCopies: 2 })}
+                className={`px-2.5 py-1 rounded-md transition ${
+                  settings.printCopies === 2
+                    ? 'bg-amber-500 text-white shadow-xs'
+                    : 'text-slate-600 hover:text-slate-900 hover:bg-slate-50'
+                }`}
+              >
+                2 liên
+              </button>
+            </div>
+          </div>
         </div>
 
         {/* Receipt Paper Container */}
