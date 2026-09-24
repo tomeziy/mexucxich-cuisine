@@ -29,62 +29,72 @@
   background-color: #94a3b8;
 }
 
+/* Screen: print-root is hidden */
+#print-root {
+  display: none;
+}
+
 /* Thermal Print Styles */
 @media print {
   @page {
+    size: 80mm auto;
     margin: 0;
-    size: auto;
   }
 
   html, body {
     margin: 0 !important;
     padding: 0 !important;
     background: #ffffff !important;
+    width: 80mm !important;
+    max-width: 80mm !important;
     height: auto !important;
     min-height: 0 !important;
+    overflow: visible !important;
   }
 
-  body * {
-    visibility: hidden;
+  /* 1. COMPLETELY REMOVE THE WEB APPLICATION FROM PRINT FLOW TO ELIMINATE GHOST PAGES */
+  #root {
+    display: none !important;
   }
 
-  #thermal-receipt-print,
-  #thermal-receipt-print * {
-    visibility: visible;
-  }
-
-  #thermal-receipt-print {
-    position: absolute;
-    left: 0;
-    top: 0;
-    width: 100% !important;
-    max-width: 100% !important;
+  /* 2. ONLY PRINT-ROOT IS VISIBLE AND MEASURED */
+  #print-root {
+    display: block !important;
+    position: static !important;
+    width: 80mm !important;
+    max-width: 80mm !important;
     margin: 0 !important;
     padding: 0 !important;
-    box-shadow: none !important;
-    border: none !important;
     background: #ffffff !important;
+    height: auto !important;
   }
 
-  .receipt-copy {
-    width: 100% !important;
+  /* 3. STRICT 100% PURE SOLID BLACK ON THERMAL PAPER (NO DITHERING / NO GRAY) */
+  #print-root,
+  #print-root * {
+    color: #000000 !important;
+    border-color: #000000 !important;
+    text-shadow: none !important;
+    box-shadow: none !important;
+    -webkit-print-color-adjust: exact !important;
+    print-color-adjust: exact !important;
+  }
+
+  .thermal-print-copy {
+    width: 80mm !important;
+    max-width: 80mm !important;
     box-sizing: border-box !important;
-    padding: 2mm 3mm 0 3mm !important;
+    padding: 1mm 2mm 3mm 2mm !important;
     page-break-inside: avoid !important;
     break-inside: avoid !important;
+    height: auto !important;
   }
 
-  /* Trigger paper cut between copies on thermal POS printers */
-  .receipt-two-copies-wrapper .receipt-copy-1 {
+  /* When printing 2 copies, break after Copy 1 to trigger auto-cut */
+  .thermal-print-copy.has-next-copy {
     page-break-after: always !important;
     break-after: page !important;
   }
-
-  /* Clearance feed so thermal knife doesn't slice through footer text */
-  .receipt-feed-clearance {
-    display: block !important;
-    height: 12mm !important;
-    min-height: 12mm !important;
-  }
 }
+
 

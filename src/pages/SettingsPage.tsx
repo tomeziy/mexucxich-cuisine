@@ -520,11 +520,11 @@ export const SettingsPage: React.FC = () => {
             >
               {(() => {
                 const renderPreviewContent = (copyLabel?: string) => (
-                  <div className="space-y-2 text-slate-900 leading-snug">
+                  <div className="space-y-2 text-black leading-snug font-sans">
                     {copyLabel && (
-                      <div className="text-center pb-1 border-b border-dashed border-slate-300">
+                      <div className="text-center pb-1 border-b border-dashed border-black">
                         <span
-                          className="inline-block px-2.5 py-0.5 rounded bg-slate-100 font-extrabold text-slate-800 tracking-wider uppercase"
+                          className="inline-block px-2.5 py-0.5 rounded border border-black font-black text-black tracking-wider uppercase"
                           style={{ fontSize: '0.85em' }}
                         >
                           {copyLabel}
@@ -533,132 +533,132 @@ export const SettingsPage: React.FC = () => {
                     )}
 
                     {/* Header */}
-                    <div className="text-center pb-2 border-b border-dashed border-slate-300 space-y-0.5">
-                      {settings.showLogo && <div className="mb-1 leading-none" style={{ fontSize: '1.6em' }}>🌭</div>}
-                      <h2 className="font-black uppercase tracking-wider text-slate-900 leading-tight" style={{ fontSize: '1.28em' }}>
+                    <div className="text-center pb-2 border-b border-dashed border-black space-y-0.5">
+                      {settings.showLogo && <div className="mb-1 leading-none text-black" style={{ fontSize: '1.6em' }}>🌭</div>}
+                      <h2 className="font-black uppercase tracking-wider text-black leading-tight" style={{ fontSize: '1.28em' }}>
                         {settings.storeName || 'MEXUCXICH CUISINE'}
                       </h2>
                       {settings.storeSubtitle && (
-                        <p className="text-slate-600 italic leading-tight" style={{ fontSize: '0.88em' }}>{settings.storeSubtitle}</p>
+                        <p className="text-black font-semibold italic leading-tight" style={{ fontSize: '0.88em' }}>{settings.storeSubtitle}</p>
                       )}
                       {settings.facebook && (
-                        <p className="text-slate-700 font-semibold leading-tight" style={{ fontSize: '0.92em' }}>{settings.facebook}</p>
+                        <p className="text-black font-bold leading-tight" style={{ fontSize: '0.92em' }}>{settings.facebook}</p>
                       )}
                       {!settings.facebook && settings.hotline && (
-                        <p className="text-slate-700 font-bold leading-tight" style={{ fontSize: '0.92em' }}>Hotline: {settings.hotline}</p>
+                        <p className="text-black font-black leading-tight" style={{ fontSize: '0.92em' }}>Hotline: {settings.hotline}</p>
                       )}
                       {settings.address && (
-                        <p className="text-slate-500 leading-tight" style={{ fontSize: '0.82em' }}>Đ/c: {settings.address}</p>
+                        <p className="text-black font-medium leading-tight" style={{ fontSize: '0.85em' }}>Đ/c: {settings.address}</p>
                       )}
                     </div>
 
                     {/* Order Info Sample */}
-                    <div className="text-center py-1 border-b border-dashed border-slate-300 space-y-0.5">
-                      <h3 className="font-black uppercase tracking-wide text-slate-900 leading-tight" style={{ fontSize: '1.22em' }}>
+                    <div className="text-center py-1 border-b border-dashed border-black space-y-0.5">
+                      <h3 className="font-black uppercase tracking-wide text-black leading-tight" style={{ fontSize: '1.22em' }}>
                         HÓA ĐƠN BÁN HÀNG
                       </h3>
-                      <p className="text-slate-700 leading-tight" style={{ fontSize: '0.92em' }}>
-                        Số HĐ: <strong className="font-black text-slate-900">#DH-SAMPLE</strong>
+                      <p className="text-black font-bold leading-tight" style={{ fontSize: '0.92em' }}>
+                        Số HĐ: <strong className="font-black text-black">#DH-SAMPLE</strong>
                       </p>
-                      <p className="text-slate-500 italic leading-tight" style={{ fontSize: '0.85em' }}>
+                      <p className="text-black font-semibold italic leading-tight" style={{ fontSize: '0.85em' }}>
                         15/09/2026 15:30
                       </p>
                     </div>
 
                     {/* Customer Info Sample */}
                     {settings.showCustomer && (
-                      <div className="py-1.5 border-b border-dashed border-slate-300 space-y-1" style={{ fontSize: '0.92em' }}>
+                      <div className="py-1.5 border-b border-dashed border-black space-y-1" style={{ fontSize: '0.92em' }}>
                         <div className="flex justify-between items-baseline">
-                          <span className="text-slate-600">Khách hàng:</span>
-                          <strong className="text-slate-900 font-bold">Chị Lan (Zalo Đội Cấn)</strong>
+                          <span className="text-black font-bold">Khách hàng:</span>
+                          <strong className="text-black font-black">Chị Lan (Zalo Đội Cấn)</strong>
                         </div>
                         <div className="flex justify-between items-baseline">
-                          <span className="text-slate-600">SĐT:</span>
-                          <span className="font-bold text-slate-800">0988123456</span>
+                          <span className="text-black font-bold">SĐT:</span>
+                          <span className="font-black text-black">0988123456</span>
                         </div>
                         <div className="flex justify-between items-start gap-2">
-                          <span className="text-slate-600 shrink-0">Địa chỉ:</span>
-                          <span className="text-right text-slate-800">12 Đội Cấn, Ba Đình, Hà Nội</span>
+                          <span className="text-black font-bold shrink-0">Địa chỉ:</span>
+                          <span className="text-right text-black font-bold">12 Đội Cấn, Ba Đình, Hà Nội</span>
                         </div>
                         <div className="flex justify-between items-baseline">
-                          <span className="text-slate-600">Hình thức:</span>
-                          <span className="font-bold text-blue-800">Giao hàng (Ship)</span>
+                          <span className="text-black font-bold">Hình thức:</span>
+                          <span className="font-black text-black uppercase">Giao hàng (Ship)</span>
                         </div>
                       </div>
                     )}
 
                     {/* Items Table Sample (KiotViet 2-Line Layout) */}
-                    <div className="py-2 border-b border-dashed border-slate-300">
-                      <div className="flex justify-between font-bold pb-1 border-b border-slate-300 text-slate-800 uppercase tracking-wider" style={{ fontSize: '0.88em' }}>
+                    <div className="py-2 border-b border-dashed border-black">
+                      <div className="flex justify-between font-black pb-1 border-b border-black text-black uppercase tracking-wider" style={{ fontSize: '0.88em' }}>
                         <span className="w-1/3 text-left">Đơn giá</span>
                         <span className="w-1/3 text-center">SL</span>
                         <span className="w-1/3 text-right">Thành tiền</span>
                       </div>
-                      <div className="divide-y divide-dashed divide-slate-200">
+                      <div className="divide-y divide-dashed divide-black">
                         <div className="py-1.5 space-y-0.5">
-                          <div className="font-bold text-slate-900 leading-snug" style={{ fontSize: '1.02em' }}>
+                          <div className="font-black text-black leading-snug" style={{ fontSize: '1.02em' }}>
                             Xúc xích Heo Thảo Mộc Phô Mai Mozzarella
-                            <span className="font-normal text-slate-500 ml-1" style={{ fontSize: '0.85em' }}>(Gói 500g)</span>
+                            <span className="font-semibold text-black ml-1" style={{ fontSize: '0.85em' }}>(Gói 500g)</span>
                           </div>
-                          <div className="flex justify-between items-center text-slate-700" style={{ fontSize: '0.95em' }}>
-                            <span className="w-1/3 text-left font-semibold">145.000đ</span>
-                            <span className="w-1/3 text-center font-bold">x1</span>
-                            <span className="w-1/3 text-right font-black text-slate-900" style={{ fontSize: '1.05em' }}>145.000đ</span>
+                          <div className="flex justify-between items-center text-black" style={{ fontSize: '0.95em' }}>
+                            <span className="w-1/3 text-left font-bold">145.000đ</span>
+                            <span className="w-1/3 text-center font-black">x1</span>
+                            <span className="w-1/3 text-right font-black text-black" style={{ fontSize: '1.05em' }}>145.000đ</span>
                           </div>
                         </div>
                         <div className="py-1.5 space-y-0.5">
-                          <div className="font-bold text-slate-900 leading-snug" style={{ fontSize: '1.02em' }}>
+                          <div className="font-black text-black leading-snug" style={{ fontSize: '1.02em' }}>
                             Pate Gan Gà Nấm Truffle Thượng Hạng
-                            <span className="font-normal text-slate-500 ml-1" style={{ fontSize: '0.85em' }}>(Hũ 250g)</span>
+                            <span className="font-semibold text-black ml-1" style={{ fontSize: '0.85em' }}>(Hũ 250g)</span>
                           </div>
-                          <div className="flex justify-between items-center text-slate-700" style={{ fontSize: '0.95em' }}>
-                            <span className="w-1/3 text-left font-semibold">120.000đ</span>
-                            <span className="w-1/3 text-center font-bold">x1</span>
-                            <span className="w-1/3 text-right font-black text-slate-900" style={{ fontSize: '1.05em' }}>120.000đ</span>
+                          <div className="flex justify-between items-center text-black" style={{ fontSize: '0.95em' }}>
+                            <span className="w-1/3 text-left font-bold">120.000đ</span>
+                            <span className="w-1/3 text-center font-black">x1</span>
+                            <span className="w-1/3 text-right font-black text-black" style={{ fontSize: '1.05em' }}>120.000đ</span>
                           </div>
                         </div>
                       </div>
                     </div>
 
                     {/* Totals */}
-                    <div className="py-2 border-b border-dashed border-slate-300 space-y-1" style={{ fontSize: '0.92em' }}>
-                      <div className="flex justify-between text-slate-700">
-                        <span>Tổng số lượng:</span>
-                        <span className="font-bold text-slate-900">2</span>
+                    <div className="py-2 border-b border-dashed border-black space-y-1" style={{ fontSize: '0.92em' }}>
+                      <div className="flex justify-between text-black">
+                        <span className="font-bold">Tổng số lượng:</span>
+                        <span className="font-black text-black">2</span>
                       </div>
-                      <div className="flex justify-between text-slate-700">
-                        <span>Tổng tiền hàng:</span>
-                        <span className="font-bold text-slate-900">265.000đ</span>
+                      <div className="flex justify-between text-black">
+                        <span className="font-bold">Tổng tiền hàng:</span>
+                        <span className="font-black text-black">265.000đ</span>
                       </div>
-                      <div className="flex justify-between text-slate-700">
-                        <span>Phí vận chuyển:</span>
-                        <span className="font-bold">+25.000đ</span>
+                      <div className="flex justify-between text-black">
+                        <span className="font-bold">Phí vận chuyển:</span>
+                        <span className="font-black">+25.000đ</span>
                       </div>
-                      <div className="flex justify-between items-baseline pt-1.5 border-t border-slate-300 font-black text-slate-900">
+                      <div className="flex justify-between items-baseline pt-1.5 border-t border-black font-black text-black">
                         <span className="uppercase" style={{ fontSize: '1.12em' }}>TỔNG THANH TOÁN:</span>
-                        <span className="font-black text-amber-700" style={{ fontSize: '1.28em' }}>290.000đ</span>
+                        <span className="font-black text-black" style={{ fontSize: '1.35em' }}>290.000đ</span>
                       </div>
                     </div>
 
                     {/* Dynamic VietQR Preview */}
                     {settings.showVietQR && qrUrl && (
-                      <div className="py-2 text-center border-b border-dashed border-slate-300 space-y-1">
-                        <p className="font-extrabold uppercase tracking-wide text-slate-900" style={{ fontSize: '0.98em' }}>
+                      <div className="py-2 text-center border-b border-dashed border-black space-y-1">
+                        <p className="font-black uppercase tracking-wide text-black" style={{ fontSize: '0.98em' }}>
                           THÔNG TIN CHUYỂN KHOẢN:
                         </p>
-                        <p className="font-bold text-slate-800" style={{ fontSize: '0.92em' }}>
+                        <p className="font-bold text-black" style={{ fontSize: '0.92em' }}>
                           {settings.bankCode} - CTK: {settings.bankAccountName}
                         </p>
-                        <p className="font-black tracking-wider text-slate-900" style={{ fontSize: '1.25em' }}>
+                        <p className="font-black tracking-wider text-black" style={{ fontSize: '1.25em' }}>
                           {settings.bankAccount}
                         </p>
                         {settings.bankNote && (
-                          <p className="text-slate-600 italic" style={{ fontSize: '0.85em' }}>
+                          <p className="text-black font-semibold italic" style={{ fontSize: '0.85em' }}>
                             ({settings.bankNote})
                           </p>
                         )}
                         <div className="pt-2 flex flex-col items-center justify-center">
-                          <div className="w-28 h-28 bg-white border border-slate-300 rounded p-1 flex items-center justify-center shadow-2xs">
+                          <div className="w-28 h-28 bg-white border-2 border-black rounded p-1 flex items-center justify-center">
                             <img
                               src={qrUrl}
                               alt="VietQR Napas"
@@ -668,17 +668,17 @@ export const SettingsPage: React.FC = () => {
                               }}
                             />
                           </div>
-                          <p className="text-slate-500 mt-1" style={{ fontSize: '0.8em' }}>Quét mã VietQR chuyển khoản nhanh</p>
+                          <p className="text-black font-bold mt-1" style={{ fontSize: '0.8em' }}>Quét mã VietQR chuyển khoản nhanh</p>
                         </div>
                       </div>
                     )}
 
                     {/* Footer */}
-                    <div className="text-center pt-2 text-slate-600 space-y-0.5">
-                      <p className="font-bold text-slate-800" style={{ fontSize: '0.95em' }}>
+                    <div className="text-center pt-2 text-black space-y-0.5">
+                      <p className="font-black text-black" style={{ fontSize: '0.95em' }}>
                         {settings.footerMessage || 'Chúc quý khách có một bữa ăn hạnh phúc!'}
                       </p>
-                      <p className="text-slate-400 italic" style={{ fontSize: '0.8em' }}>
+                      <p className="text-black font-semibold italic" style={{ fontSize: '0.8em' }}>
                         MexucxichCuisine - Ẩm thực thủ công & Đặc sản tuyển chọn
                       </p>
                     </div>
