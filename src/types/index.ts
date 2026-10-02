@@ -94,3 +94,10 @@ export interface ReceiptSettings {
   showVietQR: boolean;
   logoUrl?: string;
 }
+
+export interface CloudConfig {
+  supabaseUrl: string;
+  supabaseAnonKey: string;
+  autoSync: boolean;
+  lastSyncedAt?: string;
+}

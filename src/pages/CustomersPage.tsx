@@ -19,11 +19,19 @@ import {
   Receipt,
   UserCheck,
   FileSpreadsheet,
+  Upload,
+  Download,
+  Check,
 } from 'lucide-react';
-import { exportCustomersToExcel } from '../utils/excel';
+import {
+  exportCustomersToExcel,
+  downloadCustomerTemplate,
+  parseCustomersExcel,
+  ParsedCustomerRow,
+} from '../utils/excel';
 
 export const CustomersPage: React.FC = () => {
-  const { customers, orders, debtPayments, addCustomer, payDebt } = useStore();
+  const { customers, orders, debtPayments, addCustomer, updateCustomer, payDebt } = useStore();
 
   const [searchQuery, setSearchQuery] = useState('');
   const [filterOnlyDebt, setFilterOnlyDebt] = useState(false);
@@ -32,6 +40,64 @@ export const CustomersPage: React.FC = () => {
   const [isAddCustomerOpen, setIsAddCustomerOpen] = useState(false);
   const [selectedCustomerForDetail, setSelectedCustomerForDetail] = useState<Customer | null>(null);
   const [payingCustomer, setPayingCustomer] = useState<Customer | null>(null);
+
+  // Excel Import states
+  const [isImportModalOpen, setIsImportModalOpen] = useState(false);
+  const [previewCustomers, setPreviewCustomers] = useState<ParsedCustomerRow[]>([]);
+  const [importFileName, setImportFileName] = useState('');
+
+  const handleExcelUpload = async (e: React.ChangeEvent<HTMLInputElement>) => {
+    const file = e.target.files?.[0];
+    if (!file) return;
+    try {
+      setImportFileName(file.name);
+      const parsed = await parseCustomersExcel(file);
+      if (parsed.length === 0) {
+        alert('Không tìm thấy dòng khách hàng hợp lệ nào trong file Excel!');
+        return;
+      }
+      setPreviewCustomers(parsed);
+      setIsImportModalOpen(true);
+    } catch (err) {
+      alert('Lỗi khi đọc file Excel. Vui lòng kiểm tra định dạng file!');
+    }
+  };
+
+  const handleConfirmImport = () => {
+    if (previewCustomers.length === 0) return;
+
+    let updatedCount = 0;
+    let newCount = 0;
+
+    previewCustomers.forEach(row => {
+      // Find existing customer by phone if phone exists
+      const existing = row.phone ? customers.find(c => c.phone === row.phone) : null;
+
+      if (existing) {
+        // Update existing customer
+        updateCustomer(existing.id, {
+          address: row.address || existing.address,
+          debt: existing.debt + (row.debt || 0),
+        });
+        updatedCount++;
+      } else {
+        // Add new customer
+        const newCust = addCustomer({
+          name: row.name,
+          phone: row.phone,
+          address: row.address,
+        });
+        if (row.debt > 0) {
+          updateCustomer(newCust.id, { debt: row.debt });
+        }
+        newCount++;
+      }
+    });
+
+    alert(`Đã xử lý xong ${previewCustomers.length} khách hàng: Thêm mới ${newCount} khách, cập nhật ${updatedCount} khách cũ!`);
+    setIsImportModalOpen(false);
+    setPreviewCustomers([]);
+  };
 
   // Add Customer Form
   const [formName, setFormName] = useState('');
@@ -130,7 +196,7 @@ export const CustomersPage: React.FC = () => {
                 Theo dõi lịch sử mua hàng, ghi nợ đơn và sổ thu nợ lũy kế
               </p>
             </div>
-            <div className="flex items-center gap-2">
+            <div className="flex flex-wrap items-center gap-2">
               <button
                 onClick={() => exportCustomersToExcel(customers)}
                 className="px-3 py-2 rounded-xl border border-slate-200 bg-white hover:bg-slate-50 text-slate-700 text-xs font-bold transition flex items-center gap-1.5 shrink-0"
@@ -138,6 +204,25 @@ export const CustomersPage: React.FC = () => {
               >
                 <FileSpreadsheet className="w-3.5 h-3.5 text-emerald-600" />
                 <span>Xuất Excel</span>
+              </button>
+
+              <label className="px-3 py-2 rounded-xl border border-slate-200 bg-white hover:bg-slate-50 text-slate-700 text-xs font-bold transition flex items-center gap-1.5 cursor-pointer shrink-0">
+                <Upload className="w-3.5 h-3.5 text-blue-600" />
+                <span>Nhập Excel</span>
+                <input
+                  type="file"
+                  accept=".xlsx,.xls,.csv"
+                  onChange={handleExcelUpload}
+                  className="hidden"
+                />
+              </label>
+
+              <button
+                onClick={downloadCustomerTemplate}
+                className="p-2 rounded-xl border border-slate-200 bg-white hover:bg-slate-50 text-slate-500 hover:text-slate-800 transition shrink-0"
+                title="Tải file mẫu Excel danh bạ khách hàng (.xlsx)"
+              >
+                <Download className="w-4 h-4" />
               </button>
 
               <button
@@ -572,6 +657,112 @@ export const CustomersPage: React.FC = () => {
                 </button>
               </div>
             </form>
+          </div>
+        </div>
+      )}
+
+      {/* Excel Customer Import Preview Modal */}
+      {isImportModalOpen && (
+        <div className="fixed inset-0 bg-black/50 backdrop-blur-2xs z-50 flex items-center justify-center p-3">
+          <div className="bg-white rounded-2xl max-w-2xl w-full p-4 sm:p-5 shadow-2xl animate-in fade-in zoom-in duration-150 max-h-[90vh] flex flex-col">
+            <div className="flex items-center justify-between pb-3 border-b border-slate-100">
+              <div className="flex items-center gap-2">
+                <div className="w-8 h-8 rounded-lg bg-emerald-500 text-white flex items-center justify-center font-bold">
+                  <FileSpreadsheet className="w-4 h-4" />
+                </div>
+                <div>
+                  <h3 className="font-extrabold text-sm text-slate-900">
+                    Xem trước danh sách khách hàng từ Excel
+                  </h3>
+                  <p className="text-[10px] text-slate-500">
+                    Tệp: <strong>{importFileName}</strong> • Tìm thấy <strong>{previewCustomers.length}</strong> khách hàng
+                  </p>
+                </div>
+              </div>
+              <button
+                onClick={() => setIsImportModalOpen(false)}
+                className="w-7 h-7 rounded-lg hover:bg-slate-100 flex items-center justify-center text-slate-400"
+              >
+                <X className="w-4 h-4" />
+              </button>
+            </div>
+
+            {/* Badges preview */}
+            <div className="flex items-center gap-2 pt-2 text-[11px] font-bold">
+              {(() => {
+                const existingCount = previewCustomers.filter(c => c.phone && customers.some(x => x.phone === c.phone)).length;
+                const newCount = previewCustomers.length - existingCount;
+                return (
+                  <>
+                    <span className="px-2.5 py-0.5 rounded-full bg-emerald-100 text-emerald-800">
+                      ✨ {newCount} khách mới
+                    </span>
+                    {existingCount > 0 && (
+                      <span className="px-2.5 py-0.5 rounded-full bg-amber-100 text-amber-800">
+                        🔄 {existingCount} khách trùng SĐT (sẽ cập nhật & cộng dồn nợ)
+                      </span>
+                    )}
+                  </>
+                );
+              })()}
+            </div>
+
+            {/* Preview Table */}
+            <div className="flex-1 overflow-y-auto custom-scroll my-3 border border-slate-200 rounded-xl overflow-hidden text-xs">
+              <table className="w-full text-left border-collapse">
+                <thead className="bg-slate-50 text-slate-500 uppercase text-[10px] font-extrabold sticky top-0">
+                  <tr className="border-b border-slate-200">
+                    <th className="py-2 px-3">Tên khách hàng</th>
+                    <th className="py-2 px-3">Số điện thoại</th>
+                    <th className="py-2 px-3">Địa chỉ</th>
+                    <th className="py-2 px-3 text-right">Dư nợ ban đầu</th>
+                    <th className="py-2 px-3 text-center">Xử lý</th>
+                  </tr>
+                </thead>
+                <tbody className="divide-y divide-slate-100 font-medium">
+                  {previewCustomers.map((c, idx) => {
+                    const isExisting = c.phone && customers.some(x => x.phone === c.phone);
+                    return (
+                      <tr key={idx} className="hover:bg-slate-50">
+                        <td className="py-2 px-3 font-bold text-slate-800">{c.name}</td>
+                        <td className="py-2 px-3 font-mono text-slate-600">{c.phone || '-'}</td>
+                        <td className="py-2 px-3 text-slate-500 max-w-xs truncate">{c.address || '-'}</td>
+                        <td className="py-2 px-3 text-right font-bold text-rose-600">
+                          {c.debt > 0 ? formatVND(c.debt) : '0đ'}
+                        </td>
+                        <td className="py-2 px-3 text-center">
+                          {isExisting ? (
+                            <span className="px-2 py-0.5 rounded text-[10px] font-bold bg-amber-100 text-amber-800 whitespace-nowrap">
+                              Cập nhật khách cũ
+                            </span>
+                          ) : (
+                            <span className="px-2 py-0.5 rounded text-[10px] font-bold bg-emerald-100 text-emerald-800 whitespace-nowrap">
+                              Tạo khách mới
+                            </span>
+                          )}
+                        </td>
+                      </tr>
+                    );
+                  })}
+                </tbody>
+              </table>
+            </div>
+
+            <div className="pt-3 border-t border-slate-100 flex justify-end gap-2 text-xs font-bold">
+              <button
+                onClick={() => setIsImportModalOpen(false)}
+                className="px-4 py-2 rounded-xl text-slate-600 hover:bg-slate-100 transition"
+              >
+                Hủy bỏ
+              </button>
+              <button
+                onClick={handleConfirmImport}
+                className="px-5 py-2 rounded-xl bg-emerald-600 hover:bg-emerald-700 text-white shadow-sm shadow-emerald-600/20 transition flex items-center gap-1.5"
+              >
+                <Check className="w-4 h-4" />
+                <span>Xác nhận nhập {previewCustomers.length} khách vào danh bạ</span>
+              </button>
+            </div>
           </div>
         </div>
       )}

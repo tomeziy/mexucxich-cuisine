@@ -5,6 +5,7 @@ import { matchesSearch } from '../utils/vietnamese';
 import { formatVND, formatDate } from '../utils/format';
 import { ReceiptModal } from '../components/pos/ReceiptModal';
 import { QuickAddCustomerModal } from '../components/pos/QuickAddCustomerModal';
+import { EditOrderModal } from '../components/pos/EditOrderModal';
 import {
   Search,
   Plus,
@@ -21,6 +22,7 @@ import {
   CheckCircle2,
   XCircle,
   Eye,
+  Edit2,
   AlertCircle,
   RotateCcw,
 } from 'lucide-react';
@@ -66,6 +68,10 @@ export const PosPage: React.FC = () => {
   // Receipt Modal state
   const [completedOrder, setCompletedOrder] = useState<Order | null>(null);
   const [isReceiptOpen, setIsReceiptOpen] = useState(false);
+
+  // Edit Order Modal state
+  const [editingOrder, setEditingOrder] = useState<Order | null>(null);
+  const [isEditModalOpen, setIsEditModalOpen] = useState(false);
 
   // Categories
   const categories = ['Tất cả', 'Đồ tự làm', 'Đặc sản tuyển chọn', 'Ăn vặt & Khô', 'Gia vị & Sốt'];
@@ -367,6 +373,17 @@ export const PosPage: React.FC = () => {
                       title="Xem hóa đơn K80"
                     >
                       <Eye className="w-4 h-4" />
+                    </button>
+
+                    <button
+                      onClick={() => {
+                        setEditingOrder(order);
+                        setIsEditModalOpen(true);
+                      }}
+                      className="p-2 rounded-lg border border-slate-200 bg-white hover:bg-amber-50 text-slate-600 hover:text-amber-600 transition"
+                      title="Chỉnh sửa đơn hàng (món, giá, nợ, phí ship)"
+                    >
+                      <Edit2 className="w-4 h-4" />
                     </button>
 
                     {order.status === 'preparing' && (
@@ -1009,6 +1026,21 @@ export const PosPage: React.FC = () => {
         settings={receiptSettings}
         isOpen={isReceiptOpen}
         onClose={() => setIsReceiptOpen(false)}
+        onEdit={(ord) => {
+          setIsReceiptOpen(false);
+          setEditingOrder(ord);
+          setIsEditModalOpen(true);
+        }}
+      />
+
+      {/* Edit Order Modal */}
+      <EditOrderModal
+        order={editingOrder}
+        isOpen={isEditModalOpen}
+        onClose={() => {
+          setIsEditModalOpen(false);
+          setEditingOrder(null);
+        }}
       />
     </div>
   );

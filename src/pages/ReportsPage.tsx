@@ -3,6 +3,7 @@ import { useStore } from '../context/StoreContext';
 import { Order } from '../types';
 import { formatVND, formatDate } from '../utils/format';
 import { ReceiptModal } from '../components/pos/ReceiptModal';
+import { EditOrderModal } from '../components/pos/EditOrderModal';
 import {
   BarChart3,
   TrendingUp,
@@ -11,6 +12,8 @@ import {
   CheckCircle2,
   XCircle,
   Eye,
+  Edit2,
+  Trash2,
   Filter,
   Calendar,
   DollarSign,
@@ -20,7 +23,7 @@ import {
 import { exportOrdersToExcel } from '../utils/excel';
 
 export const ReportsPage: React.FC = () => {
-  const { orders, receiptSettings } = useStore();
+  const { orders, receiptSettings, deleteOrder } = useStore();
 
   const [dateFilter, setDateFilter] = useState<'today' | '7days' | 'month' | 'all'>('today');
   const [statusFilter, setStatusFilter] = useState<string>('all');
@@ -29,6 +32,21 @@ export const ReportsPage: React.FC = () => {
   // Modal for reprint
   const [selectedOrder, setSelectedOrder] = useState<Order | null>(null);
   const [isReceiptOpen, setIsReceiptOpen] = useState(false);
+
+  // Modal for editing
+  const [editingOrder, setEditingOrder] = useState<Order | null>(null);
+  const [isEditModalOpen, setIsEditModalOpen] = useState(false);
+
+  const handleDeleteOrder = (order: Order) => {
+    const isCancelled = order.status === 'cancelled';
+    const confirmMsg = isCancelled
+      ? `Bạn có chắc chắn muốn xóa vĩnh viễn đơn #${order.id}?`
+      : `Bạn có chắc chắn muốn XÓA VĨNH VIỄN đơn #${order.id}?\n\n- Các món ăn trong đơn sẽ được TỰ ĐỘNG HOÀN KHO (+${order.items.reduce((sum, i) => sum + i.qty, 0)} sản phẩm).\n- Nếu đơn có ghi nợ, số dư nợ của khách ${order.customerName} sẽ được TỰ ĐỘNG KHẤU TRỪ.\n- Doanh thu sẽ được cập nhật lại!`;
+
+    if (window.confirm(confirmMsg)) {
+      deleteOrder(order.id);
+    }
+  };
 
   // Helper date filtering
   const now = new Date();
@@ -234,7 +252,7 @@ export const ReportsPage: React.FC = () => {
                 <th className="py-3 px-3">Món đã mua</th>
                 <th className="py-3 px-3 text-right">Tổng tiền</th>
                 <th className="py-3 px-3 text-center">Trạng thái</th>
-                <th className="py-3 px-3 text-center">In lại</th>
+                <th className="py-3 px-3 text-center">Thao tác</th>
               </tr>
             </thead>
             <tbody className="divide-y divide-slate-100 font-medium">
@@ -303,16 +321,37 @@ export const ReportsPage: React.FC = () => {
                         )}
                       </td>
                       <td className="py-2.5 px-3 text-center">
-                        <button
-                          onClick={() => {
-                            setSelectedOrder(order);
-                            setIsReceiptOpen(true);
-                          }}
-                          className="p-1.5 rounded-lg border border-slate-200 bg-white hover:bg-slate-100 text-slate-600 hover:text-amber-600 transition"
-                          title="Xem & In lại hóa đơn"
-                        >
-                          <Eye className="w-3.5 h-3.5" />
-                        </button>
+                        <div className="flex items-center justify-center gap-1">
+                          <button
+                            onClick={() => {
+                              setSelectedOrder(order);
+                              setIsReceiptOpen(true);
+                            }}
+                            className="p-1.5 rounded-lg border border-slate-200 bg-white hover:bg-slate-100 text-slate-600 hover:text-amber-600 transition"
+                            title="Xem & In lại hóa đơn"
+                          >
+                            <Eye className="w-3.5 h-3.5" />
+                          </button>
+
+                          <button
+                            onClick={() => {
+                              setEditingOrder(order);
+                              setIsEditModalOpen(true);
+                            }}
+                            className="p-1.5 rounded-lg border border-slate-200 bg-white hover:bg-amber-50 text-slate-600 hover:text-amber-600 transition"
+                            title="Chỉnh sửa đơn hàng (món, giá, nợ, phí ship)"
+                          >
+                            <Edit2 className="w-3.5 h-3.5" />
+                          </button>
+
+                          <button
+                            onClick={() => handleDeleteOrder(order)}
+                            className="p-1.5 rounded-lg border border-rose-200 bg-rose-50 hover:bg-rose-100 text-rose-600 transition"
+                            title="Xóa vĩnh viễn đơn hàng & Hoàn kho"
+                          >
+                            <Trash2 className="w-3.5 h-3.5" />
+                          </button>
+                        </div>
                       </td>
                     </tr>
                   );
@@ -329,6 +368,25 @@ export const ReportsPage: React.FC = () => {
         settings={receiptSettings}
         isOpen={isReceiptOpen}
         onClose={() => setIsReceiptOpen(false)}
+        onEdit={(ord) => {
+          setIsReceiptOpen(false);
+          setEditingOrder(ord);
+          setIsEditModalOpen(true);
+        }}
+        onDelete={(ord) => {
+          setIsReceiptOpen(false);
+          handleDeleteOrder(ord);
+        }}
+      />
+
+      {/* Edit Order Modal */}
+      <EditOrderModal
+        order={editingOrder}
+        isOpen={isEditModalOpen}
+        onClose={() => {
+          setIsEditModalOpen(false);
+          setEditingOrder(null);
+        }}
       />
     </div>
   );

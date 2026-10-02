@@ -141,3 +141,107 @@ export async function parseProductsExcel(file: File): Promise<Partial<Product>[]
     reader.readAsArrayBuffer(file);
   });
 }
+
+/**
+ * Download sample template Excel for Customers
+ */
+export function downloadCustomerTemplate(): void {
+  const sampleData = [
+    {
+      'Tên Khách Hàng (*)': 'Chị Hoàng Mai (Khách quen)',
+      'Số Điện Thoại': '0904047976',
+      'Địa Chỉ': '12 Tràng Thi, Hoàn Kiếm, Hà Nội',
+      'Dư Nợ Ban Đầu (VNĐ)': 250000,
+    },
+    {
+      'Tên Khách Hàng (*)': 'Anh Nguyễn Tuấn',
+      'Số Điện Thoại': '0912345678',
+      'Địa Chỉ': 'Căn 1205 Tòa S2, Vinhomes Ocean Park',
+      'Dư Nợ Ban Đầu (VNĐ)': 0,
+    },
+    {
+      'Tên Khách Hàng (*)': 'Cô Lan (Bán sỉ)',
+      'Số Điện Thoại': '0988776655',
+      'Địa Chỉ': 'Ki-ốt 15 Chợ Hôm, Hà Nội',
+      'Dư Nợ Ban Đầu (VNĐ)': 500000,
+    },
+  ];
+
+  const ws = XLSX.utils.json_to_sheet(sampleData);
+  const wb = XLSX.utils.book_new();
+  XLSX.utils.book_append_sheet(wb, ws, 'Mau_Nhap_Khach_Hang');
+  XLSX.writeFile(wb, 'mexucxich_mau_nhap_khach_hang.xlsx');
+}
+
+export interface ParsedCustomerRow {
+  name: string;
+  phone: string;
+  address: string;
+  debt: number;
+}
+
+/**
+ * Parse uploaded Excel file for Customers
+ */
+export async function parseCustomersExcel(file: File): Promise<ParsedCustomerRow[]> {
+  return new Promise((resolve, reject) => {
+    const reader = new FileReader();
+    reader.onload = (e) => {
+      try {
+        const data = new Uint8Array(e.target?.result as ArrayBuffer);
+        const workbook = XLSX.read(data, { type: 'array' });
+        const firstSheetName = workbook.SheetNames[0];
+        const worksheet = workbook.Sheets[firstSheetName];
+        const json: any[] = XLSX.utils.sheet_to_json(worksheet);
+
+        const customers: ParsedCustomerRow[] = json.map(row => {
+          const rawName = String(
+            row['Tên Khách Hàng (*)'] ||
+            row['Tên Khách Hàng'] ||
+            row['Tên'] ||
+            row['Họ và Tên'] ||
+            row['name'] ||
+            ''
+          ).trim();
+
+          const rawPhone = String(
+            row['Số Điện Thoại'] ||
+            row['SĐT'] ||
+            row['Điện Thoại'] ||
+            row['phone'] ||
+            ''
+          ).replace(/[^0-9+]/g, '').trim();
+
+          const rawAddress = String(
+            row['Địa Chỉ'] ||
+            row['Địa chỉ'] ||
+            row['address'] ||
+            ''
+          ).trim();
+
+          const rawDebt = Number(
+            row['Dư Nợ Ban Đầu (VNĐ)'] ||
+            row['Dư Nợ Ban Đầu'] ||
+            row['Dư Nợ'] ||
+            row['Nợ'] ||
+            row['debt'] ||
+            0
+          );
+
+          return {
+            name: rawName,
+            phone: rawPhone,
+            address: rawAddress,
+            debt: isNaN(rawDebt) ? 0 : Math.max(0, rawDebt),
+          };
+        }).filter(c => c.name);
+
+        resolve(customers);
+      } catch (err) {
+        reject(err);
+      }
+    };
+    reader.onerror = reject;
+    reader.readAsArrayBuffer(file);
+  });
+}

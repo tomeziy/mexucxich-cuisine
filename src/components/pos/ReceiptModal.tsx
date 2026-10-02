@@ -3,13 +3,15 @@ import { createPortal } from 'react-dom';
 import { Order, ReceiptSettings, PrintFontSize } from '../../types';
 import { useStore } from '../../context/StoreContext';
 import { formatVND, formatDate } from '../../utils/format';
-import { Printer, X } from 'lucide-react';
+import { Printer, X, Edit2, Trash2 } from 'lucide-react';
 
 interface ReceiptModalProps {
   order: Order | null;
   settings: ReceiptSettings;
   isOpen: boolean;
   onClose: () => void;
+  onEdit?: (order: Order) => void;
+  onDelete?: (order: Order) => void;
 }
 
 export const ReceiptModal: React.FC<ReceiptModalProps> = ({
@@ -17,6 +19,8 @@ export const ReceiptModal: React.FC<ReceiptModalProps> = ({
   settings,
   isOpen,
   onClose,
+  onEdit,
+  onDelete,
 }) => {
   const { updateReceiptSettings } = useStore();
 
@@ -414,10 +418,33 @@ export const ReceiptModal: React.FC<ReceiptModalProps> = ({
           </div>
 
           {/* Modal Footer Controls */}
-          <div className="p-3 bg-white border-t border-slate-200 flex items-center justify-between shrink-0">
-            <div className="text-[11px] text-slate-500 font-medium">
-              Chế độ in: <strong className="text-slate-800">{printCopies} liên</strong> • Cỡ chữ: <strong className="text-slate-800">{settings.fontSize === 'small' ? 'Nhỏ' : settings.fontSize === 'large' ? 'To' : 'Vừa'}</strong>
+          <div className="p-3 bg-white border-t border-slate-200 flex flex-wrap items-center justify-between gap-2 shrink-0">
+            <div className="flex items-center gap-2">
+              {onEdit && (
+                <button
+                  type="button"
+                  onClick={() => onEdit(order)}
+                  className="px-3 py-1.5 rounded-xl text-xs font-bold border border-slate-200 bg-white hover:bg-amber-50 text-slate-700 hover:text-amber-600 flex items-center gap-1 transition"
+                >
+                  <Edit2 className="w-3.5 h-3.5" />
+                  <span>Sửa đơn</span>
+                </button>
+              )}
+              {onDelete && (
+                <button
+                  type="button"
+                  onClick={() => onDelete(order)}
+                  className="px-3 py-1.5 rounded-xl text-xs font-bold border border-rose-200 bg-rose-50 hover:bg-rose-100 text-rose-600 flex items-center gap-1 transition"
+                >
+                  <Trash2 className="w-3.5 h-3.5" />
+                  <span>Xóa đơn</span>
+                </button>
+              )}
+              <div className="text-[11px] text-slate-400 font-medium hidden sm:block">
+                In: <strong className="text-slate-700">{printCopies} liên</strong> • Cỡ chữ: <strong className="text-slate-700">{settings.fontSize === 'small' ? 'Nhỏ' : settings.fontSize === 'large' ? 'To' : 'Vừa'}</strong>
+              </div>
             </div>
+
             <div className="flex items-center gap-2">
               <button
                 onClick={onClose}

@@ -92,6 +92,22 @@ Mã phản hồi nhanh chuẩn Napas sinh tự động theo số tài khoản c�
 _Avoid_: Mã QR tĩnh, QR code chuyển tiền
 
 **Hoàn kho tự động (Auto-restock)**:
-Hành động hệ thống tự động cộng trả lại số lượng tồn kho của các sản phẩm khi một đơn hàng giao đi bị hủy.
+Hành động hệ thống tự động cộng trả lại số lượng tồn kho của các sản phẩm khi một đơn hàng giao đi bị hủy hoặc xóa.
 _Avoid_: Nhập lại hàng, hủy kho
+
+**Xóa vĩnh viễn đơn hàng (Hard-delete Order)**:
+Thao tác loại bỏ hoàn toàn một đơn hàng khỏi hệ thống (kể cả đơn đã hoàn thành), kích hoạt hoàn kho tự động cho các món ăn và khấu trừ số dư nợ tương ứng của khách hàng.
+_Avoid_: Xóa bill, thanh trừng đơn
+
+**Chỉnh sửa đơn hàng (Order Editing)**:
+Nghiệp vụ mở lại đơn hàng đã lưu để điều chỉnh sản phẩm, số lượng, đơn giá, khách hàng hoặc phí ship; hệ thống tự động tính toán chênh lệch tồn kho (Stock Delta) và cập nhật lại Dư nợ và Doanh thu tương ứng.
+_Avoid_: Sửa bill, cập nhật lại đơn
+
+**Nhập khách hàng từ Excel (Customer Excel Import)**:
+Chức năng nạp hàng loạt khách hàng từ bảng tính `.xlsx`, tự động đối chiếu theo Số điện thoại để cập nhật thông tin và cộng dồn Dư nợ ban đầu.
+_Avoid_: Import danh bạ, upload khách
+
+**Đồng bộ Đám mây (Cloud Database Sync)**:
+Cơ chế đồng bộ dữ liệu hai chiều thời gian thực giữa các thiết bị (cửa hàng và ở nhà) qua hệ quản trị cơ sở dữ liệu trên mây (Supabase), với khả năng tự động dự phòng (fallback) về LocalStorage ngoại tuyến.
+_Avoid_: Lưu server, sync cloud
 
