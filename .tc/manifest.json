@@ -2,8 +2,8 @@
   "project": "MexucxichCuisine",
   "version": "1.0.0",
   "created_at": "2026-09-08T16:00:00+07:00",
-  "last_updated": "2026-09-11T16:20:00+07:00",
-  "active_tc": "TC-004",
+  "last_updated": "2026-10-09T15:20:00+07:00",
+  "active_tc": "TC-006",
   "changes": [
     {
       "id": "TC-001",
@@ -28,6 +28,18 @@
       "title": "Hoàn tất triển khai toàn bộ 11 tickets ứng dụng Web POS MexucxichCuisine",
       "status": "deployed",
       "file": "TC-004-full-implementation-completed.json"
+    },
+    {
+      "id": "TC-005",
+      "title": "Chỉnh sửa đơn giá trực tiếp trên giỏ hàng & Chuẩn hóa mẫu in nhiệt KiotViet 2 dòng (ADR-0004, ADR-0005)",
+      "status": "deployed",
+      "file": "TC-005-custom-pricing-and-thermal-receipt.json"
+    },
+    {
+      "id": "TC-006",
+      "title": "Tích hợp Supabase Cloud Sync, Quản trị Vòng đời Đơn hàng (Sửa/Xóa kèm hoàn kho) & Nhập khách hàng từ Excel (ADR-0006)",
+      "status": "deployed",
+      "file": "TC-006-supabase-cloud-sync-order-lifecycle.json"
     }
   ]
 }

@@ -33,6 +33,9 @@
 | **Lưu trữ Offline-First** | [ADR-0001](docs/adr/0001-offline-first-storage-and-backup.md) | Chạy 100% Client-side bằng `LocalStorage` & `IndexedDB`. Không tốn chi phí máy chủ ($0/tháng), hoạt động cả khi mất mạng. Cung cấp nút "Sao lưu & Khôi phục 1-Click" (JSON/Excel). |
 | **Phân tách Luồng Đơn hàng & Sổ nợ** | [ADR-0002](docs/adr/0002-order-lifecycle-and-debt-ledger.md) | Hỗ trợ 2 luồng: **Đơn tại chỗ** (hoàn thành tức thì) và **Đơn giao hàng** (vòng đời: Đang chuẩn bị ➔ Đang giao ➔ Hoàn thành/Hủy). Quản lý công nợ theo **Sổ nợ lũy kế (Running Balance)**, trừ trực tiếp khi khách trả tiền. |
 | **Trừ kho Tức thì & Tách riêng Phí ship** | [ADR-0003](docs/adr/0003-inventory-deduction-and-shipping-revenue.md) | Trừ tồn kho ngay khi tạo đơn; tự động hoàn kho (auto-restock) nếu đơn bị hủy. Phí vận chuyển thu hộ tài xế được tách riêng, không tính gộp vào Doanh thu thuần và Lợi nhuận của tiệm. |
+| **Đơn giá tùy chỉnh theo món** | [ADR-0004](docs/adr/0004-line-item-custom-pricing.md) | Cho phép sửa đơn giá bán trực tiếp trên giỏ hàng ($\ge 0đ$), cảnh báo mềm khi bán dưới giá vốn; tuyệt đối không làm thay đổi giá niêm yết trong kho hàng. |
+| **Hóa đơn KiotViet 2 dòng & In 1 liên** | [ADR-0005](docs/adr/0005-kiotviet-receipt-layout-and-single-copy-printing.md) | Hiển thị trọn vẹn tên món dòng trên, căn 3 cột (Đơn giá - SL - Tiền) dòng dưới. Chữ to rõ nét 13-15px, cấu hình CSS chống tràn trang và chống nhả giấy thừa trên máy in nhiệt K80 (1 liên mặc định). |
+| **Đồng bộ Cloud Supabase & Quản trị Đơn** | [ADR-0006](docs/adr/0006-supabase-cloud-sync-and-order-management.md) | Đồng bộ 2 chiều thời gian thực qua Cloud Supabase (hỗ trợ chuyển giao tài khoản độc lập, duy trì dự phòng Offline-First); cho phép sửa/xóa hóa đơn kèm tự động hoàn kho và khấu trừ công nợ; nạp khách hàng từ Excel. |
 
 ---
 

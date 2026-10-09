@@ -1,0 +1,38 @@
+{
+  "id": "TC-005",
+  "title": "Chỉnh sửa đơn giá trực tiếp trên giỏ hàng & Chuẩn hóa mẫu in nhiệt KiotViet 2 dòng (ADR-0004, ADR-0005)",
+  "status": "deployed",
+  "created_at": "2026-09-14T10:00:00+07:00",
+  "updated_at": "2026-09-24T12:00:00+07:00",
+  "state_history": [
+    { "state": "planned", "timestamp": "2026-09-14T10:00:00+07:00", "actor": "Antigravity" },
+    { "state": "implemented", "timestamp": "2026-09-15T15:00:00+07:00", "actor": "Antigravity" },
+    { "state": "tested", "timestamp": "2026-09-18T11:00:00+07:00", "actor": "Antigravity" },
+    { "state": "deployed", "timestamp": "2026-09-24T12:00:00+07:00", "actor": "Antigravity" }
+  ],
+  "context": {
+    "adr": ["ADR-0004", "ADR-0005"],
+    "features": [
+      "Cho phép chỉnh sửa đơn giá bán trực tiếp trên từng món trong giỏ hàng (>= 0đ, quà tặng 0đ)",
+      "Cảnh báo mềm bán dưới giá vốn (soft warning) không chặn thao tác",
+      "Cô lập giá bán theo đơn, bảo toàn giá niêm yết chuẩn trong kho hàng",
+      "Chuyển đổi bố cục hóa đơn in sang định dạng KiotViet 2 dòng (dòng 1: tên món, dòng 2: đơn giá - SL - thành tiền)",
+      "Thiết lập mặc định in 1 liên (printCopies: 1), hỗ trợ tùy chọn 2 liên với nhãn phân định",
+      "Tùy biến cỡ chữ in nhiệt (Nhỏ 11px, Vừa 13px, To 15px rõ nét)",
+      "Cô lập portal #print-root và font màu đen tuyệt đối (#000000) chống mờ mực in nhiệt"
+    ]
+  },
+  "progress_summary": "Đã triển khai hoàn chỉnh tính năng sửa giá theo từng dòng giỏ hàng và tối ưu hóa toàn diện trải nghiệm in nhiệt K80. Khắc phục triệt để lỗi tràn trang cắt đôi giấy, chữ to rõ nét chuẩn máy in quầy hàng.",
+  "files_in_progress": [
+    "src/types/index.ts",
+    "src/pages/PosPage.tsx",
+    "src/components/pos/ReceiptModal.tsx",
+    "src/pages/SettingsPage.tsx",
+    "docs/adr/0004-line-item-custom-pricing.md",
+    "docs/adr/0005-kiotviet-receipt-layout-and-single-copy-printing.md"
+  ],
+  "blockers": [],
+  "next_steps": [
+    "Nghiên cứu cơ chế đồng bộ Cloud Supabase cho vận hành đa thiết bị cửa hàng - nhà riêng (ADR-0006)"
+  ]
+}
