@@ -111,3 +111,16 @@ _Avoid_: Import danh bạ, upload khách
 Cơ chế đồng bộ dữ liệu hai chiều thời gian thực giữa các thiết bị (cửa hàng và ở nhà) qua hệ quản trị cơ sở dữ liệu trên mây (Supabase), với khả năng tự động dự phòng (fallback) về LocalStorage ngoại tuyến.
 _Avoid_: Lưu server, sync cloud
 
+**Xử lý trùng lặp khi nhập Excel (Duplicate Resolution on Import)**:
+Hộp thoại kiểm soát dữ liệu xem trước khi nhập bảng tính `.xlsx` cho Sản phẩm và Khách hàng; phát hiện bản ghi trùng lặp và cho phép chủ tiệm chọn hành vi (Cộng dồn nợ / Cộng dồn kho, Ghi đè, Bỏ qua) cho từng dòng hoặc thao tác hàng loạt, đồng thời cho phép chỉnh sửa trực tiếp dữ liệu trước khi nạp.
+_Avoid_: Bỏ qua âm thầm, ghi đè tự động không báo trước
+
+**Chỉnh sửa khách hàng nhanh tại quầy (Quick Edit Customer at POS)**:
+Thao tác mở popup cập nhật tức thời Số điện thoại và Địa chỉ giao hàng của khách hàng ngay trên màn hình Bán hàng (POS) khi đang tạo đơn; cập nhật tức thì vào danh bạ và biểu mẫu đơn hàng mà không làm thay đổi snapshot địa chỉ của các đơn hàng trong quá khứ.
+_Avoid_: Thoát màn hình để sửa, sửa đè đơn cũ
+
+**Phông chữ in nhiệt (Thermal Print Font Family)**:
+Tùy chọn phông chữ in ấn hóa đơn chuyên dụng (mặc định: Arial) với đặc tính thanh mảnh, tiết kiệm diện tích in ngang và triệt tiêu hiện tượng nhòe mực nhiệt (thermal dot gain) so với phông chữ hình học bo tròn của giao diện web.
+_Avoid_: Font web in bill, font đậm béo
+
+
