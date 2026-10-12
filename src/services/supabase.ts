@@ -344,6 +344,27 @@ export const cloudDeleteCustomer = async (id: string) => {
   }
 };
 
+// Batch items sync helpers
+export const cloudSyncProductsBatch = async (products: Product[]) => {
+  const client = getSupabaseClient();
+  if (!client || products.length === 0) return;
+  try {
+    await client.from('products').upsert(products.map(transformProductToDb), { onConflict: 'id' });
+  } catch (e) {
+    console.error('cloudSyncProductsBatch error:', e);
+  }
+};
+
+export const cloudSyncCustomersBatch = async (customers: Customer[]) => {
+  const client = getSupabaseClient();
+  if (!client || customers.length === 0) return;
+  try {
+    await client.from('customers').upsert(customers.map(transformCustomerToDb), { onConflict: 'id' });
+  } catch (e) {
+    console.error('cloudSyncCustomersBatch error:', e);
+  }
+};
+
 export const cloudSyncOrder = async (o: Order) => {
   const client = getSupabaseClient();
   if (!client) return;

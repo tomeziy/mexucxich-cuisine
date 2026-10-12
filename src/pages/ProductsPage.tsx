@@ -2,7 +2,7 @@ import React, { useState } from 'react';
 import { useStore } from '../context/StoreContext';
 import { Product } from '../types';
 import { formatVND } from '../utils/format';
-import { matchesSearch } from '../utils/vietnamese';
+import { matchesSearch, removeVietnameseTones } from '../utils/vietnamese';
 import {
   Package,
   Plus,
@@ -21,12 +21,20 @@ import {
   exportProductsToExcel,
   downloadProductTemplate,
   parseProductsExcel,
+  ParsedProductRow,
 } from '../utils/excel';
 
 const EMOJI_OPTIONS = ['🧀', '🥩', '🥣', '🍳', '🥓', '🌶️', '🍄', '🍢', '🍗', '🌭', '🥗', '🥖', '🥟', '🧃', '🍯'];
 
+export interface ProductImportRowItem extends ParsedProductRow {
+  id: string;
+  isDuplicate: boolean;
+  existingProduct?: Product;
+  action: 'accumulate' | 'overwrite' | 'skip';
+}
+
 export const ProductsPage: React.FC = () => {
-  const { products, addProduct, updateProduct, deleteProduct } = useStore();
+  const { products, addProduct, addProductsBatch, updateProduct, deleteProduct } = useStore();
 
   const [searchQuery, setSearchQuery] = useState('');
   const [selectedCategory, setSelectedCategory] = useState('Tất cả');
@@ -47,8 +55,17 @@ export const ProductsPage: React.FC = () => {
 
   // Excel Import states
   const [isImportModalOpen, setIsImportModalOpen] = useState(false);
-  const [previewProducts, setPreviewProducts] = useState<Partial<Product>[]>([]);
+  const [importRows, setImportRows] = useState<ProductImportRowItem[]>([]);
   const [importFileName, setImportFileName] = useState('');
+
+  // Row Inline Edit State in Import Preview
+  const [editingRowId, setEditingRowId] = useState<string | null>(null);
+  const [rowEditName, setRowEditName] = useState('');
+  const [rowEditCategory, setRowEditCategory] = useState('Đồ tự làm');
+  const [rowEditUnit, setRowEditUnit] = useState('Gói');
+  const [rowEditCost, setRowEditCost] = useState<number>(0);
+  const [rowEditPrice, setRowEditPrice] = useState<number>(0);
+  const [rowEditStock, setRowEditStock] = useState<number>(0);
 
   const handleExcelUpload = async (e: React.ChangeEvent<HTMLInputElement>) => {
     const file = e.target.files?.[0];
@@ -56,33 +73,133 @@ export const ProductsPage: React.FC = () => {
     try {
       setImportFileName(file.name);
       const parsed = await parseProductsExcel(file);
+      e.target.value = ''; // Reset file input so re-uploading the same file works
       if (parsed.length === 0) {
         alert('Không tìm thấy dòng sản phẩm hợp lệ nào trong file Excel!');
         return;
       }
-      setPreviewProducts(parsed);
+
+      const mapped: ProductImportRowItem[] = parsed.map((p, idx) => {
+        const existing = products.find(
+          x => removeVietnameseTones(x.name) === removeVietnameseTones(p.name)
+        );
+        return {
+          ...p,
+          id: `prod_row_${Date.now()}_${idx}`,
+          isDuplicate: !!existing,
+          existingProduct: existing || undefined,
+          action: 'accumulate',
+        };
+      });
+
+      setImportRows(mapped);
       setIsImportModalOpen(true);
     } catch (err) {
+      e.target.value = '';
       alert('Lỗi khi đọc file Excel. Vui lòng kiểm tra định dạng file!');
     }
   };
 
+  const handleApplyAllAccumulate = () => {
+    setImportRows(prev => prev.map(r => (r.isDuplicate ? { ...r, action: 'accumulate' } : r)));
+  };
+
+  const handleSkipAllDuplicates = () => {
+    setImportRows(prev => prev.map(r => (r.isDuplicate ? { ...r, action: 'skip' } : r)));
+  };
+
+  const startEditRow = (row: ProductImportRowItem) => {
+    setEditingRowId(row.id);
+    setRowEditName(row.name);
+    setRowEditCategory(row.category);
+    setRowEditUnit(row.unit);
+    setRowEditCost(row.cost);
+    setRowEditPrice(row.price);
+    setRowEditStock(row.stock);
+  };
+
+  const saveEditRow = (rowId: string) => {
+    setImportRows(prev =>
+      prev.map(r => {
+        if (r.id === rowId) {
+          const newName = rowEditName.trim() || r.name;
+          const existing = products.find(
+            x => removeVietnameseTones(x.name) === removeVietnameseTones(newName)
+          );
+          return {
+            ...r,
+            name: newName,
+            category: rowEditCategory.trim() || r.category,
+            unit: rowEditUnit.trim() || r.unit,
+            cost: Math.max(0, rowEditCost || 0),
+            price: Math.max(0, rowEditPrice || 0),
+            stock: Math.max(0, rowEditStock || 0),
+            isDuplicate: !!existing,
+            existingProduct: existing || undefined,
+          };
+        }
+        return r;
+      })
+    );
+    setEditingRowId(null);
+  };
+
   const handleConfirmImport = () => {
-    if (previewProducts.length === 0) return;
-    previewProducts.forEach(p => {
-      addProduct({
-        name: p.name || 'Món mới',
-        category: p.category || 'Đồ tự làm',
-        unit: p.unit || 'Gói',
-        cost: p.cost || 0,
-        price: p.price || 0,
-        stock: p.stock || 0,
-        image: p.image || '🌭',
-      });
+    if (importRows.length === 0) return;
+
+    let updatedCount = 0;
+    let newCount = 0;
+    let skippedCount = 0;
+    const newProductsToAdd: Array<Omit<Product, 'id'>> = [];
+
+    importRows.forEach(row => {
+      if (row.isDuplicate && row.existingProduct) {
+        if (row.action === 'skip') {
+          skippedCount++;
+        } else if (row.action === 'overwrite') {
+          updateProduct(row.existingProduct.id, {
+            name: row.name,
+            category: row.category,
+            unit: row.unit,
+            cost: row.cost,
+            price: row.price,
+            stock: row.stock,
+          });
+          updatedCount++;
+        } else {
+          // 'accumulate' (Cộng dồn kho)
+          updateProduct(row.existingProduct.id, {
+            stock: row.existingProduct.stock + row.stock,
+            price: row.price || row.existingProduct.price,
+            cost: row.cost || row.existingProduct.cost,
+            unit: row.unit || row.existingProduct.unit,
+            category: row.category || row.existingProduct.category,
+          });
+          updatedCount++;
+        }
+      } else {
+        newProductsToAdd.push({
+          name: row.name,
+          category: row.category,
+          unit: row.unit,
+          cost: row.cost,
+          price: row.price,
+          stock: row.stock,
+          image: row.image || '🌭',
+        });
+        newCount++;
+      }
     });
-    alert(`Đã nhập thành công ${previewProducts.length} món ăn vào thực đơn!`);
+
+    if (newProductsToAdd.length > 0) {
+      addProductsBatch(newProductsToAdd);
+    }
+
+    alert(
+      `Đã xử lý xong ${importRows.length} món ăn:\n- Thêm mới: ${newCount} món\n- Cập nhật kho: ${updatedCount} món\n- Bỏ qua: ${skippedCount} món`
+    );
     setIsImportModalOpen(false);
-    setPreviewProducts([]);
+    setImportRows([]);
   };
 
   const categories = ['Tất cả', 'Đồ tự làm', 'Đặc sản tuyển chọn', 'Ăn vặt & Khô', 'Gia vị & Sốt'];
@@ -211,10 +328,11 @@ export const ProductsPage: React.FC = () => {
 
           <button
             onClick={downloadProductTemplate}
-            className="p-2 rounded-xl border border-slate-200 bg-white hover:bg-slate-50 text-slate-500 hover:text-slate-800 transition"
+            className="px-3 py-2 rounded-xl border border-slate-200 bg-white hover:bg-slate-50 text-slate-700 text-xs font-bold transition flex items-center gap-1.5"
             title="Tải file mẫu Excel (.xlsx)"
           >
-            <Download className="w-4 h-4" />
+            <Download className="w-3.5 h-3.5 text-amber-600" />
+            <span>Tải file mẫu</span>
           </button>
 
           <button
@@ -250,32 +368,21 @@ export const ProductsPage: React.FC = () => {
           </div>
         </div>
 
-        {/* Categories Bar */}
-        <div className="flex items-center gap-1.5 overflow-x-auto pb-1 custom-scroll">
-          {categories.map(cat => {
-            const count =
-              cat === 'Tất cả'
-                ? products.length
-                : products.filter(p => p.category === cat).length;
-            const active = selectedCategory === cat;
-            return (
-              <button
-                key={cat}
-                onClick={() => setSelectedCategory(cat)}
-                className={`
-                  shrink-0 px-3 py-1.5 rounded-xl text-xs font-bold transition flex items-center gap-1.5
-                  ${active
-                    ? 'bg-amber-500 text-white shadow-xs'
-                    : 'bg-slate-100 text-slate-600 hover:bg-slate-200'}
-                `}
-              >
-                <span>{cat}</span>
-                <span className={`text-[10px] px-1.5 py-0.2 rounded-full ${active ? 'bg-white/25 text-white' : 'bg-slate-200 text-slate-600'}`}>
-                  {count}
-                </span>
-              </button>
-            );
-          })}
+        {/* Category Filter Pills */}
+        <div className="flex items-center gap-1.5 overflow-x-auto custom-scroll pb-0.5">
+          {categories.map(cat => (
+            <button
+              key={cat}
+              onClick={() => setSelectedCategory(cat)}
+              className={`px-3 py-1 rounded-xl text-xs font-bold whitespace-nowrap transition ${
+                selectedCategory === cat
+                  ? 'bg-amber-500 text-white shadow-2xs'
+                  : 'bg-slate-100 text-slate-600 hover:bg-slate-200'
+              }`}
+            >
+              {cat}
+            </button>
+          ))}
         </div>
       </div>
 
@@ -286,7 +393,6 @@ export const ProductsPage: React.FC = () => {
             <thead>
               <tr className="bg-slate-50/80 border-b border-slate-200 text-slate-500 uppercase text-[10px] font-extrabold tracking-wider">
                 <th className="py-3 px-3.5">Món ăn</th>
-                <th className="py-3 px-3">Mã SP</th>
                 <th className="py-3 px-3">Danh mục</th>
                 <th className="py-3 px-3">Đơn vị</th>
                 <th className="py-3 px-3 text-right">Giá vốn</th>
@@ -298,71 +404,62 @@ export const ProductsPage: React.FC = () => {
             <tbody className="divide-y divide-slate-100 font-medium">
               {filteredProducts.length === 0 ? (
                 <tr>
-                  <td colSpan={8} className="py-12 text-center text-slate-400 text-xs">
-                    Không có sản phẩm nào phù hợp với bộ lọc
+                  <td colSpan={7} className="py-12 text-center text-slate-400 text-xs">
+                    Không tìm thấy món nào
                   </td>
                 </tr>
               ) : (
-                filteredProducts.map(p => {
-                  const isLowStock = p.stock <= 5;
-                  const isOutOfStock = p.stock <= 0;
-                  const profitMargin = p.price > 0 ? Math.round(((p.price - p.cost) / p.price) * 100) : 0;
+                filteredProducts.map(product => {
+                  const isLow = product.stock <= 5;
+                  const isOut = product.stock <= 0;
 
                   return (
-                    <tr key={p.id} className="hover:bg-amber-50/30 transition">
+                    <tr key={product.id} className="hover:bg-amber-50/30 transition">
                       <td className="py-2.5 px-3.5">
                         <div className="flex items-center gap-2.5">
-                          <div className="w-9 h-9 rounded-lg bg-slate-100 border border-slate-200/80 flex items-center justify-center text-xl shrink-0">
-                            {p.image}
-                          </div>
+                          <span className="text-xl shrink-0 p-1 bg-slate-50 rounded-lg border border-slate-150">
+                            {product.image}
+                          </span>
                           <div>
-                            <strong className="text-slate-900 block truncate max-w-[180px] sm:max-w-xs">
-                              {p.name}
-                            </strong>
-                            <span className="text-[10px] text-slate-400">Lãi gộp: ~{profitMargin}%</span>
+                            <strong className="text-slate-900 block font-bold">{product.name}</strong>
+                            <span className="text-[10px] text-slate-400 font-mono">{product.id}</span>
                           </div>
                         </div>
                       </td>
-                      <td className="py-2.5 px-3 text-slate-500 font-mono font-bold text-[11px]">
-                        {p.id}
+                      <td className="py-2.5 px-3 text-slate-600">{product.category}</td>
+                      <td className="py-2.5 px-3 text-slate-500">{product.unit}</td>
+                      <td className="py-2.5 px-3 text-right text-slate-600 font-mono">
+                        {formatVND(product.cost)}
                       </td>
-                      <td className="py-2.5 px-3">
-                        <span className="px-2 py-0.5 rounded-md bg-slate-100 text-slate-700 text-[10px] font-bold">
-                          {p.category}
-                        </span>
-                      </td>
-                      <td className="py-2.5 px-3 text-slate-600 font-semibold">{p.unit}</td>
-                      <td className="py-2.5 px-3 text-right text-slate-500 font-semibold">
-                        {formatVND(p.cost)}
-                      </td>
-                      <td className="py-2.5 px-3 text-right font-black text-amber-700">
-                        {formatVND(p.price)}
+                      <td className="py-2.5 px-3 text-right font-black text-amber-700 font-mono">
+                        {formatVND(product.price)}
                       </td>
                       <td className="py-2.5 px-3 text-center">
-                        {isOutOfStock ? (
-                          <span className="px-2 py-0.5 rounded-md bg-slate-200 text-slate-700 text-[10px] font-extrabold">
-                            Hết hàng
+                        {isOut ? (
+                          <span className="px-2 py-0.5 rounded-full text-[10px] font-extrabold bg-slate-200 text-slate-700">
+                            Hết hàng (0)
                           </span>
-                        ) : isLowStock ? (
-                          <span className="px-2 py-0.5 rounded-md bg-rose-100 text-rose-700 text-[10px] font-extrabold inline-flex items-center gap-1">
-                            <AlertTriangle className="w-2.5 h-2.5" /> Còn {p.stock}
+                        ) : isLow ? (
+                          <span className="px-2 py-0.5 rounded-full text-[10px] font-extrabold bg-rose-100 text-rose-700 flex items-center justify-center gap-1">
+                            <AlertTriangle className="w-2.5 h-2.5" />
+                            <span>Còn {product.stock}</span>
                           </span>
                         ) : (
-                          <span className="font-extrabold text-slate-800">{p.stock}</span>
+                          <span className="font-bold text-emerald-700">{product.stock}</span>
                         )}
                       </td>
                       <td className="py-2.5 px-3 text-center">
                         <div className="flex items-center justify-center gap-1">
                           <button
-                            onClick={() => openEditModal(p)}
-                            className="p-1.5 rounded-lg hover:bg-slate-100 text-slate-500 hover:text-amber-600 transition"
-                            title="Chỉnh sửa"
+                            onClick={() => openEditModal(product)}
+                            className="p-1.5 rounded-lg border border-slate-200 hover:bg-slate-100 text-slate-600 transition"
+                            title="Sửa món"
                           >
                             <Edit2 className="w-3.5 h-3.5" />
                           </button>
                           <button
-                            onClick={() => handleDelete(p.id, p.name)}
-                            className="p-1.5 rounded-lg hover:bg-rose-50 text-slate-400 hover:text-rose-600 transition"
+                            onClick={() => handleDelete(product.id, product.name)}
+                            className="p-1.5 rounded-lg border border-rose-200 hover:bg-rose-50 text-rose-600 transition"
                             title="Xóa món"
                           >
                             <Trash2 className="w-3.5 h-3.5" />
@@ -381,68 +478,66 @@ export const ProductsPage: React.FC = () => {
       {/* Add / Edit Product Modal */}
       {(isAddModalOpen || editingProduct) && (
         <div className="fixed inset-0 bg-black/50 backdrop-blur-2xs z-50 flex items-center justify-center p-3">
-          <div className="bg-white rounded-2xl max-w-md w-full p-4 sm:p-5 shadow-2xl animate-in fade-in zoom-in duration-150">
+          <div className="bg-white rounded-2xl max-w-md w-full p-5 shadow-2xl animate-in fade-in zoom-in duration-150">
             <div className="flex items-center justify-between pb-3 border-b border-slate-100">
-              <h3 className="font-extrabold text-sm text-slate-900 flex items-center gap-2">
-                <Package className="w-4 h-4 text-amber-500" />
-                <span>{editingProduct ? 'Chỉnh sửa món ăn' : 'Thêm món ăn mới vào kho'}</span>
+              <h3 className="font-extrabold text-sm text-slate-900">
+                {editingProduct ? 'Chỉnh sửa món ăn' : 'Thêm món ăn mới'}
               </h3>
               <button
                 onClick={() => {
                   setIsAddModalOpen(false);
                   setEditingProduct(null);
                 }}
-                className="w-7 h-7 rounded-lg hover:bg-slate-100 flex items-center justify-center text-slate-400 hover:text-slate-600"
+                className="w-7 h-7 rounded-lg hover:bg-slate-100 flex items-center justify-center text-slate-400"
               >
                 <X className="w-4 h-4" />
               </button>
             </div>
 
-            <form onSubmit={handleSaveProduct} className="space-y-3 pt-3 text-xs">
+            <form onSubmit={handleSaveProduct} className="space-y-3 pt-3">
               <div>
-                <label className="font-bold text-slate-700 block mb-1">
-                  Tên món ăn / sản phẩm <span className="text-rose-500">*</span>
+                <label className="text-xs font-bold text-slate-700 block mb-1">
+                  Tên món ăn (*)
                 </label>
                 <input
                   type="text"
+                  required
                   value={formName}
                   onChange={e => setFormName(e.target.value)}
-                  placeholder="Ví dụ: Xúc xích Tiêu đen, Pate nấm..."
-                  className="w-full bg-slate-50 border border-slate-200 rounded-xl px-3 py-2 text-xs focus:outline-none focus:ring-1 focus:ring-amber-500 font-semibold text-slate-900"
-                  autoFocus
+                  placeholder="Xúc xích Gà Nấm Phô Mai"
+                  className="w-full bg-slate-50 border border-slate-200 rounded-xl px-3 py-2 text-xs font-bold focus:outline-none focus:ring-2 focus:ring-amber-500/20 focus:border-amber-500"
                 />
               </div>
 
               <div className="grid grid-cols-2 gap-2.5">
                 <div>
-                  <label className="font-bold text-slate-700 block mb-1">Danh mục</label>
+                  <label className="text-xs font-bold text-slate-700 block mb-1">Danh mục</label>
                   <select
                     value={formCategory}
                     onChange={e => setFormCategory(e.target.value)}
-                    className="w-full bg-slate-50 border border-slate-200 rounded-xl px-2.5 py-2 text-xs font-semibold focus:outline-none focus:ring-1 focus:ring-amber-500"
+                    className="w-full bg-slate-50 border border-slate-200 rounded-xl px-3 py-2 text-xs font-semibold focus:outline-none"
                   >
-                    <option value="Đồ tự làm">Đồ tự làm</option>
-                    <option value="Đặc sản tuyển chọn">Đặc sản tuyển chọn</option>
-                    <option value="Ăn vặt & Khô">Ăn vặt & Khô</option>
-                    <option value="Gia vị & Sốt">Gia vị & Sốt</option>
+                    {categories.filter(c => c !== 'Tất cả').map(c => (
+                      <option key={c} value={c}>{c}</option>
+                    ))}
                   </select>
                 </div>
 
                 <div>
-                  <label className="font-bold text-slate-700 block mb-1">Đơn vị tính</label>
+                  <label className="text-xs font-bold text-slate-700 block mb-1">Đơn vị tính</label>
                   <input
                     type="text"
                     value={formUnit}
                     onChange={e => setFormUnit(e.target.value)}
                     placeholder="Gói 500g, Hũ 250g..."
-                    className="w-full bg-slate-50 border border-slate-200 rounded-xl px-3 py-2 text-xs focus:outline-none focus:ring-1 focus:ring-amber-500 font-semibold"
+                    className="w-full bg-slate-50 border border-slate-200 rounded-xl px-3 py-2 text-xs focus:outline-none"
                   />
                 </div>
               </div>
 
-              <div className="grid grid-cols-3 gap-2">
+              <div className="grid grid-cols-2 gap-2.5">
                 <div>
-                  <label className="font-bold text-slate-700 block mb-1">Giá vốn (đ)</label>
+                  <label className="text-xs font-bold text-slate-700 block mb-1">Giá vốn (VNĐ)</label>
                   <input
                     type="number"
                     min="0"
@@ -450,53 +545,54 @@ export const ProductsPage: React.FC = () => {
                     value={formCost || ''}
                     onChange={e => setFormCost(Number(e.target.value) || 0)}
                     placeholder="70000"
-                    className="w-full bg-slate-50 border border-slate-200 rounded-xl px-2.5 py-1.5 text-xs text-right font-bold focus:outline-none"
+                    className="w-full bg-slate-50 border border-slate-200 rounded-xl px-3 py-2 text-xs font-mono font-bold focus:outline-none"
                   />
                 </div>
 
                 <div>
-                  <label className="font-bold text-slate-700 block mb-1">Giá bán (đ)</label>
+                  <label className="text-xs font-bold text-slate-700 block mb-1">Giá bán (VNĐ) (*)</label>
                   <input
                     type="number"
+                    required
                     min="0"
                     step="1000"
                     value={formPrice || ''}
                     onChange={e => setFormPrice(Number(e.target.value) || 0)}
-                    placeholder="100000"
-                    className="w-full bg-slate-50 border border-slate-200 rounded-xl px-2.5 py-1.5 text-xs text-right font-bold text-amber-700 focus:outline-none"
-                  />
-                </div>
-
-                <div>
-                  <label className="font-bold text-slate-700 block mb-1">Tồn kho</label>
-                  <input
-                    type="number"
-                    min="0"
-                    value={formStock !== undefined ? formStock : ''}
-                    onChange={e => setFormStock(Number(e.target.value) || 0)}
-                    placeholder="10"
-                    className="w-full bg-slate-50 border border-slate-200 rounded-xl px-2.5 py-1.5 text-xs text-center font-black focus:outline-none"
+                    placeholder="120000"
+                    className="w-full bg-slate-50 border border-slate-200 rounded-xl px-3 py-2 text-xs font-mono font-black text-amber-700 focus:outline-none"
                   />
                 </div>
               </div>
 
-              <div>
-                <label className="font-bold text-slate-700 block mb-1">Chọn biểu tượng / icon món</label>
-                <div className="flex flex-wrap gap-1.5 bg-slate-50 p-2 rounded-xl border border-slate-200">
-                  {EMOJI_OPTIONS.map(emoji => (
-                    <button
-                      key={emoji}
-                      type="button"
-                      onClick={() => setFormImage(emoji)}
-                      className={`w-8 h-8 rounded-lg text-lg flex items-center justify-center transition ${
-                        formImage === emoji
-                          ? 'bg-amber-500 shadow-xs scale-110'
-                          : 'hover:bg-slate-200'
-                      }`}
-                    >
-                      {emoji}
-                    </button>
-                  ))}
+              <div className="grid grid-cols-2 gap-2.5">
+                <div>
+                  <label className="text-xs font-bold text-slate-700 block mb-1">Tồn kho ban đầu</label>
+                  <input
+                    type="number"
+                    min="0"
+                    value={formStock || ''}
+                    onChange={e => setFormStock(Number(e.target.value) || 0)}
+                    placeholder="10"
+                    className="w-full bg-slate-50 border border-slate-200 rounded-xl px-3 py-2 text-xs font-mono font-bold focus:outline-none"
+                  />
+                </div>
+
+                <div>
+                  <label className="text-xs font-bold text-slate-700 block mb-1">Biểu tượng</label>
+                  <div className="flex items-center gap-1 overflow-x-auto custom-scroll py-1">
+                    {EMOJI_OPTIONS.map(emoji => (
+                      <button
+                        key={emoji}
+                        type="button"
+                        onClick={() => setFormImage(emoji)}
+                        className={`text-lg p-1 rounded-lg transition shrink-0 ${
+                          formImage === emoji ? 'bg-amber-100 ring-2 ring-amber-500 scale-110' : 'hover:bg-slate-100'
+                        }`}
+                      >
+                        {emoji}
+                      </button>
+                    ))}
+                  </div>
                 </div>
               </div>
 
@@ -523,74 +619,319 @@ export const ProductsPage: React.FC = () => {
         </div>
       )}
 
-      {/* Excel Import Preview Modal */}
+      {/* Excel Product Import & Duplicate Resolution Preview Modal */}
       {isImportModalOpen && (
-        <div className="fixed inset-0 bg-black/50 backdrop-blur-2xs z-50 flex items-center justify-center p-3">
-          <div className="bg-white rounded-2xl max-w-2xl w-full p-4 sm:p-5 shadow-2xl animate-in fade-in zoom-in duration-150 max-h-[90vh] flex flex-col">
-            <div className="flex items-center justify-between pb-3 border-b border-slate-100">
+        <div className="fixed inset-0 bg-black/60 backdrop-blur-2xs z-50 flex items-center justify-center p-3">
+          <div className="bg-white rounded-2xl max-w-4xl w-full p-4 sm:p-5 shadow-2xl animate-in fade-in zoom-in duration-150 max-h-[92vh] flex flex-col">
+            <div className="flex items-center justify-between pb-3 border-b border-slate-100 shrink-0">
               <div className="flex items-center gap-2">
                 <div className="w-8 h-8 rounded-lg bg-emerald-500 text-white flex items-center justify-center font-bold">
                   <FileSpreadsheet className="w-4 h-4" />
                 </div>
                 <div>
                   <h3 className="font-extrabold text-sm text-slate-900">
-                    Xem trước dữ liệu nhập từ Excel
+                    Xem trước & Xử lý Trùng lặp Sản phẩm từ Excel
                   </h3>
                   <p className="text-[10px] text-slate-500">
-                    File: <strong>{importFileName}</strong> • Tìm thấy <strong>{previewProducts.length}</strong> món ăn
+                    File: <strong>{importFileName}</strong> • Tìm thấy <strong>{importRows.length}</strong> món ăn
                   </p>
                 </div>
               </div>
               <button
-                onClick={() => setIsImportModalOpen(false)}
+                onClick={() => {
+                  setIsImportModalOpen(false);
+                  setEditingRowId(null);
+                }}
                 className="w-7 h-7 rounded-lg hover:bg-slate-100 flex items-center justify-center text-slate-400"
               >
                 <X className="w-4 h-4" />
               </button>
             </div>
 
+            {/* Badges & Bulk Action Controls */}
+            <div className="flex flex-wrap items-center justify-between gap-2 pt-2.5 pb-2 shrink-0">
+              <div className="flex items-center gap-2 text-[11px] font-bold">
+                {(() => {
+                  const duplicateCount = importRows.filter(r => r.isDuplicate).length;
+                  const newCount = importRows.length - duplicateCount;
+                  return (
+                    <>
+                      <span className="px-2.5 py-1 rounded-full bg-emerald-100 text-emerald-800">
+                        ✨ {newCount} món mới
+                      </span>
+                      {duplicateCount > 0 ? (
+                        <span className="px-2.5 py-1 rounded-full bg-amber-100 text-amber-800 flex items-center gap-1">
+                          <AlertTriangle className="w-3.5 h-3.5" />
+                          <span>{duplicateCount} món trùng tên trong thực đơn</span>
+                        </span>
+                      ) : (
+                        <span className="px-2.5 py-1 rounded-full bg-slate-100 text-slate-600">
+                          Không có món trùng
+                        </span>
+                      )}
+                    </>
+                  );
+                })()}
+              </div>
+
+              {/* Bulk Action Buttons */}
+              {importRows.some(r => r.isDuplicate) && (
+                <div className="flex items-center gap-1.5 text-xs font-bold">
+                  <span className="text-[11px] text-slate-500 mr-1">Thao tác nhanh cho món trùng:</span>
+                  <button
+                    type="button"
+                    onClick={handleApplyAllAccumulate}
+                    className="px-2.5 py-1 rounded-lg bg-amber-50 border border-amber-300 text-amber-800 hover:bg-amber-100 transition text-[11px]"
+                  >
+                    Áp dụng tất cả (Cộng dồn kho)
+                  </button>
+                  <button
+                    type="button"
+                    onClick={handleSkipAllDuplicates}
+                    className="px-2.5 py-1 rounded-lg bg-slate-100 border border-slate-300 text-slate-700 hover:bg-slate-200 transition text-[11px]"
+                  >
+                    Bỏ qua tất cả món trùng
+                  </button>
+                </div>
+              )}
+            </div>
+
             {/* Preview Table */}
-            <div className="flex-1 overflow-y-auto custom-scroll my-3 border border-slate-200 rounded-xl overflow-hidden text-xs">
+            <div className="flex-1 overflow-y-auto custom-scroll my-2 border border-slate-200 rounded-xl overflow-hidden text-xs">
               <table className="w-full text-left border-collapse">
-                <thead className="bg-slate-50 text-slate-500 uppercase text-[10px] font-extrabold sticky top-0">
-                  <tr className="border-b border-slate-200">
-                    <th className="py-2 px-3">Tên món</th>
-                    <th className="py-2 px-3">Danh mục</th>
-                    <th className="py-2 px-3">Đơn vị</th>
-                    <th className="py-2 px-3 text-right">Giá vốn</th>
-                    <th className="py-2 px-3 text-right">Giá bán</th>
-                    <th className="py-2 px-3 text-center">Tồn kho</th>
+                <thead className="bg-slate-50 text-slate-600 uppercase text-[10px] font-extrabold sticky top-0 border-b border-slate-200">
+                  <tr>
+                    <th className="py-2.5 px-3">Tên món từ File</th>
+                    <th className="py-2.5 px-3">Danh mục / ĐVT</th>
+                    <th className="py-2.5 px-3 text-right">Giá vốn</th>
+                    <th className="py-2.5 px-3 text-right">Đơn giá</th>
+                    <th className="py-2.5 px-3 text-center">Tồn kho File</th>
+                    <th className="py-2.5 px-3">Kho hiện tại & Trùng lặp</th>
+                    <th className="py-2.5 px-3 text-center">Xử lý món</th>
+                    <th className="py-2.5 px-2 text-center">Sửa</th>
                   </tr>
                 </thead>
                 <tbody className="divide-y divide-slate-100 font-medium">
-                  {previewProducts.map((p, idx) => (
-                    <tr key={idx} className="hover:bg-slate-50">
-                      <td className="py-2 px-3 font-bold text-slate-800">{p.name}</td>
-                      <td className="py-2 px-3 text-slate-500">{p.category}</td>
-                      <td className="py-2 px-3 text-slate-500">{p.unit}</td>
-                      <td className="py-2 px-3 text-right text-slate-600">{formatVND(p.cost || 0)}</td>
-                      <td className="py-2 px-3 text-right font-bold text-amber-700">{formatVND(p.price || 0)}</td>
-                      <td className="py-2 px-3 text-center font-bold">{p.stock}</td>
-                    </tr>
-                  ))}
+                  {importRows.map((row, idx) => {
+                    const isEditing = editingRowId === row.id;
+
+                    if (isEditing) {
+                      return (
+                        <tr key={row.id} className="bg-amber-50/60">
+                          <td className="py-2 px-2">
+                            <input
+                              type="text"
+                              value={rowEditName}
+                              onChange={e => setRowEditName(e.target.value)}
+                              className="w-full bg-white border border-amber-300 rounded px-2 py-1 text-xs font-bold"
+                            />
+                          </td>
+                          <td className="py-2 px-2">
+                            <div className="flex gap-1">
+                              <input
+                                type="text"
+                                value={rowEditCategory}
+                                onChange={e => setRowEditCategory(e.target.value)}
+                                className="w-1/2 bg-white border border-amber-300 rounded px-1.5 py-1 text-xs"
+                              />
+                              <input
+                                type="text"
+                                value={rowEditUnit}
+                                onChange={e => setRowEditUnit(e.target.value)}
+                                className="w-1/2 bg-white border border-amber-300 rounded px-1.5 py-1 text-xs"
+                              />
+                            </div>
+                          </td>
+                          <td className="py-2 px-2 text-right">
+                            <input
+                              type="number"
+                              min="0"
+                              step="1000"
+                              value={rowEditCost}
+                              onChange={e => setRowEditCost(Number(e.target.value) || 0)}
+                              className="w-20 bg-white border border-amber-300 rounded px-1.5 py-1 text-xs text-right"
+                            />
+                          </td>
+                          <td className="py-2 px-2 text-right">
+                            <input
+                              type="number"
+                              min="0"
+                              step="1000"
+                              value={rowEditPrice}
+                              onChange={e => setRowEditPrice(Number(e.target.value) || 0)}
+                              className="w-20 bg-white border border-amber-300 rounded px-1.5 py-1 text-xs text-right font-bold text-amber-700"
+                            />
+                          </td>
+                          <td className="py-2 px-2 text-center">
+                            <input
+                              type="number"
+                              min="0"
+                              value={rowEditStock}
+                              onChange={e => setRowEditStock(Number(e.target.value) || 0)}
+                              className="w-16 bg-white border border-amber-300 rounded px-1.5 py-1 text-xs text-center font-bold"
+                            />
+                          </td>
+                          <td colSpan={2} className="py-2 px-2 text-center">
+                            <span className="text-[11px] text-amber-700 italic">Đang sửa trực tiếp dòng này</span>
+                          </td>
+                          <td className="py-2 px-2 text-center">
+                            <div className="flex items-center justify-center gap-1">
+                              <button
+                                onClick={() => saveEditRow(row.id)}
+                                className="px-2 py-1 rounded bg-emerald-600 text-white font-bold text-[10px]"
+                              >
+                                Lưu
+                              </button>
+                              <button
+                                onClick={() => setEditingRowId(null)}
+                                className="px-2 py-1 rounded bg-slate-200 text-slate-600 font-bold text-[10px]"
+                              >
+                                Hủy
+                              </button>
+                            </div>
+                          </td>
+                        </tr>
+                      );
+                    }
+
+                    return (
+                      <tr key={row.id} className={`hover:bg-slate-50 transition ${row.isDuplicate ? 'bg-amber-50/20' : ''}`}>
+                        <td className="py-2.5 px-3">
+                          <strong className="text-slate-900 block">{row.name}</strong>
+                        </td>
+                        <td className="py-2.5 px-3 text-slate-500">
+                          {row.category} • {row.unit}
+                        </td>
+                        <td className="py-2.5 px-3 text-right text-slate-600 font-mono">
+                          {formatVND(row.cost)}
+                        </td>
+                        <td className="py-2.5 px-3 text-right font-bold text-amber-700 font-mono">
+                          {formatVND(row.price)}
+                        </td>
+                        <td className="py-2.5 px-3 text-center font-bold text-slate-800">
+                          {row.stock}
+                        </td>
+                        <td className="py-2.5 px-3">
+                          {row.isDuplicate && row.existingProduct ? (
+                            <div className="space-y-0.5">
+                              <span className="text-[10px] font-bold text-amber-800 block">
+                                Trùng: {row.existingProduct.name} ({row.existingProduct.id})
+                              </span>
+                              <span className="text-[10px] text-slate-500 block">
+                                Tồn hiện tại: <strong className="text-slate-800">{row.existingProduct.stock}</strong>
+                              </span>
+                              {row.action === 'accumulate' && (
+                                <span className="text-[10px] font-bold text-emerald-700 block">
+                                  → Kho sau cộng dồn: {row.existingProduct.stock + row.stock}
+                                </span>
+                              )}
+                              {row.action === 'overwrite' && (
+                                <span className="text-[10px] font-bold text-rose-600 block">
+                                  → Ghi đè kho thành: {row.stock}
+                                </span>
+                              )}
+                            </div>
+                          ) : (
+                            <span className="px-2 py-0.5 rounded text-[10px] font-bold bg-emerald-100 text-emerald-800 inline-block">
+                              Món mới
+                            </span>
+                          )}
+                        </td>
+                        <td className="py-2.5 px-3 text-center">
+                          {row.isDuplicate ? (
+                            <div className="inline-flex rounded-lg border border-slate-200 p-0.5 bg-slate-50 text-[10px] font-bold">
+                              <button
+                                type="button"
+                                onClick={() =>
+                                  setImportRows(prev =>
+                                    prev.map(r => (r.id === row.id ? { ...r, action: 'accumulate' } : r))
+                                  )
+                                }
+                                className={`px-2 py-1 rounded transition ${
+                                  row.action === 'accumulate'
+                                    ? 'bg-amber-500 text-white shadow-2xs'
+                                    : 'text-slate-600 hover:text-slate-900'
+                                }`}
+                                title="Cộng thêm số tồn kho trong file vào tồn kho hiện tại"
+                              >
+                                Cộng kho
+                              </button>
+                              <button
+                                type="button"
+                                onClick={() =>
+                                  setImportRows(prev =>
+                                    prev.map(r => (r.id === row.id ? { ...r, action: 'overwrite' } : r))
+                                  )
+                                }
+                                className={`px-2 py-1 rounded transition ${
+                                  row.action === 'overwrite'
+                                    ? 'bg-rose-500 text-white shadow-2xs'
+                                    : 'text-slate-600 hover:text-slate-900'
+                                }`}
+                                title="Ghi đè số tồn kho và giá bằng dữ liệu trong file"
+                              >
+                                Ghi đè
+                              </button>
+                              <button
+                                type="button"
+                                onClick={() =>
+                                  setImportRows(prev =>
+                                    prev.map(r => (r.id === row.id ? { ...r, action: 'skip' } : r))
+                                  )
+                                }
+                                className={`px-2 py-1 rounded transition ${
+                                  row.action === 'skip'
+                                    ? 'bg-slate-600 text-white shadow-2xs'
+                                    : 'text-slate-600 hover:text-slate-900'
+                                }`}
+                                title="Bỏ qua dòng này, không cập nhật món cũ"
+                              >
+                                Bỏ qua
+                              </button>
+                            </div>
+                          ) : (
+                            <span className="text-[11px] font-bold text-emerald-700">Thêm mới</span>
+                          )}
+                        </td>
+                        <td className="py-2.5 px-2 text-center">
+                          <button
+                            type="button"
+                            onClick={() => startEditRow(row)}
+                            className="p-1.5 rounded-lg border border-slate-200 hover:bg-amber-50 hover:text-amber-600 text-slate-500 transition"
+                            title="Sửa nhanh thông tin món trước khi nhập"
+                          >
+                            <Edit2 className="w-3 h-3" />
+                          </button>
+                        </td>
+                      </tr>
+                    );
+                  })}
                 </tbody>
               </table>
             </div>
 
-            <div className="pt-3 border-t border-slate-100 flex justify-end gap-2 text-xs font-bold">
-              <button
-                onClick={() => setIsImportModalOpen(false)}
-                className="px-4 py-2 rounded-xl text-slate-600 hover:bg-slate-100 transition"
-              >
-                Hủy bỏ
-              </button>
-              <button
-                onClick={handleConfirmImport}
-                className="px-5 py-2 rounded-xl bg-emerald-600 hover:bg-emerald-700 text-white shadow-sm shadow-emerald-600/20 transition flex items-center gap-1.5"
-              >
-                <Check className="w-4 h-4" />
-                <span>Xác nhận nhập {previewProducts.length} món vào kho</span>
-              </button>
+            {/* Modal Footer Controls */}
+            <div className="pt-3 border-t border-slate-100 flex items-center justify-between gap-2 shrink-0 text-xs font-bold">
+              <span className="text-[11px] text-slate-500">
+                Sẽ xử lý <strong>{importRows.length}</strong> món vào thực đơn & kho
+              </span>
+              <div className="flex items-center gap-2">
+                <button
+                  type="button"
+                  onClick={() => setIsImportModalOpen(false)}
+                  className="px-4 py-2 rounded-xl text-slate-600 hover:bg-slate-100 transition"
+                >
+                  Hủy bỏ
+                </button>
+                <button
+                  type="button"
+                  onClick={handleConfirmImport}
+                  className="px-5 py-2 rounded-xl bg-emerald-600 hover:bg-emerald-700 text-white shadow-sm shadow-emerald-600/20 transition flex items-center gap-1.5"
+                >
+                  <Check className="w-4 h-4" />
+                  <span>Xác nhận nhập kho</span>
+                </button>
+              </div>
             </div>
           </div>
         </div>

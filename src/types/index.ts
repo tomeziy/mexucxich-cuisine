@@ -83,6 +83,7 @@ export interface ReceiptSettings {
   footerMessage: string;
   paperSize: PaperSize;
   fontSize?: PrintFontSize;
+  fontFamily?: 'arial' | 'system';
   printCopies?: PrintCopies;
   bankCode: string;
   bankAccount: string;

@@ -69,9 +69,10 @@
     height: auto !important;
   }
 
-  /* 3. STRICT 100% PURE SOLID BLACK ON THERMAL PAPER (NO DITHERING / NO GRAY) */
+  /* 3. STRICT 100% PURE SOLID BLACK ON THERMAL PAPER (NO DITHERING / NO GRAY) & ARIAL FONT */
   #print-root,
   #print-root * {
+    font-family: Arial, "Helvetica Neue", Helvetica, sans-serif !important;
     color: #000000 !important;
     border-color: #000000 !important;
     text-shadow: none !important;

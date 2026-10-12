@@ -6,8 +6,10 @@ import {
   saveSupabaseConfig,
   cloudSyncProduct,
   cloudDeleteProduct,
+  cloudSyncProductsBatch,
   cloudSyncCustomer,
   cloudDeleteCustomer,
+  cloudSyncCustomersBatch,
   cloudSyncOrder,
   cloudDeleteOrder,
   cloudSyncDebtPayment,
@@ -24,9 +26,11 @@ interface StoreContextType {
   receiptSettings: ReceiptSettings;
   cloudConfig: CloudConfig;
   addProduct: (product: Omit<Product, 'id'>) => Product;
+  addProductsBatch: (products: Array<Omit<Product, 'id'>>) => Product[];
   updateProduct: (id: string, product: Partial<Product>) => void;
   deleteProduct: (id: string) => void;
   addCustomer: (customer: Omit<Customer, 'id' | 'debt' | 'totalSpent' | 'orderCount'>) => Customer;
+  addCustomersBatch: (customers: Array<Omit<Customer, 'id' | 'totalSpent' | 'orderCount'>>) => Customer[];
   updateCustomer: (id: string, customer: Partial<Customer>) => void;
   deleteCustomer: (id: string) => void;
   createOrder: (orderData: Omit<Order, 'id' | 'createdAt'>) => Order;
@@ -185,7 +189,7 @@ export const StoreProvider: React.FC<{ children: React.ReactNode }> = ({ childre
 
   // Product actions
   const addProduct = (productData: Omit<Product, 'id'>): Product => {
-    const newId = 'SP' + String(Date.now()).slice(-4);
+    const newId = `SP_${Date.now()}_${Math.floor(1000 + Math.random() * 9000)}`;
     const newProduct: Product = {
       ...productData,
       id: newId,
@@ -194,6 +198,18 @@ export const StoreProvider: React.FC<{ children: React.ReactNode }> = ({ childre
     setProducts(prev => [newProduct, ...prev]);
     cloudSyncProduct(newProduct);
     return newProduct;
+  };
+
+  const addProductsBatch = (productsData: Array<Omit<Product, 'id'>>): Product[] => {
+    const timestamp = Date.now();
+    const newProducts: Product[] = productsData.map((p, idx) => ({
+      ...p,
+      id: `SP_${timestamp}_${idx}_${Math.random().toString(36).substring(2, 6)}`,
+      createdAt: new Date().toISOString(),
+    }));
+    setProducts(prev => [...newProducts, ...prev]);
+    cloudSyncProductsBatch(newProducts);
+    return newProducts;
   };
 
   const updateProduct = (id: string, updatedData: Partial<Product>) => {
@@ -216,7 +232,7 @@ export const StoreProvider: React.FC<{ children: React.ReactNode }> = ({ childre
 
   // Customer actions
   const addCustomer = (customerData: Omit<Customer, 'id' | 'debt' | 'totalSpent' | 'orderCount'>): Customer => {
-    const newId = 'KH' + String(Date.now()).slice(-4);
+    const newId = `KH_${Date.now()}_${Math.floor(1000 + Math.random() * 9000)}`;
     const newCustomer: Customer = {
       ...customerData,
       id: newId,
@@ -228,6 +244,21 @@ export const StoreProvider: React.FC<{ children: React.ReactNode }> = ({ childre
     setCustomers(prev => [newCustomer, ...prev]);
     cloudSyncCustomer(newCustomer);
     return newCustomer;
+  };
+
+  const addCustomersBatch = (customersData: Array<Omit<Customer, 'id' | 'totalSpent' | 'orderCount'>>): Customer[] => {
+    const timestamp = Date.now();
+    const newCustomers: Customer[] = customersData.map((c, idx) => ({
+      ...c,
+      id: `KH_${timestamp}_${idx}_${Math.random().toString(36).substring(2, 6)}`,
+      debt: c.debt || 0,
+      totalSpent: 0,
+      orderCount: 0,
+      createdAt: new Date().toISOString(),
+    }));
+    setCustomers(prev => [...newCustomers, ...prev]);
+    cloudSyncCustomersBatch(newCustomers);
+    return newCustomers;
   };
 
   const updateCustomer = (id: string, updatedData: Partial<Customer>) => {
@@ -576,9 +607,11 @@ export const StoreProvider: React.FC<{ children: React.ReactNode }> = ({ childre
         receiptSettings,
         cloudConfig,
         addProduct,
+        addProductsBatch,
         updateProduct,
         deleteProduct,
         addCustomer,
+        addCustomersBatch,
         updateCustomer,
         deleteCustomer,
         createOrder,

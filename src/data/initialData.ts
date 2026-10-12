@@ -139,6 +139,7 @@ export const DEFAULT_RECEIPT_SETTINGS: ReceiptSettings = {
   footerMessage: 'Chúc quý khách có một bữa ăn hạnh phúc!',
   paperSize: 'k80',
   fontSize: 'medium',
+  fontFamily: 'arial',
   printCopies: 1,
   bankCode: 'TCB', // Techcombank
   bankAccount: '10520110621010',

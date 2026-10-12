@@ -5,6 +5,7 @@ import { matchesSearch } from '../utils/vietnamese';
 import { formatVND, formatDate } from '../utils/format';
 import { ReceiptModal } from '../components/pos/ReceiptModal';
 import { QuickAddCustomerModal } from '../components/pos/QuickAddCustomerModal';
+import { QuickEditCustomerModal } from '../components/pos/QuickEditCustomerModal';
 import { EditOrderModal } from '../components/pos/EditOrderModal';
 import {
   Search,
@@ -52,6 +53,7 @@ export const PosPage: React.FC = () => {
   // Customer state
   const [selectedCustomerId, setSelectedCustomerId] = useState<string>(customers[0]?.id || 'KH01');
   const [isQuickAddCustomerOpen, setIsQuickAddCustomerOpen] = useState(false);
+  const [isQuickEditCustomerOpen, setIsQuickEditCustomerOpen] = useState(false);
 
   // Cart state
   const [cart, setCart] = useState<CartItem[]>([]);
@@ -612,17 +614,42 @@ export const PosPage: React.FC = () => {
                   </button>
                 </div>
 
-                <select
-                  value={selectedCustomerId}
-                  onChange={e => setSelectedCustomerId(e.target.value)}
-                  className="w-full bg-slate-50 border border-slate-200 rounded-xl px-2.5 py-1.5 text-xs font-semibold text-slate-800 focus:outline-none focus:ring-1 focus:ring-amber-500"
-                >
-                  {customers.map(c => (
-                    <option key={c.id} value={c.id}>
-                      {c.name} {c.phone ? `(${c.phone})` : ''} {c.debt > 0 ? `• Nợ: ${formatVND(c.debt)}` : ''}
-                    </option>
-                  ))}
-                </select>
+                <div className="flex items-center gap-1.5">
+                  <select
+                    value={selectedCustomerId}
+                    onChange={e => setSelectedCustomerId(e.target.value)}
+                    className="flex-1 min-w-0 bg-slate-50 border border-slate-200 rounded-xl px-2.5 py-1.5 text-xs font-semibold text-slate-800 focus:outline-none focus:ring-1 focus:ring-amber-500"
+                  >
+                    {customers.map(c => (
+                      <option key={c.id} value={c.id}>
+                        {c.name} {c.phone ? `(${c.phone})` : ''} {c.debt > 0 ? `• Nợ: ${formatVND(c.debt)}` : ''}
+                      </option>
+                    ))}
+                  </select>
+                  {selectedCustomer && (
+                    <button
+                      type="button"
+                      onClick={() => setIsQuickEditCustomerOpen(true)}
+                      className="p-1.5 rounded-xl border border-slate-200 hover:bg-amber-50 hover:border-amber-300 hover:text-amber-600 text-slate-500 transition shrink-0"
+                      title="Sửa nhanh thông tin khách hàng (SĐT, Địa chỉ)"
+                    >
+                      <Edit2 className="w-3.5 h-3.5" />
+                    </button>
+                  )}
+                </div>
+
+                {selectedCustomer && (selectedCustomer.phone || selectedCustomer.address) && (
+                  <div className="text-[10px] text-slate-500 flex flex-wrap items-center gap-x-2 gap-y-0.5 px-0.5">
+                    {selectedCustomer.phone && (
+                      <span className="font-medium text-slate-600">📞 {selectedCustomer.phone}</span>
+                    )}
+                    {selectedCustomer.address && (
+                      <span className="truncate max-w-[220px] text-slate-500" title={selectedCustomer.address}>
+                        📍 {selectedCustomer.address}
+                      </span>
+                    )}
+                  </div>
+                )}
 
                 {selectedCustomer?.debt > 0 && (
                   <div className="text-[11px] font-bold text-rose-600 flex items-center gap-1 bg-rose-50 px-2 py-1 rounded-lg">
@@ -1018,6 +1045,13 @@ export const PosPage: React.FC = () => {
         isOpen={isQuickAddCustomerOpen}
         onClose={() => setIsQuickAddCustomerOpen(false)}
         onCustomerAdded={newCust => setSelectedCustomerId(newCust.id)}
+      />
+
+      {/* Quick Edit Customer Modal */}
+      <QuickEditCustomerModal
+        isOpen={isQuickEditCustomerOpen}
+        onClose={() => setIsQuickEditCustomerOpen(false)}
+        customer={selectedCustomer || null}
       />
 
       {/* Thermal Receipt Preview Modal */}

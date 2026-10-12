@@ -1,7 +1,9 @@
 import React, { useState } from 'react';
+import { createPortal } from 'react-dom';
 import { useStore } from '../context/StoreContext';
-import { PaperSize, ReceiptSettings, PrintFontSize, PrintCopies } from '../types';
+import { PaperSize, ReceiptSettings, PrintFontSize, PrintCopies, Order } from '../types';
 import { formatVND } from '../utils/format';
+import { ThermalReceipt } from '../components/pos/ThermalReceipt';
 import {
   Settings,
   Printer,
@@ -44,6 +46,47 @@ const VIETNAM_BANKS = [
   { code: 'LPB', name: 'LPBank (Lộc Phát Việt Nam)' },
   { code: 'SHB', name: 'SHB (Sài Gòn - Hà Nội)' },
 ];
+
+const SAMPLE_ORDER: Order = {
+  id: 'HD-SAMPLE',
+  createdAt: '2026-09-15T15:30:00Z',
+  customerId: 'KH-SAMPLE',
+  customerName: 'Chị Lan (Zalo Đội Cấn)',
+  customerPhone: '0988123456',
+  customerAddress: '12 Đội Cấn, Ba Đình, Hà Nội',
+  orderType: 'delivery',
+  status: 'completed',
+  items: [
+    {
+      productId: 'SP01',
+      name: 'Xúc xích Heo Thảo Mộc Phô Mai Mozzarella',
+      unit: 'Gói 500g',
+      price: 145000,
+      cost: 95000,
+      qty: 1,
+      image: '🌭',
+    },
+    {
+      productId: 'SP03',
+      name: 'Pate Gan Gà Nấm Truffle Thượng Hạng',
+      unit: 'Hũ 250g',
+      price: 120000,
+      cost: 75000,
+      qty: 1,
+      image: '🥣',
+    },
+  ],
+  subtotal: 265000,
+  discountType: 'cash',
+  discountValue: 0,
+  discountAmount: 0,
+  shippingFee: 25000,
+  shippingNote: 'Giao trong chiều nay',
+  total: 290000,
+  paymentMethod: 'transfer',
+  paidAmount: 290000,
+  debtAmount: 0,
+};
 
 export const SettingsPage: React.FC = () => {
   const {
@@ -195,11 +238,7 @@ export const SettingsPage: React.FC = () => {
     window.print();
   };
 
-  // Live VietQR preview URL
-  const sampleAmount = 265000;
-  const qrUrl = settings.bankAccount && settings.bankCode
-    ? `https://img.vietqr.io/image/${settings.bankCode}-${settings.bankAccount}-compact2.png?amount=${sampleAmount}&addInfo=HD-MAU&accountName=${encodeURIComponent(settings.bankAccountName || '')}`
-    : '';
+  const printRoot = typeof document !== 'undefined' ? document.getElementById('print-root') : null;
 
   const paperWidthStyle =
     settings.paperSize === 'k57'
@@ -418,6 +457,41 @@ export const SettingsPage: React.FC = () => {
                     </button>
                   ))}
                 </div>
+              </div>
+            </div>
+
+            {/* Font Family Selection (Arial vs System) */}
+            <div className="pt-2 border-t border-slate-100 text-xs">
+              <label className="font-bold text-slate-700 block mb-1.5">Phông chữ in nhiệt:</label>
+              <div className="grid grid-cols-1 sm:grid-cols-2 gap-2">
+                <button
+                  type="button"
+                  onClick={() => setSettings({ ...settings, fontFamily: 'arial' })}
+                  className={`p-2.5 rounded-xl border text-left transition ${
+                    (settings.fontFamily || 'arial') === 'arial'
+                      ? 'border-amber-500 bg-amber-50/50 text-amber-900 shadow-xs'
+                      : 'border-slate-200 hover:bg-slate-50 text-slate-700'
+                  }`}
+                >
+                  <strong className="block text-xs font-bold">Arial (Khuyên dùng in nhiệt)</strong>
+                  <span className="text-[10px] text-slate-500 mt-0.5 block">
+                    Nét chữ thanh mảnh, triệt tiêu bết dính mực ở 203 DPI
+                  </span>
+                </button>
+                <button
+                  type="button"
+                  onClick={() => setSettings({ ...settings, fontFamily: 'system' })}
+                  className={`p-2.5 rounded-xl border text-left transition ${
+                    settings.fontFamily === 'system'
+                      ? 'border-amber-500 bg-amber-50/50 text-amber-900 shadow-xs'
+                      : 'border-slate-200 hover:bg-slate-50 text-slate-700'
+                  }`}
+                >
+                  <strong className="block text-xs font-bold">Phông hệ thống</strong>
+                  <span className="text-[10px] text-slate-500 mt-0.5 block">
+                    Phông web mặc định của hệ điều hành
+                  </span>
+                </button>
               </div>
             </div>
           </div>
@@ -783,191 +857,53 @@ export const SettingsPage: React.FC = () => {
                 lineHeight: 1.35,
               }}
             >
-              {(() => {
-                const renderPreviewContent = (copyLabel?: string) => (
-                  <div className="space-y-2 text-black leading-snug font-sans">
-                    {copyLabel && (
-                      <div className="text-center pb-1 border-b border-dashed border-black">
-                        <span
-                          className="inline-block px-2.5 py-0.5 rounded border border-black font-black text-black tracking-wider uppercase"
-                          style={{ fontSize: '0.85em' }}
-                        >
-                          {copyLabel}
-                        </span>
-                      </div>
-                    )}
-
-                    {/* Header */}
-                    <div className="text-center pb-2 border-b border-dashed border-black space-y-0.5">
-                      {settings.showLogo && <div className="mb-1 leading-none text-black" style={{ fontSize: '1.6em' }}>🌭</div>}
-                      <h2 className="font-black uppercase tracking-wider text-black leading-tight" style={{ fontSize: '1.28em' }}>
-                        {settings.storeName || 'MEXUCXICH CUISINE'}
-                      </h2>
-                      {settings.storeSubtitle && (
-                        <p className="text-black font-semibold italic leading-tight" style={{ fontSize: '0.88em' }}>{settings.storeSubtitle}</p>
-                      )}
-                      {settings.facebook && (
-                        <p className="text-black font-bold leading-tight" style={{ fontSize: '0.92em' }}>{settings.facebook}</p>
-                      )}
-                      {!settings.facebook && settings.hotline && (
-                        <p className="text-black font-black leading-tight" style={{ fontSize: '0.92em' }}>Hotline: {settings.hotline}</p>
-                      )}
-                      {settings.address && (
-                        <p className="text-black font-medium leading-tight" style={{ fontSize: '0.85em' }}>Đ/c: {settings.address}</p>
-                      )}
-                    </div>
-
-                    {/* Order Info Sample */}
-                    <div className="text-center py-1 border-b border-dashed border-black space-y-0.5">
-                      <h3 className="font-black uppercase tracking-wide text-black leading-tight" style={{ fontSize: '1.22em' }}>
-                        HÓA ĐƠN BÁN HÀNG
-                      </h3>
-                      <p className="text-black font-bold leading-tight" style={{ fontSize: '0.92em' }}>
-                        Số HĐ: <strong className="font-black text-black">#DH-SAMPLE</strong>
-                      </p>
-                      <p className="text-black font-semibold italic leading-tight" style={{ fontSize: '0.85em' }}>
-                        15/09/2026 15:30
-                      </p>
-                    </div>
-
-                    {/* Customer Info Sample */}
-                    {settings.showCustomer && (
-                      <div className="py-1.5 border-b border-dashed border-black space-y-1" style={{ fontSize: '0.92em' }}>
-                        <div className="flex justify-between items-baseline">
-                          <span className="text-black font-bold">Khách hàng:</span>
-                          <strong className="text-black font-black">Chị Lan (Zalo Đội Cấn)</strong>
-                        </div>
-                        <div className="flex justify-between items-baseline">
-                          <span className="text-black font-bold">SĐT:</span>
-                          <span className="font-black text-black">0988123456</span>
-                        </div>
-                        <div className="flex justify-between items-start gap-2">
-                          <span className="text-black font-bold shrink-0">Địa chỉ:</span>
-                          <span className="text-right text-black font-bold">12 Đội Cấn, Ba Đình, Hà Nội</span>
-                        </div>
-                        <div className="flex justify-between items-baseline">
-                          <span className="text-black font-bold">Hình thức:</span>
-                          <span className="font-black text-black uppercase">Giao hàng (Ship)</span>
-                        </div>
-                      </div>
-                    )}
-
-                    {/* Items Table Sample (KiotViet 2-Line Layout) */}
-                    <div className="py-2 border-b border-dashed border-black">
-                      <div className="flex justify-between font-black pb-1 border-b border-black text-black uppercase tracking-wider" style={{ fontSize: '0.88em' }}>
-                        <span className="w-1/3 text-left">Đơn giá</span>
-                        <span className="w-1/3 text-center">SL</span>
-                        <span className="w-1/3 text-right">Thành tiền</span>
-                      </div>
-                      <div className="divide-y divide-dashed divide-black">
-                        <div className="py-1.5 space-y-0.5">
-                          <div className="font-black text-black leading-snug" style={{ fontSize: '1.02em' }}>
-                            Xúc xích Heo Thảo Mộc Phô Mai Mozzarella
-                            <span className="font-semibold text-black ml-1" style={{ fontSize: '0.85em' }}>(Gói 500g)</span>
-                          </div>
-                          <div className="flex justify-between items-center text-black" style={{ fontSize: '0.95em' }}>
-                            <span className="w-1/3 text-left font-bold">145.000đ</span>
-                            <span className="w-1/3 text-center font-black">x1</span>
-                            <span className="w-1/3 text-right font-black text-black" style={{ fontSize: '1.05em' }}>145.000đ</span>
-                          </div>
-                        </div>
-                        <div className="py-1.5 space-y-0.5">
-                          <div className="font-black text-black leading-snug" style={{ fontSize: '1.02em' }}>
-                            Pate Gan Gà Nấm Truffle Thượng Hạng
-                            <span className="font-semibold text-black ml-1" style={{ fontSize: '0.85em' }}>(Hũ 250g)</span>
-                          </div>
-                          <div className="flex justify-between items-center text-black" style={{ fontSize: '0.95em' }}>
-                            <span className="w-1/3 text-left font-bold">120.000đ</span>
-                            <span className="w-1/3 text-center font-black">x1</span>
-                            <span className="w-1/3 text-right font-black text-black" style={{ fontSize: '1.05em' }}>120.000đ</span>
-                          </div>
-                        </div>
-                      </div>
-                    </div>
-
-                    {/* Totals */}
-                    <div className="py-2 border-b border-dashed border-black space-y-1" style={{ fontSize: '0.92em' }}>
-                      <div className="flex justify-between text-black">
-                        <span className="font-bold">Tổng số lượng:</span>
-                        <span className="font-black text-black">2</span>
-                      </div>
-                      <div className="flex justify-between text-black">
-                        <span className="font-bold">Tổng tiền hàng:</span>
-                        <span className="font-black text-black">265.000đ</span>
-                      </div>
-                      <div className="flex justify-between text-black">
-                        <span className="font-bold">Phí vận chuyển:</span>
-                        <span className="font-black">+25.000đ</span>
-                      </div>
-                      <div className="flex justify-between items-baseline pt-1.5 border-t border-black font-black text-black">
-                        <span className="uppercase" style={{ fontSize: '1.12em' }}>TỔNG THANH TOÁN:</span>
-                        <span className="font-black text-black" style={{ fontSize: '1.35em' }}>290.000đ</span>
-                      </div>
-                    </div>
-
-                    {/* Dynamic VietQR Preview */}
-                    {settings.showVietQR && qrUrl && (
-                      <div className="py-2 text-center border-b border-dashed border-black space-y-1">
-                        <p className="font-black uppercase tracking-wide text-black" style={{ fontSize: '0.98em' }}>
-                          THÔNG TIN CHUYỂN KHOẢN:
-                        </p>
-                        <p className="font-bold text-black" style={{ fontSize: '0.92em' }}>
-                          {settings.bankCode} - CTK: {settings.bankAccountName}
-                        </p>
-                        <p className="font-black tracking-wider text-black" style={{ fontSize: '1.25em' }}>
-                          {settings.bankAccount}
-                        </p>
-                        {settings.bankNote && (
-                          <p className="text-black font-semibold italic" style={{ fontSize: '0.85em' }}>
-                            ({settings.bankNote})
-                          </p>
-                        )}
-                        <div className="pt-2 flex flex-col items-center justify-center">
-                          <div className="w-28 h-28 bg-white border-2 border-black rounded p-1 flex items-center justify-center">
-                            <img
-                              src={qrUrl}
-                              alt="VietQR Napas"
-                              className="w-24 h-24 object-contain"
-                              onError={(e) => {
-                                (e.target as HTMLElement).style.display = 'none';
-                              }}
-                            />
-                          </div>
-                          <p className="text-black font-bold mt-1" style={{ fontSize: '0.8em' }}>Quét mã VietQR chuyển khoản nhanh</p>
-                        </div>
-                      </div>
-                    )}
-
-                    {/* Footer */}
-                    <div className="text-center pt-2 text-black space-y-0.5">
-                      <p className="font-black text-black" style={{ fontSize: '0.95em' }}>
-                        {settings.footerMessage || 'Chúc quý khách có một bữa ăn hạnh phúc!'}
-                      </p>
-                      <p className="text-black font-semibold italic" style={{ fontSize: '0.8em' }}>
-                        MexucxichCuisine - Ẩm thực thủ công & Đặc sản tuyển chọn
-                      </p>
-                    </div>
+              {settings.printCopies === 2 ? (
+                <div>
+                  <ThermalReceipt order={SAMPLE_ORDER} settings={settings} copyTitle="LIÊN 1: LƯU BẾP / QUẦY" isPreview />
+                  <div className="my-5 py-2 border-b-2 border-dashed border-slate-400 text-center text-[10px] font-bold text-slate-400 uppercase tracking-normal">
+                    ✂ - - - - - - - CẮT TẠI ĐÂY - - - - - - - ✂
                   </div>
-                );
-
-                if (settings.printCopies === 2) {
-                  return (
-                    <>
-                      {renderPreviewContent('LIÊN 1: LƯU BẾP / QUẦY')}
-                      <div className="my-5 py-2 border-b-2 border-dashed border-slate-400 text-center text-[10px] font-bold text-slate-400 uppercase tracking-widest">
-                        ✂ - - - - - - - CẮT TẠI ĐÂY - - - - - - - ✂
-                      </div>
-                      {renderPreviewContent('LIÊN 2: GIAO KHÁCH')}
-                    </>
-                  );
-                }
-
-                return renderPreviewContent();
-              })()}
+                  <ThermalReceipt order={SAMPLE_ORDER} settings={settings} copyTitle="LIÊN 2: GIAO KHÁCH" isPreview />
+                </div>
+              ) : (
+                <ThermalReceipt order={SAMPLE_ORDER} settings={settings} isPreview />
+              )}
             </div>
           </div>
         </div>
       </div>
+
+      {/* Real Thermal Print Portal for Settings Test Print */}
+      {printRoot && createPortal(
+        <div
+          style={{
+            fontSize: `${
+              settings.fontSize === 'small' ? 11.5 : settings.fontSize === 'large' ? 16 : 13.5
+            }px`,
+            lineHeight: 1.35,
+            width: settings.paperSize === 'k57' ? '57mm' : '80mm',
+          }}
+        >
+          {settings.printCopies === 2 ? (
+            <>
+              <div className="thermal-print-copy has-next-copy">
+                <ThermalReceipt order={SAMPLE_ORDER} settings={settings} copyTitle="LIÊN 1: LƯU BẾP / QUẦY" />
+                <div style={{ height: '6mm' }} />
+              </div>
+              <div className="thermal-print-copy">
+                <ThermalReceipt order={SAMPLE_ORDER} settings={settings} copyTitle="LIÊN 2: GIAO CHO KHÁCH" />
+                <div style={{ height: '6mm' }} />
+              </div>
+            </>
+          ) : (
+            <div className="thermal-print-copy">
+              <ThermalReceipt order={SAMPLE_ORDER} settings={settings} />
+              <div style={{ height: '6mm' }} />
+            </div>
+          )}
+        </div>,
+        printRoot
+      )}
     </div>
   );
 };
