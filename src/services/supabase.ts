@@ -3,19 +3,25 @@ import { Product, Customer, Order, DebtPayment, ReceiptSettings, CloudConfig } f
 
 const CLOUD_CONFIG_KEY = 'mexucxich_cloud_config';
 
+export const DEFAULT_SUPABASE_URL = 'https://lfbrlicpptedjypryswo.supabase.co';
+export const DEFAULT_SUPABASE_ANON_KEY = 'sb_publishable_XmpBtPNysCkaLPnPR1gSkQ_eCfnjNbt';
+
 export const getSupabaseConfig = (): CloudConfig => {
   try {
     const saved = localStorage.getItem(CLOUD_CONFIG_KEY);
     if (saved) {
-      return JSON.parse(saved);
+      const parsed = JSON.parse(saved);
+      if (parsed.supabaseUrl && parsed.supabaseAnonKey) {
+        return parsed;
+      }
     }
   } catch (e) {
     console.error('Error reading cloud config:', e);
   }
 
-  // Fallback to Vite env variables if set
-  const envUrl = (import.meta as any).env?.VITE_SUPABASE_URL || '';
-  const envKey = (import.meta as any).env?.VITE_SUPABASE_ANON_KEY || '';
+  // Fallback to Vite env variables or project defaults
+  const envUrl = (import.meta as any).env?.VITE_SUPABASE_URL || DEFAULT_SUPABASE_URL;
+  const envKey = (import.meta as any).env?.VITE_SUPABASE_ANON_KEY || DEFAULT_SUPABASE_ANON_KEY;
 
   return {
     supabaseUrl: envUrl,

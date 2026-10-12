@@ -134,24 +134,44 @@ export const StoreProvider: React.FC<{ children: React.ReactNode }> = ({ childre
     localStorage.setItem(STORAGE_KEYS.SETTINGS, JSON.stringify(receiptSettings));
   }, [receiptSettings]);
 
-  // Initial pull from Supabase if configured and autoSync is enabled
+  // Initial pull and auto-refresh on tab focus/visibility change from Supabase
   useEffect(() => {
-    if (cloudConfig.supabaseUrl && cloudConfig.supabaseAnonKey && cloudConfig.autoSync) {
-      pullAllDataFromCloud().then(cloudData => {
-        if (cloudData && (cloudData.products.length > 0 || cloudData.orders.length > 0)) {
-          setProducts(cloudData.products);
-          setCustomers(cloudData.customers);
-          setOrders(cloudData.orders);
-          setDebtPayments(cloudData.debtPayments);
-          if (cloudData.settings) {
-            setReceiptSettings(prev => ({ ...prev, ...cloudData.settings }));
+    const refreshCloud = () => {
+      if (cloudConfig.supabaseUrl && cloudConfig.supabaseAnonKey && cloudConfig.autoSync) {
+        pullAllDataFromCloud().then(cloudData => {
+          if (cloudData && (cloudData.products.length > 0 || cloudData.orders.length > 0)) {
+            setProducts(cloudData.products);
+            setCustomers(cloudData.customers);
+            setOrders(cloudData.orders);
+            setDebtPayments(cloudData.debtPayments);
+            if (cloudData.settings) {
+              setReceiptSettings(prev => ({ ...prev, ...cloudData.settings }));
+            }
+            console.log('✅ Đã đồng bộ dữ liệu mới nhất từ Supabase Cloud!');
           }
-          console.log('✅ Đã đồng bộ dữ liệu mới nhất từ Supabase Cloud!');
-        }
-      }).catch(err => {
-        console.warn('Không thể tự động đồng bộ từ Cloud lúc mở app:', err);
-      });
-    }
+        }).catch(err => {
+          console.warn('Không thể tự động đồng bộ từ Cloud:', err);
+        });
+      }
+    };
+
+    // Run on mount
+    refreshCloud();
+
+    // Auto-refresh when user switches back to browser tab on mobile
+    const handleVisibility = () => {
+      if (document.visibilityState === 'visible') {
+        refreshCloud();
+      }
+    };
+
+    window.addEventListener('focus', refreshCloud);
+    document.addEventListener('visibilitychange', handleVisibility);
+
+    return () => {
+      window.removeEventListener('focus', refreshCloud);
+      document.removeEventListener('visibilitychange', handleVisibility);
+    };
   }, [cloudConfig.supabaseUrl, cloudConfig.supabaseAnonKey, cloudConfig.autoSync]);
 
   const updateCloudConfig = (newConfig: CloudConfig) => {
