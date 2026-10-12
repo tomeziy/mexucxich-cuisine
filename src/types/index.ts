@@ -8,6 +8,7 @@ export interface Product {
   stock: number;
   image: string;
   createdAt?: string;
+  updatedAt?: string;
 }
 
 export interface Customer {
@@ -19,6 +20,7 @@ export interface Customer {
   totalSpent?: number;
   orderCount?: number;
   createdAt?: string;
+  updatedAt?: string;
 }
 
 export interface OrderItem {
@@ -39,6 +41,7 @@ export type PaymentMethod = 'cash' | 'transfer' | 'debt' | 'partial';
 export interface Order {
   id: string;
   createdAt: string;
+  updatedAt?: string;
   customerId: string;
   customerName: string;
   customerPhone?: string;
@@ -68,6 +71,7 @@ export interface DebtPayment {
   paymentMethod: 'cash' | 'transfer';
   note?: string;
   createdAt: string;
+  updatedAt?: string;
 }
 
 export type PaperSize = 'k80' | 'k57' | 'a5' | 'a4';

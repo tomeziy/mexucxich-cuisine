@@ -1,0 +1,39 @@
+{
+  "id": "TC-008",
+  "title": "Xử lý xung đột đồng bộ đa thiết bị (Desktop quầy vs Điện thoại chủ) & Trừ kho nguyên tử (ADR-0008)",
+  "status": "deployed",
+  "created_at": "2026-10-12T15:45:00+07:00",
+  "updated_at": "2026-10-12T16:05:00+07:00",
+  "state_history": [
+    { "state": "planned", "timestamp": "2026-10-12T15:45:00+07:00", "actor": "Antigravity" },
+    { "state": "implemented", "timestamp": "2026-10-12T15:55:00+07:00", "actor": "Antigravity" },
+    { "state": "tested", "timestamp": "2026-10-12T16:02:00+07:00", "actor": "Antigravity" },
+    { "state": "verified", "timestamp": "2026-10-12T16:05:00+07:00", "actor": "Antigravity" }
+  ],
+  "context": {
+    "adr": ["ADR-0008"],
+    "features": [
+      "Hàm SQL RPC adjust_product_stock(p_id text, p_delta numeric) trừ kho nguyên tử chống Race Condition giữa máy quầy và điện thoại",
+      "Cơ chế Fallback tính delta cục bộ kèm cập nhật updated_at an toàn khi RPC chưa sẵn sàng",
+      "Bổ sung trường updated_at vào bảng products, customers, orders, debt_payments và TypeScript interfaces",
+      "Thuật toán giải quyết xung đột dựa trên dấu thời gian (localTime > cloudTime bảo vệ thay đổi cục bộ khỏi stale snapshot)",
+      "Bảo toàn các đơn hàng và khách hàng mới tạo ngoại tuyến (offline-created entities) không bị xóa khi kéo dữ liệu Cloud",
+      "Tập kiểm thử tự động scripts/test_sync_conflict.js với 100% test case đạt chuẩn cho atomic delta, timestamp parsing và danh sách hợp nhất"
+    ]
+  },
+  "progress_summary": "Đã triển khai thành công giải pháp xử lý xung đột đồng bộ đa thiết bị và trừ kho nguyên tử ADR-0008. Khắc phục triệt để lỗi ghi đè tồn kho khi nhiều thiết bị bán hàng cùng lúc; bảo vệ dữ liệu cục bộ mới cập nhật tại quầy khỏi bị các bản snapshot cũ từ Cloud ghi đè; vượt qua 100% kiểm thử test_sync_conflict.js và test_adr0007.js; hoàn thành kiểm tra biên dịch tsc 0 lỗi và build production thành công.",
+  "files_in_progress": [
+    "src/types/index.ts",
+    "src/services/syncConflict.ts",
+    "src/services/supabase.ts",
+    "src/context/StoreContext.tsx",
+    "docs/supabase_schema.sql",
+    "supabase_schema.sql",
+    "scripts/test_sync_conflict.js",
+    "docs/adr/0008-cross-device-sync-conflict-resolution.md"
+  ],
+  "blockers": [],
+  "next_steps": [
+    "Khuyến nghị người dùng chạy lệnh SQL tạo hàm adjust_product_stock trên Supabase SQL Editor nếu muốn bật tính năng RPC tức thì"
+  ]
+}

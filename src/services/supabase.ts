@@ -1,5 +1,26 @@
 import { createClient, SupabaseClient } from '@supabase/supabase-js';
 import { Product, Customer, Order, DebtPayment, ReceiptSettings, CloudConfig } from '../types';
+import {
+  calculateStockDelta,
+  getEntityTimestamp,
+  resolveProductConflict,
+  resolveCustomerConflict,
+  mergeProductsWithConflictResolution,
+  mergeCustomersWithConflictResolution,
+  mergeOrders,
+  mergeDebtPayments,
+} from './syncConflict';
+
+export {
+  calculateStockDelta,
+  getEntityTimestamp,
+  resolveProductConflict,
+  resolveCustomerConflict,
+  mergeProductsWithConflictResolution,
+  mergeCustomersWithConflictResolution,
+  mergeOrders,
+  mergeDebtPayments,
+};
 
 const CLOUD_CONFIG_KEY = 'mexucxich_cloud_config';
 
@@ -100,6 +121,7 @@ export const transformProductToDb = (p: Product) => ({
   stock: p.stock,
   image: p.image,
   created_at: p.createdAt || new Date().toISOString(),
+  updated_at: p.updatedAt || p.createdAt || new Date().toISOString(),
 });
 
 export const transformProductFromDb = (row: any): Product => ({
@@ -112,6 +134,7 @@ export const transformProductFromDb = (row: any): Product => ({
   stock: Number(row.stock) || 0,
   image: row.image || '🌭',
   createdAt: row.created_at,
+  updatedAt: row.updated_at || row.created_at,
 });
 
 export const transformCustomerToDb = (c: Customer) => ({
@@ -123,6 +146,7 @@ export const transformCustomerToDb = (c: Customer) => ({
   total_spent: c.totalSpent || 0,
   order_count: c.orderCount || 0,
   created_at: c.createdAt || new Date().toISOString(),
+  updated_at: c.updatedAt || c.createdAt || new Date().toISOString(),
 });
 
 export const transformCustomerFromDb = (row: any): Customer => ({
@@ -134,11 +158,13 @@ export const transformCustomerFromDb = (row: any): Customer => ({
   totalSpent: Number(row.total_spent) || 0,
   orderCount: Number(row.order_count) || 0,
   createdAt: row.created_at,
+  updatedAt: row.updated_at || row.created_at,
 });
 
 export const transformOrderToDb = (o: Order) => ({
   id: o.id,
   created_at: o.createdAt || new Date().toISOString(),
+  updated_at: o.updatedAt || o.createdAt || new Date().toISOString(),
   customer_id: o.customerId,
   customer_name: o.customerName,
   customer_phone: o.customerPhone || '',
@@ -163,6 +189,7 @@ export const transformOrderToDb = (o: Order) => ({
 export const transformOrderFromDb = (row: any): Order => ({
   id: row.id,
   createdAt: row.created_at,
+  updatedAt: row.updated_at || row.created_at,
   customerId: row.customer_id,
   customerName: row.customer_name,
   customerPhone: row.customer_phone,
@@ -192,6 +219,7 @@ export const transformDebtPaymentToDb = (dp: DebtPayment) => ({
   payment_method: dp.paymentMethod,
   note: dp.note || '',
   created_at: dp.createdAt || new Date().toISOString(),
+  updated_at: dp.updatedAt || dp.createdAt || new Date().toISOString(),
 });
 
 export const transformDebtPaymentFromDb = (row: any): DebtPayment => ({
@@ -202,6 +230,7 @@ export const transformDebtPaymentFromDb = (row: any): DebtPayment => ({
   paymentMethod: row.payment_method || 'cash',
   note: row.note || '',
   createdAt: row.created_at,
+  updatedAt: row.updated_at || row.created_at,
 });
 
 /**
@@ -270,14 +299,22 @@ export const pushAllDataToCloud = async (data: {
 };
 
 /**
- * Tải toàn bộ dữ liệu từ Supabase về
+ * Tải toàn bộ dữ liệu từ Supabase về kèm cơ chế giải quyết xung đột (ADR-0008)
+ * Nếu truyền vào localData, hàm sẽ bảo vệ các bản ghi cục bộ có updatedAt mới hơn,
+ * ngăn không cho dữ liệu Cloud cũ hơn ghi đè mất mát.
  */
-export const pullAllDataFromCloud = async (): Promise<{
+export const pullAllDataFromCloud = async (localData?: {
+  products?: Product[];
+  customers?: Customer[];
+  orders?: Order[];
+  debtPayments?: DebtPayment[];
+}): Promise<{
   products: Product[];
   customers: Customer[];
   orders: Order[];
   debtPayments: DebtPayment[];
   settings?: ReceiptSettings;
+  localPreservedCount?: number;
 } | null> => {
   const client = getSupabaseClient();
   if (!client) return null;
@@ -296,17 +333,133 @@ export const pullAllDataFromCloud = async (): Promise<{
       return null;
     }
 
+    const cloudProducts = (pRes.data || []).map(transformProductFromDb);
+    const cloudCustomers = (cRes.data || []).map(transformCustomerFromDb);
+    const cloudOrders = (oRes.data || []).map(transformOrderFromDb);
+    const cloudDebtPayments = (dpRes.data || []).map(transformDebtPaymentFromDb);
+
+    let finalProducts = cloudProducts;
+    let finalCustomers = cloudCustomers;
+    let finalOrders = cloudOrders;
+    let finalDebtPayments = cloudDebtPayments;
+    let localPreservedCount = 0;
+
+    if (localData) {
+      if (localData.products && localData.products.length > 0) {
+        const pMerge = mergeProductsWithConflictResolution(localData.products, cloudProducts);
+        finalProducts = pMerge.merged;
+        localPreservedCount += pMerge.localPreserved.length;
+      }
+      if (localData.customers && localData.customers.length > 0) {
+        const cMerge = mergeCustomersWithConflictResolution(localData.customers, cloudCustomers);
+        finalCustomers = cMerge.merged;
+        localPreservedCount += cMerge.localPreserved.length;
+      }
+      if (localData.orders && localData.orders.length > 0) {
+        const cloudOrderIds = new Set(cloudOrders.map(o => o.id));
+        const unsyncedOrders = localData.orders.filter(o => !cloudOrderIds.has(o.id));
+        finalOrders = mergeOrders(localData.orders, cloudOrders);
+        localPreservedCount += unsyncedOrders.length;
+      }
+      if (localData.debtPayments && localData.debtPayments.length > 0) {
+        finalDebtPayments = mergeDebtPayments(localData.debtPayments, cloudDebtPayments);
+      }
+    }
+
     return {
-      products: (pRes.data || []).map(transformProductFromDb),
-      customers: (cRes.data || []).map(transformCustomerFromDb),
-      orders: (oRes.data || []).map(transformOrderFromDb),
-      debtPayments: (dpRes.data || []).map(transformDebtPaymentFromDb),
+      products: finalProducts,
+      customers: finalCustomers,
+      orders: finalOrders,
+      debtPayments: finalDebtPayments,
       settings: sRes.data?.data as ReceiptSettings | undefined,
+      localPreservedCount,
     };
   } catch (e) {
     console.error('Failed to pull data from Supabase:', e);
     return null;
   }
+};
+
+export interface ProductStockAdjustmentResult {
+  productId: string;
+  success: boolean;
+  newStock?: number;
+  method?: 'rpc' | 'fallback';
+}
+
+/**
+ * Điều chỉnh tồn kho nguyên tử (Atomic Stock Adjustment - ADR-0008)
+ * Gọi hàm SQL RPC 'adjust_product_stock' trên Supabase để ngăn chặn Race Condition
+ * khi nhiều thiết bị (PC quầy & ĐT chủ) tạo đơn đồng thời.
+ * Tự động kích hoạt cơ chế Fallback (đọc tồn kho Cloud + tính delta + ghi lại) nếu RPC chưa được tạo.
+ */
+export const cloudAdjustProductStock = async (
+  productId: string,
+  delta: number
+): Promise<{ success: boolean; newStock?: number; method?: 'rpc' | 'fallback' }> => {
+  if (!productId) return { success: false };
+  const client = getSupabaseClient();
+  if (!client) return { success: false };
+
+  try {
+    // 1. Thử gọi hàm RPC adjust_product_stock nguyên tử trên Supabase
+    const { data, error } = await client.rpc('adjust_product_stock', {
+      p_id: productId,
+      p_delta: delta,
+    });
+
+    if (!error && data !== null && data !== undefined) {
+      return { success: true, newStock: Number(data), method: 'rpc' };
+    }
+
+    console.warn('RPC adjust_product_stock chưa khả dụng hoặc lỗi, kích hoạt local delta fallback:', error?.message);
+
+    // 2. Fallback: Đọc tồn kho hiện tại trên Cloud, tính delta và ghi lại kèm updated_at
+    const { data: currentData, error: fetchErr } = await client
+      .from('products')
+      .select('stock')
+      .eq('id', productId)
+      .maybeSingle();
+
+    if (!fetchErr && currentData) {
+      const currentStock = Number(currentData.stock) || 0;
+      const updatedStock = calculateStockDelta(currentStock, delta);
+      const now = new Date().toISOString();
+
+      const { error: updateErr } = await client
+        .from('products')
+        .update({ stock: updatedStock, updated_at: now })
+        .eq('id', productId);
+
+      if (!updateErr) {
+        return { success: true, newStock: updatedStock, method: 'fallback' };
+      }
+    }
+
+    return { success: false };
+  } catch (e) {
+    console.error('cloudAdjustProductStock error:', e);
+    return { success: false };
+  }
+};
+
+/**
+ * Điều chỉnh tồn kho hàng loạt nguyên tử cho giỏ hàng nhiều món
+ */
+export const cloudAdjustProductsStockBatch = async (
+  adjustments: Array<{ productId: string; delta: number }>
+): Promise<ProductStockAdjustmentResult[]> => {
+  const results: ProductStockAdjustmentResult[] = [];
+  for (const adj of adjustments) {
+    const res = await cloudAdjustProductStock(adj.productId, adj.delta);
+    results.push({
+      productId: adj.productId,
+      success: res.success,
+      newStock: res.newStock,
+      method: res.method,
+    });
+  }
+  return results;
 };
 
 // Single item sync helpers
@@ -415,7 +568,7 @@ export const cloudSyncSettings = async (s: ReceiptSettings) => {
   }
 };
 
-export const SUPABASE_SCHEMA_SQL = `-- MEXUCXICH CUISINE - SUPABASE SCHEMA (ADR-0006)
+export const SUPABASE_SCHEMA_SQL = `-- MEXUCXICH CUISINE - SUPABASE SCHEMA (ADR-0006 & ADR-0008)
 create table if not exists products (
   id text primary key,
   name text not null,
@@ -425,7 +578,8 @@ create table if not exists products (
   cost numeric default 0,
   stock numeric default 0,
   image text default '🌭',
-  created_at timestamptz default now()
+  created_at timestamptz default now(),
+  updated_at timestamptz default now()
 );
 
 create table if not exists customers (
@@ -436,12 +590,14 @@ create table if not exists customers (
   debt numeric default 0,
   total_spent numeric default 0,
   order_count integer default 0,
-  created_at timestamptz default now()
+  created_at timestamptz default now(),
+  updated_at timestamptz default now()
 );
 
 create table if not exists orders (
   id text primary key,
   created_at timestamptz default now(),
+  updated_at timestamptz default now(),
   customer_id text,
   customer_name text,
   customer_phone text,
@@ -470,7 +626,8 @@ create table if not exists debt_payments (
   amount numeric default 0,
   payment_method text default 'cash',
   note text default '',
-  created_at timestamptz default now()
+  created_at timestamptz default now(),
+  updated_at timestamptz default now()
 );
 
 create table if not exists store_settings (
@@ -478,6 +635,33 @@ create table if not exists store_settings (
   data jsonb not null,
   updated_at timestamptz default now()
 );
+
+-- Đảm bảo tương thích ngược: Bổ sung cột updated_at nếu bảng đã tồn tại từ trước
+alter table products add column if not exists updated_at timestamptz default now();
+alter table customers add column if not exists updated_at timestamptz default now();
+alter table orders add column if not exists updated_at timestamptz default now();
+alter table debt_payments add column if not exists updated_at timestamptz default now();
+
+-- Hàm điều chỉnh tồn kho nguyên tử (Atomic Stock Adjustment - ADR-0008)
+create or replace function adjust_product_stock(p_id text, p_delta numeric)
+returns numeric
+language plpgsql
+security definer
+as $$
+declare
+  v_new_stock numeric;
+begin
+  update products
+  set stock = greatest(0, coalesce(stock, 0) + p_delta),
+      updated_at = now()
+  where id = p_id
+  returning stock into v_new_stock;
+
+  return v_new_stock;
+end;
+$$;
+
+grant execute on function adjust_product_stock(p_id text, p_delta numeric) to anon, authenticated, service_role;
 
 alter table products enable row level security;
 alter table customers enable row level security;

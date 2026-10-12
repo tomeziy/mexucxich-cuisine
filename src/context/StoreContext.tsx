@@ -1,4 +1,4 @@
-import React, { createContext, useContext, useState, useEffect, useCallback } from 'react';
+import React, { createContext, useContext, useState, useEffect, useCallback, useRef } from 'react';
 import { Product, Customer, Order, DebtPayment, ReceiptSettings, OrderStatus, CloudConfig } from '../types';
 import { INITIAL_PRODUCTS, INITIAL_CUSTOMERS, DEFAULT_RECEIPT_SETTINGS } from '../data/initialData';
 import {
@@ -16,6 +16,13 @@ import {
   cloudSyncSettings,
   pushAllDataToCloud,
   pullAllDataFromCloud,
+  cloudAdjustProductStock,
+  cloudAdjustProductsStockBatch,
+  mergeProductsWithConflictResolution,
+  mergeCustomersWithConflictResolution,
+  mergeOrders,
+  mergeDebtPayments,
+  calculateStockDelta,
 } from '../services/supabase';
 
 interface StoreContextType {
@@ -65,13 +72,21 @@ export const StoreProvider: React.FC<{ children: React.ReactNode }> = ({ childre
   // Products state
   const [products, setProducts] = useState<Product[]>(() => {
     const saved = localStorage.getItem(STORAGE_KEYS.PRODUCTS);
-    return saved ? JSON.parse(saved) : INITIAL_PRODUCTS;
+    const initial: Product[] = saved ? JSON.parse(saved) : INITIAL_PRODUCTS;
+    return initial.map(p => ({
+      ...p,
+      updatedAt: p.updatedAt || p.createdAt || '2026-09-01T08:00:00Z',
+    }));
   });
 
   // Customers state
   const [customers, setCustomers] = useState<Customer[]>(() => {
     const saved = localStorage.getItem(STORAGE_KEYS.CUSTOMERS);
-    return saved ? JSON.parse(saved) : INITIAL_CUSTOMERS;
+    const initial: Customer[] = saved ? JSON.parse(saved) : INITIAL_CUSTOMERS;
+    return initial.map(c => ({
+      ...c,
+      updatedAt: c.updatedAt || c.createdAt || '2026-09-01T08:00:00Z',
+    }));
   });
 
   // Orders state
@@ -113,6 +128,12 @@ export const StoreProvider: React.FC<{ children: React.ReactNode }> = ({ childre
     }
   });
 
+  // Đồng bộ ref lưu giữ state mới nhất phục vụ pullAllDataFromCloud chống stale closure
+  const stateRef = useRef({ products, customers, orders, debtPayments, receiptSettings });
+  useEffect(() => {
+    stateRef.current = { products, customers, orders, debtPayments, receiptSettings };
+  }, [products, customers, orders, debtPayments, receiptSettings]);
+
   // Sync to localStorage
   useEffect(() => {
     localStorage.setItem(STORAGE_KEYS.PRODUCTS, JSON.stringify(products));
@@ -138,7 +159,14 @@ export const StoreProvider: React.FC<{ children: React.ReactNode }> = ({ childre
   useEffect(() => {
     const refreshCloud = () => {
       if (cloudConfig.supabaseUrl && cloudConfig.supabaseAnonKey && cloudConfig.autoSync) {
-        pullAllDataFromCloud().then(cloudData => {
+        const localData = {
+          products: stateRef.current.products,
+          customers: stateRef.current.customers,
+          orders: stateRef.current.orders,
+          debtPayments: stateRef.current.debtPayments,
+        };
+
+        pullAllDataFromCloud(localData).then(cloudData => {
           if (cloudData && (cloudData.products.length > 0 || cloudData.orders.length > 0)) {
             setProducts(cloudData.products);
             setCustomers(cloudData.customers);
@@ -147,7 +175,7 @@ export const StoreProvider: React.FC<{ children: React.ReactNode }> = ({ childre
             if (cloudData.settings) {
               setReceiptSettings(prev => ({ ...prev, ...cloudData.settings }));
             }
-            console.log('✅ Đã đồng bộ dữ liệu mới nhất từ Supabase Cloud!');
+            console.log('✅ Đã đồng bộ dữ liệu mới nhất từ Supabase Cloud kèm giải quyết xung đột!');
           }
         }).catch(err => {
           console.warn('Không thể tự động đồng bộ từ Cloud:', err);
@@ -190,30 +218,56 @@ export const StoreProvider: React.FC<{ children: React.ReactNode }> = ({ childre
   }, [products, customers, orders, debtPayments, receiptSettings]);
 
   const syncCloudToLocal = useCallback(async (): Promise<{ success: boolean; message: string }> => {
-    const cloudData = await pullAllDataFromCloud();
-    if (!cloudData) {
+    const localData = {
+      products: stateRef.current.products,
+      customers: stateRef.current.customers,
+      orders: stateRef.current.orders,
+      debtPayments: stateRef.current.debtPayments,
+    };
+
+    const pullRes = await pullAllDataFromCloud(localData);
+    if (!pullRes) {
       return { success: false, message: 'Không thể kết nối hoặc tải dữ liệu từ Supabase Cloud!' };
     }
-    setProducts(cloudData.products);
-    setCustomers(cloudData.customers);
-    setOrders(cloudData.orders);
-    setDebtPayments(cloudData.debtPayments);
-    if (cloudData.settings) {
-      setReceiptSettings(cloudData.settings);
+
+    // 1. Đồng bộ tức thời vào localStorage tránh Race Condition khi trang reload (ADR-0008)
+    localStorage.setItem(STORAGE_KEYS.PRODUCTS, JSON.stringify(pullRes.products));
+    localStorage.setItem(STORAGE_KEYS.CUSTOMERS, JSON.stringify(pullRes.customers));
+    localStorage.setItem(STORAGE_KEYS.ORDERS, JSON.stringify(pullRes.orders));
+    localStorage.setItem(STORAGE_KEYS.DEBT_PAYMENTS, JSON.stringify(pullRes.debtPayments));
+    if (pullRes.settings) {
+      localStorage.setItem(STORAGE_KEYS.SETTINGS, JSON.stringify(pullRes.settings));
     }
+
+    // 2. Cập nhật React state
+    setProducts(pullRes.products);
+    setCustomers(pullRes.customers);
+    setOrders(pullRes.orders);
+    setDebtPayments(pullRes.debtPayments);
+    if (pullRes.settings) {
+      setReceiptSettings(pullRes.settings);
+    }
+
+    const preservedCount = pullRes.localPreservedCount || 0;
+    const note = preservedCount > 0
+      ? ` (Đã bảo toàn ${preservedCount} bản ghi có cập nhật mới hơn trên máy)`
+      : '';
+
     return {
       success: true,
-      message: `Đã nạp thành công ${cloudData.products.length} món, ${cloudData.customers.length} khách, ${cloudData.orders.length} đơn từ Cloud về máy!`,
+      message: `Đã nạp thành công ${pullRes.products.length} món, ${pullRes.customers.length} khách, ${pullRes.orders.length} đơn từ Cloud về máy!${note}`,
     };
   }, []);
 
   // Product actions
   const addProduct = (productData: Omit<Product, 'id'>): Product => {
     const newId = `SP_${Date.now()}_${Math.floor(1000 + Math.random() * 9000)}`;
+    const now = new Date().toISOString();
     const newProduct: Product = {
       ...productData,
       id: newId,
-      createdAt: new Date().toISOString(),
+      createdAt: now,
+      updatedAt: now,
     };
     setProducts(prev => [newProduct, ...prev]);
     cloudSyncProduct(newProduct);
@@ -222,10 +276,12 @@ export const StoreProvider: React.FC<{ children: React.ReactNode }> = ({ childre
 
   const addProductsBatch = (productsData: Array<Omit<Product, 'id'>>): Product[] => {
     const timestamp = Date.now();
+    const now = new Date().toISOString();
     const newProducts: Product[] = productsData.map((p, idx) => ({
       ...p,
       id: `SP_${timestamp}_${idx}_${Math.random().toString(36).substring(2, 6)}`,
-      createdAt: new Date().toISOString(),
+      createdAt: now,
+      updatedAt: now,
     }));
     setProducts(prev => [...newProducts, ...prev]);
     cloudSyncProductsBatch(newProducts);
@@ -233,10 +289,11 @@ export const StoreProvider: React.FC<{ children: React.ReactNode }> = ({ childre
   };
 
   const updateProduct = (id: string, updatedData: Partial<Product>) => {
+    const now = new Date().toISOString();
     setProducts(prev =>
       prev.map(p => {
         if (p.id === id) {
-          const updated = { ...p, ...updatedData };
+          const updated = { ...p, ...updatedData, updatedAt: now };
           cloudSyncProduct(updated);
           return updated;
         }
@@ -253,13 +310,15 @@ export const StoreProvider: React.FC<{ children: React.ReactNode }> = ({ childre
   // Customer actions
   const addCustomer = (customerData: Omit<Customer, 'id' | 'debt' | 'totalSpent' | 'orderCount'>): Customer => {
     const newId = `KH_${Date.now()}_${Math.floor(1000 + Math.random() * 9000)}`;
+    const now = new Date().toISOString();
     const newCustomer: Customer = {
       ...customerData,
       id: newId,
       debt: 0,
       totalSpent: 0,
       orderCount: 0,
-      createdAt: new Date().toISOString(),
+      createdAt: now,
+      updatedAt: now,
     };
     setCustomers(prev => [newCustomer, ...prev]);
     cloudSyncCustomer(newCustomer);
@@ -268,13 +327,15 @@ export const StoreProvider: React.FC<{ children: React.ReactNode }> = ({ childre
 
   const addCustomersBatch = (customersData: Array<Omit<Customer, 'id' | 'totalSpent' | 'orderCount'>>): Customer[] => {
     const timestamp = Date.now();
+    const now = new Date().toISOString();
     const newCustomers: Customer[] = customersData.map((c, idx) => ({
       ...c,
       id: `KH_${timestamp}_${idx}_${Math.random().toString(36).substring(2, 6)}`,
       debt: c.debt || 0,
       totalSpent: 0,
       orderCount: 0,
-      createdAt: new Date().toISOString(),
+      createdAt: now,
+      updatedAt: now,
     }));
     setCustomers(prev => [...newCustomers, ...prev]);
     cloudSyncCustomersBatch(newCustomers);
@@ -282,10 +343,11 @@ export const StoreProvider: React.FC<{ children: React.ReactNode }> = ({ childre
   };
 
   const updateCustomer = (id: string, updatedData: Partial<Customer>) => {
+    const now = new Date().toISOString();
     setCustomers(prev =>
       prev.map(c => {
         if (c.id === id) {
-          const updated = { ...c, ...updatedData };
+          const updated = { ...c, ...updatedData, updatedAt: now };
           cloudSyncCustomer(updated);
           return updated;
         }
@@ -302,30 +364,60 @@ export const StoreProvider: React.FC<{ children: React.ReactNode }> = ({ childre
   // Order actions
   const createOrder = (orderData: Omit<Order, 'id' | 'createdAt'>): Order => {
     const newId = 'HD' + Math.floor(1000 + Math.random() * 9000);
+    const now = new Date().toISOString();
     const newOrder: Order = {
       ...orderData,
       id: newId,
-      createdAt: new Date().toISOString(),
+      createdAt: now,
+      updatedAt: now,
     };
 
-    // 1. Deduct stock immediately (ADR-0003)
-    setProducts(prevProducts => {
-      return prevProducts.map(prod => {
-        const item = newOrder.items.find(i => i.productId === prod.id);
-        if (item) {
-          const newStock = Math.max(0, prod.stock - item.qty);
-          const updated = { ...prod, stock: newStock };
-          cloudSyncProduct(updated);
-          return updated;
+    // 1. Trừ tồn kho nguyên tử chống Race Condition (ADR-0003 & ADR-0008)
+    // Gom nhóm số lượng theo productId để xử lý chính xác nhiều dòng cùng 1 món
+    const qtyByProduct = new Map<string, number>();
+    for (const item of newOrder.items || []) {
+      if (item && item.productId) {
+        qtyByProduct.set(item.productId, (qtyByProduct.get(item.productId) || 0) + (Number(item.qty) || 0));
+      }
+    }
+
+    if (qtyByProduct.size > 0) {
+      setProducts(prevProducts =>
+        prevProducts.map(prod => {
+          const qty = qtyByProduct.get(prod.id);
+          if (qty && qty > 0) {
+            const newStock = calculateStockDelta(prod.stock, -qty);
+            return { ...prod, stock: newStock, updatedAt: now };
+          }
+          return prod;
+        })
+      );
+
+      const adjustments = Array.from(qtyByProduct.entries()).map(([productId, qty]) => ({
+        productId,
+        delta: -qty,
+      }));
+
+      cloudAdjustProductsStockBatch(adjustments).then(results => {
+        if (results && results.length > 0) {
+          setProducts(prev =>
+            prev.map(p => {
+              const match = results.find(r => r.productId === p.id && r.success && typeof r.newStock === 'number');
+              if (match && typeof match.newStock === 'number') {
+                return { ...p, stock: match.newStock };
+              }
+              return p;
+            })
+          );
         }
-        return prod;
       });
-    });
+    }
 
     // 2. Update customer metrics & debt if applicable (ADR-0002)
     if (newOrder.customerId) {
       setCustomers(prevCustomers => {
-        return prevCustomers.map(cust => {
+        let updatedCust: Customer | null = null;
+        const nextList = prevCustomers.map(cust => {
           if (cust.id === newOrder.customerId) {
             const newDebt = cust.debt + (newOrder.debtAmount || 0);
             const newTotalSpent = (cust.totalSpent || 0) + newOrder.total;
@@ -335,12 +427,17 @@ export const StoreProvider: React.FC<{ children: React.ReactNode }> = ({ childre
               debt: newDebt,
               totalSpent: newTotalSpent,
               orderCount: newOrderCount,
+              updatedAt: now,
             };
-            cloudSyncCustomer(updated);
+            updatedCust = updated;
             return updated;
           }
           return cust;
         });
+        if (updatedCust) {
+          cloudSyncCustomer(updatedCust);
+        }
+        return nextList;
       });
     }
 
@@ -351,133 +448,220 @@ export const StoreProvider: React.FC<{ children: React.ReactNode }> = ({ childre
   };
 
   const updateOrderStatus = (orderId: string, newStatus: OrderStatus) => {
+    const now = new Date().toISOString();
+    let updatedOrder: Order | null = null;
     setOrders(prev =>
       prev.map(order => {
         if (order.id === orderId) {
-          const updated = { ...order, status: newStatus };
-          cloudSyncOrder(updated);
+          const updated = { ...order, status: newStatus, updatedAt: now };
+          updatedOrder = updated;
           return updated;
         }
         return order;
       })
     );
+    if (updatedOrder) {
+      cloudSyncOrder(updatedOrder);
+    }
   };
 
-  // SỬA HÓA ĐƠN TOÀN DIỆN (ADR-0006)
+  // SỬA HÓA ĐƠN TOÀN DIỆN (ADR-0006 & ADR-0008)
   const updateOrder = (orderId: string, updatedOrder: Order) => {
     const oldOrder = orders.find(o => o.id === orderId);
     if (!oldOrder) return;
+    const now = new Date().toISOString();
 
-    // 1. TÍNH BÙ TRỪ TỒN KHO (Stock Delta) nếu đơn không ở trạng thái 'cancelled'
+    // 1. TÍNH BÙ TRỪ TỒN KHO NGUYÊN TỬ (ADR-0006 & ADR-0008) nếu đơn không ở trạng thái 'cancelled'
     if (oldOrder.status !== 'cancelled' && updatedOrder.status !== 'cancelled') {
-      setProducts(prevProducts => {
-        return prevProducts.map(prod => {
-          const oldItem = oldOrder.items.find(i => i.productId === prod.id);
-          const newItem = updatedOrder.items.find(i => i.productId === prod.id);
-          const oldQty = oldItem?.qty || 0;
-          const newQty = newItem?.qty || 0;
-          const delta = newQty - oldQty; // dương = mua thêm, âm = bớt đi
+      const oldQtyMap = new Map<string, number>();
+      for (const item of oldOrder.items || []) {
+        if (item && item.productId) {
+          oldQtyMap.set(item.productId, (oldQtyMap.get(item.productId) || 0) + (Number(item.qty) || 0));
+        }
+      }
 
-          if (delta !== 0) {
-            const newStock = Math.max(0, prod.stock - delta);
-            const updated = { ...prod, stock: newStock };
-            cloudSyncProduct(updated);
-            return updated;
+      const newQtyMap = new Map<string, number>();
+      for (const item of updatedOrder.items || []) {
+        if (item && item.productId) {
+          newQtyMap.set(item.productId, (newQtyMap.get(item.productId) || 0) + (Number(item.qty) || 0));
+        }
+      }
+
+      const allProdIds = new Set([...oldQtyMap.keys(), ...newQtyMap.keys()]);
+      const adjustments: Array<{ productId: string; delta: number }> = [];
+
+      for (const pId of allProdIds) {
+        const oldQ = oldQtyMap.get(pId) || 0;
+        const newQ = newQtyMap.get(pId) || 0;
+        const qtyDiff = newQ - oldQ; // dương = mua thêm (delta = -qtyDiff), âm = bớt đi (delta = +)
+        if (qtyDiff !== 0) {
+          adjustments.push({ productId: pId, delta: -qtyDiff });
+        }
+      }
+
+      if (adjustments.length > 0) {
+        const deltaMap = new Map(adjustments.map(a => [a.productId, a.delta]));
+        setProducts(prevProducts =>
+          prevProducts.map(prod => {
+            const delta = deltaMap.get(prod.id);
+            if (delta !== undefined && delta !== 0) {
+              const newStock = calculateStockDelta(prod.stock, delta);
+              return { ...prod, stock: newStock, updatedAt: now };
+            }
+            return prod;
+          })
+        );
+
+        cloudAdjustProductsStockBatch(adjustments).then(results => {
+          if (results && results.length > 0) {
+            setProducts(prev =>
+              prev.map(p => {
+                const match = results.find(r => r.productId === p.id && r.success && typeof r.newStock === 'number');
+                if (match && typeof match.newStock === 'number') {
+                  return { ...p, stock: match.newStock };
+                }
+                return p;
+              })
+            );
           }
-          return prod;
         });
-      });
+      }
     }
 
     // 2. TÍNH BÙ TRỪ CÔNG NỢ & DOANH THU KHÁCH HÀNG (ADR-0002 & ADR-0006)
     setCustomers(prevCustomers => {
+      const customersToSync: Customer[] = [];
+      let nextList = prevCustomers;
+
       // Trường hợp cùng 1 khách hàng
       if (oldOrder.customerId === updatedOrder.customerId && updatedOrder.customerId) {
         const debtDelta = (updatedOrder.debtAmount || 0) - (oldOrder.debtAmount || 0);
         const spentDelta = updatedOrder.total - oldOrder.total;
 
-        return prevCustomers.map(cust => {
+        nextList = prevCustomers.map(cust => {
           if (cust.id === updatedOrder.customerId) {
             const updated = {
               ...cust,
               debt: Math.max(0, cust.debt + debtDelta),
               totalSpent: Math.max(0, (cust.totalSpent || 0) + spentDelta),
+              updatedAt: now,
             };
-            cloudSyncCustomer(updated);
+            customersToSync.push(updated);
+            return updated;
+          }
+          return cust;
+        });
+      } else {
+        // Trường hợp thay đổi khách hàng cho đơn
+        nextList = prevCustomers.map(cust => {
+          if (oldOrder.customerId && cust.id === oldOrder.customerId) {
+            const updated = {
+              ...cust,
+              debt: Math.max(0, cust.debt - (oldOrder.debtAmount || 0)),
+              totalSpent: Math.max(0, (cust.totalSpent || 0) - oldOrder.total),
+              orderCount: Math.max(0, (cust.orderCount || 0) - 1),
+              updatedAt: now,
+            };
+            customersToSync.push(updated);
+            return updated;
+          }
+          if (updatedOrder.customerId && cust.id === updatedOrder.customerId) {
+            const updated = {
+              ...cust,
+              debt: cust.debt + (updatedOrder.debtAmount || 0),
+              totalSpent: (cust.totalSpent || 0) + updatedOrder.total,
+              orderCount: (cust.orderCount || 0) + 1,
+              updatedAt: now,
+            };
+            customersToSync.push(updated);
             return updated;
           }
           return cust;
         });
       }
 
-      // Trường hợp thay đổi khách hàng cho đơn
-      return prevCustomers.map(cust => {
-        if (oldOrder.customerId && cust.id === oldOrder.customerId) {
-          // Trừ lại của khách cũ
-          const updated = {
-            ...cust,
-            debt: Math.max(0, cust.debt - (oldOrder.debtAmount || 0)),
-            totalSpent: Math.max(0, (cust.totalSpent || 0) - oldOrder.total),
-            orderCount: Math.max(0, (cust.orderCount || 0) - 1),
-          };
-          cloudSyncCustomer(updated);
-          return updated;
-        }
-        if (updatedOrder.customerId && cust.id === updatedOrder.customerId) {
-          // Cộng sang cho khách mới
-          const updated = {
-            ...cust,
-            debt: cust.debt + (updatedOrder.debtAmount || 0),
-            totalSpent: (cust.totalSpent || 0) + updatedOrder.total,
-            orderCount: (cust.orderCount || 0) + 1,
-          };
-          cloudSyncCustomer(updated);
-          return updated;
-        }
-        return cust;
-      });
+      for (const c of customersToSync) {
+        cloudSyncCustomer(c);
+      }
+      return nextList;
     });
 
     // 3. CẬP NHẬT ĐƠN HÀNG TRONG DANH SÁCH & CLOUD
-    setOrders(prev => prev.map(o => (o.id === orderId ? updatedOrder : o)));
-    cloudSyncOrder(updatedOrder);
+    const orderToSave: Order = { ...updatedOrder, updatedAt: now };
+    setOrders(prev => prev.map(o => (o.id === orderId ? orderToSave : o)));
+    cloudSyncOrder(orderToSave);
   };
 
-  // XÓA VĨNH VIỄN HÓA ĐƠN KÈM HOÀN KHO & TRỪ NỢ (ADR-0006)
+  // XÓA VĨNH VIỄN HÓA ĐƠN KÈM HOÀN KHO & TRỪ NỢ (ADR-0006 & ADR-0008)
   const deleteOrder = (orderId: string) => {
     const orderToDelete = orders.find(o => o.id === orderId);
     if (!orderToDelete) return;
+    const now = new Date().toISOString();
 
-    // 1. Tự động hoàn kho các món nếu đơn chưa từng bị hủy (đơn hủy trước đó đã hoàn kho rồi)
+    // 1. Tự động hoàn kho các món nguyên tử nếu đơn chưa từng bị hủy
     if (orderToDelete.status !== 'cancelled') {
-      setProducts(prevProducts => {
-        return prevProducts.map(prod => {
-          const item = orderToDelete.items.find(i => i.productId === prod.id);
-          if (item) {
-            const updated = { ...prod, stock: prod.stock + item.qty };
-            cloudSyncProduct(updated);
-            return updated;
+      const returnQtyMap = new Map<string, number>();
+      for (const item of orderToDelete.items || []) {
+        if (item && item.productId) {
+          returnQtyMap.set(item.productId, (returnQtyMap.get(item.productId) || 0) + (Number(item.qty) || 0));
+        }
+      }
+
+      const adjustments = Array.from(returnQtyMap.entries()).map(([productId, qty]) => ({
+        productId,
+        delta: qty, // hoàn kho: delta dương
+      }));
+
+      if (adjustments.length > 0) {
+        const deltaMap = new Map(adjustments.map(a => [a.productId, a.delta]));
+        setProducts(prevProducts =>
+          prevProducts.map(prod => {
+            const delta = deltaMap.get(prod.id);
+            if (delta !== undefined && delta !== 0) {
+              const newStock = calculateStockDelta(prod.stock, delta);
+              return { ...prod, stock: newStock, updatedAt: now };
+            }
+            return prod;
+          })
+        );
+
+        cloudAdjustProductsStockBatch(adjustments).then(results => {
+          if (results && results.length > 0) {
+            setProducts(prev =>
+              prev.map(p => {
+                const match = results.find(r => r.productId === p.id && r.success && typeof r.newStock === 'number');
+                if (match && typeof match.newStock === 'number') {
+                  return { ...p, stock: match.newStock };
+                }
+                return p;
+              })
+            );
           }
-          return prod;
         });
-      });
+      }
 
       // 2. Giảm trừ dư nợ & doanh thu lũy kế của khách hàng
       if (orderToDelete.customerId) {
         setCustomers(prevCustomers => {
-          return prevCustomers.map(cust => {
+          let updatedCust: Customer | null = null;
+          const nextList = prevCustomers.map(cust => {
             if (cust.id === orderToDelete.customerId) {
               const updated = {
                 ...cust,
                 debt: Math.max(0, cust.debt - (orderToDelete.debtAmount || 0)),
                 totalSpent: Math.max(0, (cust.totalSpent || 0) - orderToDelete.total),
                 orderCount: Math.max(0, (cust.orderCount || 0) - 1),
+                updatedAt: now,
               };
-              cloudSyncCustomer(updated);
+              updatedCust = updated;
               return updated;
             }
             return cust;
           });
+          if (updatedCust) {
+            cloudSyncCustomer(updatedCust);
+          }
+          return nextList;
         });
       }
     }
@@ -487,40 +671,75 @@ export const StoreProvider: React.FC<{ children: React.ReactNode }> = ({ childre
     cloudDeleteOrder(orderId);
   };
 
-  // Hủy đơn hàng (Soft-cancel với auto-restock - ADR-0003)
+  // Hủy đơn hàng (Soft-cancel với auto-restock nguyên tử - ADR-0003 & ADR-0008)
   const cancelOrder = (orderId: string) => {
     const orderToCancel = orders.find(o => o.id === orderId);
     if (!orderToCancel || orderToCancel.status === 'cancelled') return;
+    const now = new Date().toISOString();
 
-    // 1. Auto-restock items
-    setProducts(prevProducts => {
-      return prevProducts.map(prod => {
-        const item = orderToCancel.items.find(i => i.productId === prod.id);
-        if (item) {
-          const updated = { ...prod, stock: prod.stock + item.qty };
-          cloudSyncProduct(updated);
-          return updated;
+    // 1. Auto-restock items nguyên tử
+    const returnQtyMap = new Map<string, number>();
+    for (const item of orderToCancel.items || []) {
+      if (item && item.productId) {
+        returnQtyMap.set(item.productId, (returnQtyMap.get(item.productId) || 0) + (Number(item.qty) || 0));
+      }
+    }
+
+    const adjustments = Array.from(returnQtyMap.entries()).map(([productId, qty]) => ({
+      productId,
+      delta: qty, // restock
+    }));
+
+    if (adjustments.length > 0) {
+      const deltaMap = new Map(adjustments.map(a => [a.productId, a.delta]));
+      setProducts(prevProducts =>
+        prevProducts.map(prod => {
+          const delta = deltaMap.get(prod.id);
+          if (delta !== undefined && delta !== 0) {
+            const newStock = calculateStockDelta(prod.stock, delta);
+            return { ...prod, stock: newStock, updatedAt: now };
+          }
+          return prod;
+        })
+      );
+
+      cloudAdjustProductsStockBatch(adjustments).then(results => {
+        if (results && results.length > 0) {
+          setProducts(prev =>
+            prev.map(p => {
+              const match = results.find(r => r.productId === p.id && r.success && typeof r.newStock === 'number');
+              if (match && typeof match.newStock === 'number') {
+                return { ...p, stock: match.newStock };
+              }
+              return p;
+            })
+          );
         }
-        return prod;
       });
-    });
+    }
 
     // 2. Reverse customer debt if order had debt
     if (orderToCancel.customerId && orderToCancel.debtAmount > 0) {
       setCustomers(prevCustomers => {
-        return prevCustomers.map(cust => {
+        let updatedCust: Customer | null = null;
+        const nextList = prevCustomers.map(cust => {
           if (cust.id === orderToCancel.customerId) {
             const updated = {
               ...cust,
               debt: Math.max(0, cust.debt - orderToCancel.debtAmount),
               totalSpent: Math.max(0, (cust.totalSpent || 0) - orderToCancel.total),
               orderCount: Math.max(0, (cust.orderCount || 0) - 1),
+              updatedAt: now,
             };
-            cloudSyncCustomer(updated);
+            updatedCust = updated;
             return updated;
           }
           return cust;
         });
+        if (updatedCust) {
+          cloudSyncCustomer(updatedCust);
+        }
+        return nextList;
       });
     }
 
@@ -528,7 +747,7 @@ export const StoreProvider: React.FC<{ children: React.ReactNode }> = ({ childre
     setOrders(prev =>
       prev.map(o => {
         if (o.id === orderId) {
-          const updated = { ...o, status: 'cancelled' as OrderStatus };
+          const updated = { ...o, status: 'cancelled' as OrderStatus, updatedAt: now };
           cloudSyncOrder(updated);
           return updated;
         }
@@ -541,34 +760,42 @@ export const StoreProvider: React.FC<{ children: React.ReactNode }> = ({ childre
   const payDebt = (customerId: string, amount: number, paymentMethod: 'cash' | 'transfer', note?: string) => {
     const targetCust = customers.find(c => c.id === customerId);
     if (!targetCust || amount <= 0) return;
+    const now = new Date().toISOString();
 
     // 1. Record debt payment
     const newPayment: DebtPayment = {
-      id: 'PT' + String(Date.now()).slice(-4),
+      id: 'PT' + Math.floor(1000 + Math.random() * 9000),
       customerId,
       customerName: targetCust.name,
       amount,
       paymentMethod,
       note,
-      createdAt: new Date().toISOString(),
+      createdAt: now,
+      updatedAt: now,
     };
     setDebtPayments(prev => [newPayment, ...prev]);
     cloudSyncDebtPayment(newPayment);
 
     // 2. Reduce customer debt running balance
-    setCustomers(prev =>
-      prev.map(c => {
+    setCustomers(prev => {
+      let updatedCust: Customer | null = null;
+      const nextList = prev.map(c => {
         if (c.id === customerId) {
           const updated = {
             ...c,
             debt: Math.max(0, c.debt - amount),
+            updatedAt: now,
           };
-          cloudSyncCustomer(updated);
+          updatedCust = updated;
           return updated;
         }
         return c;
-      })
-    );
+      });
+      if (updatedCust) {
+        cloudSyncCustomer(updatedCust);
+      }
+      return nextList;
+    });
   };
 
   // Receipt settings action

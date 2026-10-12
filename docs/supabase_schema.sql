@@ -1,5 +1,5 @@
 -- ==============================================================================
--- MEXUCXICH CUISINE - SUPABASE DATABASE INITIALIZATION SCRIPT (ADR-0006)
+-- MEXUCXICH CUISINE - SUPABASE DATABASE INITIALIZATION SCRIPT (ADR-0006 & ADR-0008)
 -- ==============================================================================
 create table if not exists products (
   id text primary key,
@@ -10,7 +10,8 @@ create table if not exists products (
   cost numeric default 0,
   stock numeric default 0,
   image text default '🌭',
-  created_at timestamptz default now()
+  created_at timestamptz default now(),
+  updated_at timestamptz default now()
 );
 
 create table if not exists customers (
@@ -21,12 +22,14 @@ create table if not exists customers (
   debt numeric default 0,
   total_spent numeric default 0,
   order_count integer default 0,
-  created_at timestamptz default now()
+  created_at timestamptz default now(),
+  updated_at timestamptz default now()
 );
 
 create table if not exists orders (
   id text primary key,
   created_at timestamptz default now(),
+  updated_at timestamptz default now(),
   customer_id text,
   customer_name text,
   customer_phone text,
@@ -55,7 +58,8 @@ create table if not exists debt_payments (
   amount numeric default 0,
   payment_method text default 'cash',
   note text default '',
-  created_at timestamptz default now()
+  created_at timestamptz default now(),
+  updated_at timestamptz default now()
 );
 
 create table if not exists store_settings (
@@ -64,6 +68,37 @@ create table if not exists store_settings (
   updated_at timestamptz default now()
 );
 
+-- Đảm bảo tương thích ngược: Bổ sung cột updated_at nếu bảng đã tồn tại từ trước
+alter table products add column if not exists updated_at timestamptz default now();
+alter table customers add column if not exists updated_at timestamptz default now();
+alter table orders add column if not exists updated_at timestamptz default now();
+alter table debt_payments add column if not exists updated_at timestamptz default now();
+
+-- ==============================================================================
+-- HÀM ĐIỀU CHỈNH TỒN KHO NGUYÊN TỬ (ATOMIC STOCK ADJUSTMENT - ADR-0008)
+-- Ngăn chặn Race Condition khi nhiều thiết bị (PC quầy & ĐT chủ) bán hàng đồng thời
+-- ==============================================================================
+create or replace function adjust_product_stock(p_id text, p_delta numeric)
+returns numeric
+language plpgsql
+security definer
+as $$
+declare
+  v_new_stock numeric;
+begin
+  update products
+  set stock = greatest(0, coalesce(stock, 0) + p_delta),
+      updated_at = now()
+  where id = p_id
+  returning stock into v_new_stock;
+
+  return v_new_stock;
+end;
+$$;
+
+grant execute on function adjust_product_stock(p_id text, p_delta numeric) to anon, authenticated, service_role;
+
+-- Phân quyền Row Level Security (RLS)
 alter table products enable row level security;
 alter table customers enable row level security;
 alter table orders enable row level security;

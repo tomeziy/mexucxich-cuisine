@@ -1,4 +1,4 @@
-import { Product, Customer, ReceiptSettings } from '../types';
+import type { Product, Customer, ReceiptSettings } from '../types/index.ts';
 
 export const INITIAL_PRODUCTS: Product[] = [
   {
@@ -11,6 +11,7 @@ export const INITIAL_PRODUCTS: Product[] = [
     stock: 18,
     image: '🧀',
     createdAt: '2026-09-01T08:00:00Z',
+    updatedAt: '2026-09-01T08:00:00Z',
   },
   {
     id: 'SP02',
@@ -22,6 +23,7 @@ export const INITIAL_PRODUCTS: Product[] = [
     stock: 12,
     image: '🥩',
     createdAt: '2026-09-01T08:00:00Z',
+    updatedAt: '2026-09-01T08:00:00Z',
   },
   {
     id: 'SP03',
@@ -33,6 +35,7 @@ export const INITIAL_PRODUCTS: Product[] = [
     stock: 4, // low stock warning
     image: '🥣',
     createdAt: '2026-09-01T08:00:00Z',
+    updatedAt: '2026-09-01T08:00:00Z',
   },
   {
     id: 'SP04',
@@ -44,6 +47,7 @@ export const INITIAL_PRODUCTS: Product[] = [
     stock: 25,
     image: '🍳',
     createdAt: '2026-09-01T08:00:00Z',
+    updatedAt: '2026-09-01T08:00:00Z',
   },
   {
     id: 'SP05',
@@ -55,6 +59,7 @@ export const INITIAL_PRODUCTS: Product[] = [
     stock: 8,
     image: '🥓',
     createdAt: '2026-09-01T08:00:00Z',
+    updatedAt: '2026-09-01T08:00:00Z',
   },
   {
     id: 'SP06',
@@ -66,6 +71,7 @@ export const INITIAL_PRODUCTS: Product[] = [
     stock: 30,
     image: '🌶️',
     createdAt: '2026-09-01T08:00:00Z',
+    updatedAt: '2026-09-01T08:00:00Z',
   },
   {
     id: 'SP07',
@@ -77,6 +83,7 @@ export const INITIAL_PRODUCTS: Product[] = [
     stock: 3, // low stock warning
     image: '🍄',
     createdAt: '2026-09-01T08:00:00Z',
+    updatedAt: '2026-09-01T08:00:00Z',
   },
   {
     id: 'SP08',
@@ -88,6 +95,7 @@ export const INITIAL_PRODUCTS: Product[] = [
     stock: 15,
     image: '🍢',
     createdAt: '2026-09-01T08:00:00Z',
+    updatedAt: '2026-09-01T08:00:00Z',
   },
 ];
 
@@ -100,6 +108,8 @@ export const INITIAL_CUSTOMERS: Customer[] = [
     debt: 0,
     totalSpent: 0,
     orderCount: 0,
+    createdAt: '2026-09-01T08:00:00Z',
+    updatedAt: '2026-09-01T08:00:00Z',
   },
   {
     id: 'KH02',
@@ -109,6 +119,8 @@ export const INITIAL_CUSTOMERS: Customer[] = [
     debt: 250000,
     totalSpent: 1850000,
     orderCount: 4,
+    createdAt: '2026-09-01T08:00:00Z',
+    updatedAt: '2026-09-01T08:00:00Z',
   },
   {
     id: 'KH03',
@@ -118,6 +130,8 @@ export const INITIAL_CUSTOMERS: Customer[] = [
     debt: 1450000,
     totalSpent: 6200000,
     orderCount: 12,
+    createdAt: '2026-09-01T08:00:00Z',
+    updatedAt: '2026-09-01T08:00:00Z',
   },
   {
     id: 'KH04',
@@ -127,6 +141,8 @@ export const INITIAL_CUSTOMERS: Customer[] = [
     debt: 0,
     totalSpent: 920000,
     orderCount: 3,
+    createdAt: '2026-09-01T08:00:00Z',
+    updatedAt: '2026-09-01T08:00:00Z',
   },
 ];
 

@@ -37,6 +37,7 @@
 | **Hóa đơn KiotViet 2 dòng & In 1 liên** | [ADR-0005](docs/adr/0005-kiotviet-receipt-layout-and-single-copy-printing.md) | Hiển thị trọn vẹn tên món dòng trên, căn 3 cột (Đơn giá - SL - Tiền) dòng dưới. Chữ to rõ nét 13-15px, cấu hình CSS chống tràn trang và chống nhả giấy thừa trên máy in nhiệt K80 (1 liên mặc định). |
 | **Đồng bộ Cloud Supabase & Quản trị Đơn** | [ADR-0006](docs/adr/0006-supabase-cloud-sync-and-order-management.md) | Đồng bộ 2 chiều thời gian thực qua Cloud Supabase (hỗ trợ chuyển giao tài khoản độc lập, duy trì dự phòng Offline-First); cho phép sửa/xóa hóa đơn kèm tự động hoàn kho và khấu trừ công nợ; nạp khách hàng từ Excel. |
 | **Khớp Cột Excel Mềm Dẻo, Sửa Khách & Font In Arial** | [ADR-0007](docs/adr/0007-fuzzy-excel-import-customer-edit-and-arial-thermal-print.md) | Bộ đọc Excel nhận diện bí danh linh hoạt kèm Modal xử lý trùng lặp (Cộng dồn / Ghi đè / Bỏ qua / Sửa trực tiếp); Chỉnh sửa khách hàng đa điểm tại `CustomersPage` & `PosPage`; Chuẩn hóa font in Arial thanh mảnh triệt tiêu loang nhiệt K80. |
+| **Xử lý Xung đột Đồng bộ & Trừ kho Nguyên tử** | [ADR-0008](docs/adr/0008-cross-device-sync-conflict-resolution.md) | Xử lý xung đột đồng bộ giữa máy quầy và điện thoại chủ; giải quyết Race Condition trừ kho bằng RPC nguyên tử `adjust_product_stock` (kèm fallback); bảo vệ dữ liệu cục bộ mới hơn qua dấu thời gian `updated_at`. |
 
 
 ---
