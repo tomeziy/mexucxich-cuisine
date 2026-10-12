@@ -234,7 +234,55 @@ export const transformDebtPaymentFromDb = (row: any): DebtPayment => ({
 });
 
 /**
- * Đẩy toàn bộ dữ liệu hiện tại lên Supabase (Upsert all)
+ * Chia nhỏ dữ liệu thành các mẩu (chunks) để đẩy lên Supabase an toàn,
+ * chống lỗi vượt quá kích thước payload khi có hàng nghìn dòng.
+ */
+async function upsertInChunks(client: SupabaseClient, table: string, rows: any[], chunkSize = 500): Promise<void> {
+  for (let i = 0; i < rows.length; i += chunkSize) {
+    const chunk = rows.slice(i, i + chunkSize);
+    const { error } = await client.from(table).upsert(chunk, { onConflict: 'id' });
+    if (error) {
+      throw new Error(`Lỗi đồng bộ ${table} (dòng ${i + 1}-${i + chunk.length}): ${error.message}`);
+    }
+  }
+}
+
+/**
+ * Tải toàn bộ dữ liệu bảng từ Supabase bằng cơ chế phân trang (Pagination Loop).
+ * Vượt qua giới hạn mặc định 1000 dòng của Supabase/PostgREST, mở rộng lên 20.000+ bản ghi!
+ */
+async function fetchTableWithPagination(
+  client: SupabaseClient,
+  table: string,
+  maxLimit = 20000
+): Promise<any[]> {
+  const batchSize = 1000;
+  const allRows: any[] = [];
+  let from = 0;
+
+  while (from < maxLimit) {
+    const to = from + batchSize - 1;
+    const { data, error } = await client
+      .from(table)
+      .select('*')
+      .range(from, to)
+      .order('created_at', { ascending: false });
+
+    if (error) {
+      console.error(`Error fetching paginated data from ${table} (range ${from}-${to}):`, error);
+      break;
+    }
+    if (!data || data.length === 0) break;
+    allRows.push(...data);
+    if (data.length < batchSize) break;
+    from += batchSize;
+  }
+
+  return allRows;
+}
+
+/**
+ * Đẩy toàn bộ dữ liệu hiện tại lên Supabase (Upsert all in chunks)
  */
 export const pushAllDataToCloud = async (data: {
   products: Product[];
@@ -249,32 +297,28 @@ export const pushAllDataToCloud = async (data: {
   }
 
   try {
-    // 1. Products
+    // 1. Products (chunked)
     if (data.products.length > 0) {
       const pRows = data.products.map(transformProductToDb);
-      const { error: pErr } = await client.from('products').upsert(pRows, { onConflict: 'id' });
-      if (pErr) throw new Error(`Lỗi đồng bộ sản phẩm: ${pErr.message}`);
+      await upsertInChunks(client, 'products', pRows, 500);
     }
 
-    // 2. Customers
+    // 2. Customers (chunked - hỗ trợ > 10.000 khách)
     if (data.customers.length > 0) {
       const cRows = data.customers.map(transformCustomerToDb);
-      const { error: cErr } = await client.from('customers').upsert(cRows, { onConflict: 'id' });
-      if (cErr) throw new Error(`Lỗi đồng bộ khách hàng: ${cErr.message}`);
+      await upsertInChunks(client, 'customers', cRows, 500);
     }
 
-    // 3. Orders
+    // 3. Orders (chunked)
     if (data.orders.length > 0) {
       const oRows = data.orders.map(transformOrderToDb);
-      const { error: oErr } = await client.from('orders').upsert(oRows, { onConflict: 'id' });
-      if (oErr) throw new Error(`Lỗi đồng bộ đơn hàng: ${oErr.message}`);
+      await upsertInChunks(client, 'orders', oRows, 500);
     }
 
-    // 4. Debt Payments
+    // 4. Debt Payments (chunked)
     if (data.debtPayments.length > 0) {
       const dpRows = data.debtPayments.map(transformDebtPaymentToDb);
-      const { error: dpErr } = await client.from('debt_payments').upsert(dpRows, { onConflict: 'id' });
-      if (dpErr) throw new Error(`Lỗi đồng bộ phiếu nợ: ${dpErr.message}`);
+      await upsertInChunks(client, 'debt_payments', dpRows, 500);
     }
 
     // 5. Store Settings
@@ -300,8 +344,7 @@ export const pushAllDataToCloud = async (data: {
 
 /**
  * Tải toàn bộ dữ liệu từ Supabase về kèm cơ chế giải quyết xung đột (ADR-0008)
- * Nếu truyền vào localData, hàm sẽ bảo vệ các bản ghi cục bộ có updatedAt mới hơn,
- * ngăn không cho dữ liệu Cloud cũ hơn ghi đè mất mát.
+ * Sử dụng fetchTableWithPagination để vượt qua giới hạn 1000 dòng của Supabase.
  */
 export const pullAllDataFromCloud = async (localData?: {
   products?: Product[];
@@ -320,23 +363,18 @@ export const pullAllDataFromCloud = async (localData?: {
   if (!client) return null;
 
   try {
-    const [pRes, cRes, oRes, dpRes, sRes] = await Promise.all([
-      client.from('products').select('*').order('created_at', { ascending: false }),
-      client.from('customers').select('*').order('created_at', { ascending: false }),
-      client.from('orders').select('*').order('created_at', { ascending: false }),
-      client.from('debt_payments').select('*').order('created_at', { ascending: false }),
+    const [pData, cData, oData, dpData, sRes] = await Promise.all([
+      fetchTableWithPagination(client, 'products', 20000),
+      fetchTableWithPagination(client, 'customers', 20000),
+      fetchTableWithPagination(client, 'orders', 20000),
+      fetchTableWithPagination(client, 'debt_payments', 20000),
       client.from('store_settings').select('*').eq('id', 'default_settings').maybeSingle(),
     ]);
 
-    if (pRes.error || cRes.error || oRes.error || dpRes.error) {
-      console.error('Error pulling from Supabase:', pRes.error || cRes.error || oRes.error);
-      return null;
-    }
-
-    const cloudProducts = (pRes.data || []).map(transformProductFromDb);
-    const cloudCustomers = (cRes.data || []).map(transformCustomerFromDb);
-    const cloudOrders = (oRes.data || []).map(transformOrderFromDb);
-    const cloudDebtPayments = (dpRes.data || []).map(transformDebtPaymentFromDb);
+    const cloudProducts = pData.map(transformProductFromDb);
+    const cloudCustomers = cData.map(transformCustomerFromDb);
+    const cloudOrders = oData.map(transformOrderFromDb);
+    const cloudDebtPayments = dpData.map(transformDebtPaymentFromDb);
 
     let finalProducts = cloudProducts;
     let finalCustomers = cloudCustomers;
@@ -508,7 +546,8 @@ export const cloudSyncProductsBatch = async (products: Product[]) => {
   const client = getSupabaseClient();
   if (!client || products.length === 0) return;
   try {
-    await client.from('products').upsert(products.map(transformProductToDb), { onConflict: 'id' });
+    const pRows = products.map(transformProductToDb);
+    await upsertInChunks(client, 'products', pRows, 500);
   } catch (e) {
     console.error('cloudSyncProductsBatch error:', e);
   }
@@ -518,7 +557,8 @@ export const cloudSyncCustomersBatch = async (customers: Customer[]) => {
   const client = getSupabaseClient();
   if (!client || customers.length === 0) return;
   try {
-    await client.from('customers').upsert(customers.map(transformCustomerToDb), { onConflict: 'id' });
+    const cRows = customers.map(transformCustomerToDb);
+    await upsertInChunks(client, 'customers', cRows, 500);
   } catch (e) {
     console.error('cloudSyncCustomersBatch error:', e);
   }

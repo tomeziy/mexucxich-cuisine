@@ -26,7 +26,12 @@ import {
   HelpCircle,
   CheckCircle2,
 } from 'lucide-react';
-import { testSupabaseConnection, SUPABASE_SCHEMA_SQL } from '../services/supabase';
+import {
+  testSupabaseConnection,
+  SUPABASE_SCHEMA_SQL,
+  DEFAULT_SUPABASE_URL,
+  DEFAULT_SUPABASE_ANON_KEY,
+} from '../services/supabase';
 
 const VIETNAM_BANKS = [
   { code: 'MB', name: 'MB Bank (Ngân hàng Quân Đội)' },
@@ -105,14 +110,36 @@ export const SettingsPage: React.FC = () => {
   const [savedSuccess, setSavedSuccess] = useState(false);
 
   // Cloud Supabase states
-  const [cloudUrl, setCloudUrl] = useState(cloudConfig.supabaseUrl || '');
-  const [cloudKey, setCloudKey] = useState(cloudConfig.supabaseAnonKey || '');
+  const [cloudUrl, setCloudUrl] = useState(cloudConfig.supabaseUrl || DEFAULT_SUPABASE_URL);
+  const [cloudKey, setCloudKey] = useState(cloudConfig.supabaseAnonKey || DEFAULT_SUPABASE_ANON_KEY);
   const [autoSync, setAutoSync] = useState(cloudConfig.autoSync ?? true);
   const [cloudTesting, setCloudTesting] = useState(false);
   const [cloudStatus, setCloudStatus] = useState<{ success?: boolean; message?: string } | null>(null);
   const [isSyncing, setIsSyncing] = useState(false);
   const [showSqlGuide, setShowSqlGuide] = useState(false);
   const [copiedSql, setCopiedSql] = useState(false);
+
+  // Tự động ghim cấu hình Cloud mặc định nếu máy tính/điện thoại chưa có
+  React.useEffect(() => {
+    if (!cloudUrl && (cloudConfig.supabaseUrl || DEFAULT_SUPABASE_URL)) {
+      setCloudUrl(cloudConfig.supabaseUrl || DEFAULT_SUPABASE_URL);
+    }
+    if (!cloudKey && (cloudConfig.supabaseAnonKey || DEFAULT_SUPABASE_ANON_KEY)) {
+      setCloudKey(cloudConfig.supabaseAnonKey || DEFAULT_SUPABASE_ANON_KEY);
+    }
+  }, [cloudConfig.supabaseUrl, cloudConfig.supabaseAnonKey]);
+
+  const handleResetToDefaultCloud = () => {
+    setCloudUrl(DEFAULT_SUPABASE_URL);
+    setCloudKey(DEFAULT_SUPABASE_ANON_KEY);
+    updateCloudConfig({
+      supabaseUrl: DEFAULT_SUPABASE_URL,
+      supabaseAnonKey: DEFAULT_SUPABASE_ANON_KEY,
+      autoSync: true,
+      lastSyncedAt: new Date().toISOString(),
+    });
+    setCloudStatus({ success: true, message: 'Đã kết nối lại tài khoản Cloud chính thức của tiệm MexucxichCuisine!' });
+  };
 
   const handleTestCloud = async () => {
     setCloudTesting(true);
@@ -620,17 +647,26 @@ export const SettingsPage: React.FC = () => {
                 <Cloud className="w-3.5 h-3.5 text-blue-500" />
                 <span>Đồng bộ Cloud Supabase (Cửa hàng & Nhà)</span>
               </h3>
-              <div className="flex items-center gap-1">
+              <div className="flex items-center gap-1.5">
                 {cloudConfig.supabaseUrl && cloudConfig.supabaseAnonKey ? (
                   <span className="text-[10px] font-bold text-emerald-700 bg-emerald-100 px-2.5 py-0.5 rounded-full flex items-center gap-1">
                     <span className="w-1.5 h-1.5 rounded-full bg-emerald-500 animate-pulse" />
-                    <span>Đã kết nối Cloud</span>
+                    <span>Đã kết nối Cloud chính của quán</span>
                   </span>
                 ) : (
                   <span className="text-[10px] font-bold text-slate-500 bg-slate-100 px-2 py-0.5 rounded-full">
                     Chưa kết nối Cloud (Đang chạy Offline)
                   </span>
                 )}
+                <button
+                  type="button"
+                  onClick={handleResetToDefaultCloud}
+                  className="text-[10px] font-bold text-amber-700 bg-amber-50 hover:bg-amber-100 border border-amber-200 px-2.5 py-0.5 rounded-full transition flex items-center gap-1"
+                  title="Nhấn để tự động khôi phục cấu hình Cloud chính thức của tiệm MexucxichCuisine mà không cần nhập tay"
+                >
+                  <RotateCcw className="w-2.5 h-2.5" />
+                  <span>Dùng Cloud chuẩn của Quán</span>
+                </button>
               </div>
             </div>
 
