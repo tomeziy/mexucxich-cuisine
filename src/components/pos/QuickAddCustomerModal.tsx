@@ -1,6 +1,7 @@
 import React, { useState } from 'react';
 import { useStore } from '../../context/StoreContext';
 import { Customer } from '../../types';
+import { normalizeVietnamesePhone } from '../../utils/excel';
 import { UserPlus, X } from 'lucide-react';
 
 interface QuickAddCustomerModalProps {
@@ -31,7 +32,7 @@ export const QuickAddCustomerModal: React.FC<QuickAddCustomerModalProps> = ({
 
     const newCust = addCustomer({
       name: name.trim(),
-      phone: phone.trim(),
+      phone: normalizeVietnamesePhone(phone.trim()) || phone.trim(),
       address: address.trim(),
     });
 

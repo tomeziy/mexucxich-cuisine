@@ -29,6 +29,7 @@ import {
   exportCustomersToExcel,
   downloadCustomerTemplate,
   parseCustomersExcel,
+  normalizeVietnamesePhone,
   ParsedCustomerRow,
 } from '../utils/excel';
 
@@ -85,13 +86,18 @@ export const CustomersPage: React.FC = () => {
       }
 
       const mapped: CustomerImportRowItem[] = parsed.map((p, idx) => {
-        const matchByPhone = p.phone ? customers.find(c => c.phone && c.phone === p.phone) : null;
-        const matchByName = !matchByPhone ? customers.find(c => removeVietnameseTones(c.name) === removeVietnameseTones(p.name)) : null;
+        const normPPhone = normalizeVietnamesePhone(p.phone);
+        const matchByPhone = normPPhone
+          ? customers.find(c => c.phone && normalizeVietnamesePhone(c.phone) === normPPhone)
+          : null;
+        const matchByName = !matchByPhone
+          ? customers.find(c => removeVietnameseTones(c.name) === removeVietnameseTones(p.name))
+          : null;
         const existing = matchByPhone || matchByName;
         return {
           id: `cust_row_${Date.now()}_${idx}`,
           name: p.name,
-          phone: p.phone,
+          phone: normPPhone,
           address: p.address,
           debt: p.debt,
           isDuplicate: !!existing,
@@ -129,10 +135,14 @@ export const CustomersPage: React.FC = () => {
       prev.map(r => {
         if (r.id === rowId) {
           const newName = rowEditName.trim() || r.name;
-          const newPhone = rowEditPhone.trim();
+          const newPhone = normalizeVietnamesePhone(rowEditPhone.trim());
           // Re-evaluate duplication with modified phone / name
-          const matchByPhone = newPhone ? customers.find(c => c.phone && c.phone === newPhone) : null;
-          const matchByName = !matchByPhone ? customers.find(c => removeVietnameseTones(c.name) === removeVietnameseTones(newName)) : null;
+          const matchByPhone = newPhone
+            ? customers.find(c => c.phone && normalizeVietnamesePhone(c.phone) === newPhone)
+            : null;
+          const matchByName = !matchByPhone
+            ? customers.find(c => removeVietnameseTones(c.name) === removeVietnameseTones(newName))
+            : null;
           const existing = matchByPhone || matchByName;
           return {
             ...r,
@@ -156,45 +166,116 @@ export const CustomersPage: React.FC = () => {
     let updatedCount = 0;
     let newCount = 0;
     let skippedCount = 0;
-    const newCustomersToAdd: Array<Omit<Customer, 'id' | 'totalSpent' | 'orderCount'>> = [];
 
-    importRows.forEach(row => {
+    // Accumulators for existing customers
+    const updatedCustomersMap = new Map<
+      string,
+      {
+        id: string;
+        name: string;
+        phone: string;
+        address: string;
+        debt: number;
+        action: 'accumulate' | 'overwrite';
+      }
+    >();
+
+    // Accumulators for new customers with dual-index lookup (phone & normalized name)
+    const newCustomersMap = new Map<
+      string,
+      Omit<Customer, 'id' | 'totalSpent' | 'orderCount'>
+    >();
+    const phoneToNewCustKey = new Map<string, string>();
+    const nameToNewCustKey = new Map<string, string>();
+
+    importRows.forEach((row, idx) => {
       if (row.isDuplicate && row.existingCustomer) {
         if (row.action === 'skip') {
           skippedCount++;
         } else if (row.action === 'overwrite') {
-          updateCustomer(row.existingCustomer.id, {
-            name: row.name,
-            phone: row.phone,
+          updatedCustomersMap.set(row.existingCustomer.id, {
+            id: row.existingCustomer.id,
+            name: row.name || row.existingCustomer.name,
+            phone: row.phone || row.existingCustomer.phone,
             address: row.address || row.existingCustomer.address,
             debt: row.debt,
+            action: 'overwrite',
           });
-          updatedCount++;
         } else {
           // 'accumulate'
-          updateCustomer(row.existingCustomer.id, {
+          const existingAcc = updatedCustomersMap.get(row.existingCustomer.id);
+          const baseDebt = existingAcc ? existingAcc.debt : row.existingCustomer.debt;
+          updatedCustomersMap.set(row.existingCustomer.id, {
+            id: row.existingCustomer.id,
+            name: row.name || row.existingCustomer.name,
+            phone: row.phone || row.existingCustomer.phone,
             address: row.address || row.existingCustomer.address,
-            debt: row.existingCustomer.debt + row.debt,
+            debt: baseDebt + row.debt,
+            action: 'accumulate',
           });
-          updatedCount++;
         }
       } else {
-        newCustomersToAdd.push({
-          name: row.name,
-          phone: row.phone,
-          address: row.address,
-          debt: row.debt,
-        });
-        newCount++;
+        // Group new customers within the file by normalized phone OR normalized name
+        const normPhone = row.phone ? normalizeVietnamesePhone(row.phone) : '';
+        const normName = row.name ? removeVietnameseTones(row.name).trim().toLowerCase() : '';
+
+        let targetKey: string | null = null;
+        if (normPhone && phoneToNewCustKey.has(normPhone)) {
+          targetKey = phoneToNewCustKey.get(normPhone)!;
+        } else if (normName && nameToNewCustKey.has(normName)) {
+          targetKey = nameToNewCustKey.get(normName)!;
+        }
+
+        if (targetKey && newCustomersMap.has(targetKey)) {
+          const existingNew = newCustomersMap.get(targetKey)!;
+          const mergedPhone = existingNew.phone || normPhone;
+          const mergedAddress = row.address || existingNew.address;
+          const mergedDebt = existingNew.debt + row.debt;
+
+          newCustomersMap.set(targetKey, {
+            ...existingNew,
+            phone: mergedPhone,
+            address: mergedAddress,
+            debt: mergedDebt,
+          });
+
+          if (mergedPhone) phoneToNewCustKey.set(mergedPhone, targetKey);
+          if (normName) nameToNewCustKey.set(normName, targetKey);
+        } else {
+          const newCustKey = `new_cust_${idx}`;
+          newCustomersMap.set(newCustKey, {
+            name: row.name,
+            phone: normPhone,
+            address: row.address,
+            debt: row.debt,
+          });
+
+          if (normPhone) phoneToNewCustKey.set(normPhone, newCustKey);
+          if (normName) nameToNewCustKey.set(normName, newCustKey);
+        }
       }
     });
 
+    // Apply updates for existing customers
+    updatedCustomersMap.forEach(item => {
+      updateCustomer(item.id, {
+        name: item.name,
+        phone: item.phone,
+        address: item.address,
+        debt: item.debt,
+      });
+      updatedCount++;
+    });
+
+    // Apply batch inserts for new customers
+    const newCustomersToAdd = Array.from(newCustomersMap.values());
     if (newCustomersToAdd.length > 0) {
       addCustomersBatch(newCustomersToAdd);
+      newCount = newCustomersToAdd.length;
     }
 
     alert(
-      `Đã xử lý xong ${importRows.length} khách hàng:\n- Thêm mới: ${newCount} khách\n- Cập nhật nợ: ${updatedCount} khách\n- Bỏ qua: ${skippedCount} khách`
+      `Đã xử lý xong ${importRows.length} dòng khách hàng:\n- Thêm mới: ${newCount} khách\n- Cập nhật nợ: ${updatedCount} khách\n- Bỏ qua: ${skippedCount} khách`
     );
     setIsImportModalOpen(false);
     setImportRows([]);
@@ -231,7 +312,7 @@ export const CustomersPage: React.FC = () => {
     }
     addCustomer({
       name: formName.trim(),
-      phone: formPhone.trim(),
+      phone: normalizeVietnamesePhone(formPhone.trim()) || formPhone.trim(),
       address: formAddress.trim(),
     });
     setFormName('');
@@ -285,7 +366,7 @@ export const CustomersPage: React.FC = () => {
     }
     updateCustomer(editingCustomer.id, {
       name: editCustomerName.trim(),
-      phone: editCustomerPhone.trim(),
+      phone: normalizeVietnamesePhone(editCustomerPhone.trim()) || editCustomerPhone.trim(),
       address: editCustomerAddress.trim(),
     });
     setEditingCustomer(null);
@@ -972,7 +1053,7 @@ export const CustomersPage: React.FC = () => {
               {/* Bulk Resolution Buttons */}
               {importRows.some(r => r.isDuplicate) && (
                 <div className="flex items-center gap-1.5 text-xs font-bold">
-                  <span className="text-[11px] text-slate-500 mr-1">Thao tác nhanh cho món trùng:</span>
+                  <span className="text-[11px] text-slate-500 mr-1">Thao tác nhanh cho khách trùng:</span>
                   <button
                     type="button"
                     onClick={handleApplyAllAccumulate}

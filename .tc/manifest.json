@@ -2,7 +2,7 @@
   "project": "MexucxichCuisine",
   "version": "1.0.0",
   "created_at": "2026-09-08T16:00:00+07:00",
-  "last_updated": "2026-10-12T14:22:00+07:00",
+  "last_updated": "2026-10-12T15:30:00+07:00",
   "active_tc": "TC-007",
   "changes": [
     {
@@ -44,7 +44,7 @@
     {
       "id": "TC-007",
       "title": "Khớp cột Excel mềm dẻo, Hộp thoại xử lý trùng lặp, Sửa khách hàng tại quầy và Chuẩn hóa font in Arial (ADR-0007)",
-      "status": "implemented",
+      "status": "deployed",
       "file": "TC-007-fuzzy-excel-customer-edit-arial-receipt.json"
     }
   ]

@@ -1,13 +1,15 @@
 {
   "id": "TC-007",
   "title": "Khớp cột Excel mềm dẻo, Hộp thoại xử lý trùng lặp, Sửa khách hàng tại quầy và Chuẩn hóa font in Arial (ADR-0007)",
-  "status": "implemented",
+  "status": "deployed",
   "created_at": "2026-10-12T13:30:00+07:00",
-  "updated_at": "2026-10-12T14:22:00+07:00",
+  "updated_at": "2026-10-12T15:30:00+07:00",
   "state_history": [
     { "state": "planned", "timestamp": "2026-10-12T13:30:00+07:00", "actor": "Antigravity" },
     { "state": "implemented", "timestamp": "2026-10-12T14:20:00+07:00", "actor": "DeepCoder" },
-    { "state": "tested", "timestamp": "2026-10-12T14:22:00+07:00", "actor": "Antigravity" }
+    { "state": "tested", "timestamp": "2026-10-12T14:22:00+07:00", "actor": "Antigravity" },
+    { "state": "deployed", "timestamp": "2026-10-12T15:20:00+07:00", "actor": "DeepCoder" },
+    { "state": "verified", "timestamp": "2026-10-12T15:30:00+07:00", "actor": "Antigravity" }
   ],
   "context": {
     "adr": ["ADR-0007"],
@@ -22,7 +24,7 @@
       "Tái cấu trúc component ThermalReceipt dùng chung cho ReceiptModal và SettingsPage, sửa lỗi in thử trang trắng"
     ]
   },
-  "progress_summary": "Đã triển khai hoàn chỉnh 100% các tính năng theo ADR-0007. Đã vượt qua 60/60 unit tests và kiểm tra biên dịch TypeScript tsc --noEmit đạt 0 lỗi.",
+  "progress_summary": "Đã hoàn thành toàn diện kiểm toán và nâng cấp ADR-0007. Đã khắc phục lỗi gom nhóm khách hàng trùng lặp đa chỉ mục (SĐT & Tên), ngăn ngừa mất dữ liệu khi ghi đè, chặn SĐT rác dạng số 0, ngăn trùng lặp cột khi quét tiêu đề Excel, đạt 100% 20/20 test chuẩn hóa SĐT, 46 bí danh cột, kiểm tra biên dịch tsc 0 lỗi và build Vite production thành công.",
   "files_in_progress": [
     "src/utils/excel.ts",
     "src/types/index.ts",

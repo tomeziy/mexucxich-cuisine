@@ -1,6 +1,7 @@
 import React, { useState, useEffect } from 'react';
 import { useStore } from '../../context/StoreContext';
 import { Customer } from '../../types';
+import { normalizeVietnamesePhone } from '../../utils/excel';
 import { Edit2, X } from 'lucide-react';
 
 interface QuickEditCustomerModalProps {
@@ -40,7 +41,7 @@ export const QuickEditCustomerModal: React.FC<QuickEditCustomerModalProps> = ({
 
     updateCustomer(customer.id, {
       name: name.trim(),
-      phone: phone.trim(),
+      phone: normalizeVietnamesePhone(phone.trim()) || phone.trim(),
       address: address.trim(),
     });
 

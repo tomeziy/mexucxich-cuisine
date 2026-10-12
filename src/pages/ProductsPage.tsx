@@ -150,49 +150,100 @@ export const ProductsPage: React.FC = () => {
     let updatedCount = 0;
     let newCount = 0;
     let skippedCount = 0;
-    const newProductsToAdd: Array<Omit<Product, 'id'>> = [];
+
+    // Accumulators for existing products
+    const updatedProductsMap = new Map<
+      string,
+      {
+        id: string;
+        name: string;
+        category: string;
+        unit: string;
+        cost: number;
+        price: number;
+        stock: number;
+        action: 'accumulate' | 'overwrite';
+      }
+    >();
+
+    // Accumulators for new products
+    const newProductsMap = new Map<string, Omit<Product, 'id'>>();
 
     importRows.forEach(row => {
       if (row.isDuplicate && row.existingProduct) {
         if (row.action === 'skip') {
           skippedCount++;
         } else if (row.action === 'overwrite') {
-          updateProduct(row.existingProduct.id, {
+          updatedProductsMap.set(row.existingProduct.id, {
+            id: row.existingProduct.id,
+            name: row.name || row.existingProduct.name,
+            category: row.category || row.existingProduct.category,
+            unit: row.unit || row.existingProduct.unit,
+            cost: row.cost || row.existingProduct.cost,
+            price: row.price || row.existingProduct.price,
+            stock: row.stock,
+            action: 'overwrite',
+          });
+        } else {
+          // 'accumulate' (Cộng dồn kho)
+          const existingAcc = updatedProductsMap.get(row.existingProduct.id);
+          const baseStock = existingAcc ? existingAcc.stock : row.existingProduct.stock;
+          updatedProductsMap.set(row.existingProduct.id, {
+            id: row.existingProduct.id,
+            name: row.name || row.existingProduct.name,
+            category: row.category || row.existingProduct.category,
+            unit: row.unit || row.existingProduct.unit,
+            cost: row.cost || row.existingProduct.cost,
+            price: row.price || row.existingProduct.price,
+            stock: baseStock + row.stock,
+            action: 'accumulate',
+          });
+        }
+      } else {
+        // Group new products within the file by normalized name to avoid duplicate creations
+        const key = removeVietnameseTones(row.name).trim().toLowerCase();
+        const existingNew = newProductsMap.get(key);
+        if (existingNew) {
+          newProductsMap.set(key, {
+            ...existingNew,
+            stock: existingNew.stock + row.stock,
+            price: row.price || existingNew.price,
+            cost: row.cost || existingNew.cost,
+            unit: row.unit || existingNew.unit,
+            category: row.category || existingNew.category,
+          });
+        } else {
+          newProductsMap.set(key, {
             name: row.name,
             category: row.category,
             unit: row.unit,
             cost: row.cost,
             price: row.price,
             stock: row.stock,
+            image: row.image || '🌭',
           });
-          updatedCount++;
-        } else {
-          // 'accumulate' (Cộng dồn kho)
-          updateProduct(row.existingProduct.id, {
-            stock: row.existingProduct.stock + row.stock,
-            price: row.price || row.existingProduct.price,
-            cost: row.cost || row.existingProduct.cost,
-            unit: row.unit || row.existingProduct.unit,
-            category: row.category || row.existingProduct.category,
-          });
-          updatedCount++;
         }
-      } else {
-        newProductsToAdd.push({
-          name: row.name,
-          category: row.category,
-          unit: row.unit,
-          cost: row.cost,
-          price: row.price,
-          stock: row.stock,
-          image: row.image || '🌭',
-        });
-        newCount++;
       }
     });
 
+    // Apply updates for existing products
+    updatedProductsMap.forEach(item => {
+      updateProduct(item.id, {
+        name: item.name,
+        category: item.category,
+        unit: item.unit,
+        cost: item.cost,
+        price: item.price,
+        stock: item.stock,
+      });
+      updatedCount++;
+    });
+
+    // Apply batch inserts for new products
+    const newProductsToAdd = Array.from(newProductsMap.values());
     if (newProductsToAdd.length > 0) {
       addProductsBatch(newProductsToAdd);
+      newCount = newProductsToAdd.length;
     }
 
     alert(

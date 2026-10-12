@@ -876,6 +876,7 @@ export const SettingsPage: React.FC = () => {
       {/* Real Thermal Print Portal for Settings Test Print */}
       {printRoot && createPortal(
         <div
+          className={settings.fontFamily === 'system' ? 'font-system' : 'font-arial'}
           style={{
             fontSize: `${
               settings.fontSize === 'small' ? 11.5 : settings.fontSize === 'large' ? 16 : 13.5

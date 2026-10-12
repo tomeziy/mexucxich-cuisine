@@ -210,6 +210,7 @@ export const ReceiptModal: React.FC<ReceiptModalProps> = ({
       {/* 2. REAL THERMAL PRINT PORTAL (Rendered directly into #print-root outside #root) */}
       {printRoot && createPortal(
         <div
+          className={settings.fontFamily === 'system' ? 'font-system' : 'font-arial'}
           style={{
             fontSize: `${baseFontSizePx}px`,
             lineHeight: 1.35,

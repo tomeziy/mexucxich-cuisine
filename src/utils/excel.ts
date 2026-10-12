@@ -16,22 +16,45 @@ export function normalizeHeaderKey(header: any): string {
  * Header alias dictionary for Products
  */
 export const PRODUCT_HEADER_ALIASES = {
-  name: ['tensanpham', 'tenmonan', 'tenmon', 'tenhang', 'mathang', 'sanpham', 'monan', 'name', 'ten'],
-  category: ['danhmuc', 'nhomhang', 'nhom', 'category', 'loaihang', 'loai'],
-  unit: ['donvi', 'donvitinh', 'dvt', 'unit'],
-  cost: ['giavon', 'gianhap', 'giamua', 'cost', 'giagoc'],
-  price: ['giaban', 'dongia', 'giale', 'gia', 'price', 'giatien'],
-  stock: ['tonkho', 'soluong', 'ton', 'stock', 'qty', 'sl', 'soluongton'],
+  name: [
+    'tensanpham', 'tenmonan', 'tenmon', 'tenhang', 'tenhanghoa',
+    'mathang', 'sanpham', 'monan', 'hanghoa', 'name', 'ten'
+  ],
+  category: [
+    'danhmuc', 'nhomhang', 'nhom', 'category', 'loaihang', 'loai', 'nhomsanpham'
+  ],
+  unit: [
+    'donvi', 'donvitinh', 'dvt', 'unit', 'quycach'
+  ],
+  cost: [
+    'giavon', 'gianhap', 'giamua', 'cost', 'giagoc'
+  ],
+  price: [
+    'giaban', 'dongia', 'giale', 'giabanle', 'gia', 'price', 'giatien'
+  ],
+  stock: [
+    'tonkho', 'soluong', 'ton', 'stock', 'qty', 'sl', 'soluongton', 'soluongtonkho'
+  ],
 };
 
 /**
  * Header alias dictionary for Customers
  */
 export const CUSTOMER_HEADER_ALIASES = {
-  name: ['tenkhachhang', 'tenkhach', 'khachhang', 'hovaten', 'hoten', 'name', 'ten', 'khach'],
-  phone: ['sodienthoai', 'sdt', 'dienthoai', 'phone', 'tel', 'didong', 'so_dien_thoai'],
-  address: ['diachi', 'diachigiaohang', 'address', 'noio', 'dc', 'dia_chi'],
-  debt: ['dunobandau', 'duno', 'congno', 'nocu', 'tienno', 'debt', 'so_no', 'no', 'tienco'],
+  name: [
+    'tenkhachhang', 'tenkhach', 'khachhang', 'hovaten', 'hoten',
+    'name', 'ten', 'khach', 'nguoimua', 'nguoilienhe'
+  ],
+  phone: [
+    'sodienthoai', 'sdt', 'dienthoai', 'phone', 'tel', 'didong', 'sodt', 'dienthoaididong', 'sdtlienhe'
+  ],
+  address: [
+    'diachi', 'diachigiaohang', 'address', 'noio', 'dc', 'diachinhanhang'
+  ],
+  debt: [
+    'dunobandau', 'duno', 'congno', 'nocu', 'tienno', 'debt',
+    'sono', 'no', 'tienco', 'nohientai', 'dunohientai', 'tongno', 'conno'
+  ],
 };
 
 /**
@@ -99,6 +122,11 @@ export function normalizeVietnamesePhone(phone: any): string {
   let str = String(phone).replace(/[^0-9+]/g, '').trim();
   if (!str) return '';
 
+  // Reject dummy zero-only phones (e.g. 0, 00, 000 from Excel empty cells)
+  if (str === '0' || /^0+$/.test(str)) {
+    return '';
+  }
+
   if (str.startsWith('+84')) {
     str = '0' + str.slice(3);
   } else if (str.startsWith('84') && str.length >= 10) {
@@ -106,7 +134,7 @@ export function normalizeVietnamesePhone(phone: any): string {
   }
 
   // If 9 digits (Excel truncated leading 0, e.g. 904047976 -> 0904047976)
-  if (str.length === 9 && /^[35789]/.test(str)) {
+  if (str.length === 9 && !str.startsWith('0')) {
     str = '0' + str;
   }
 
@@ -138,15 +166,20 @@ function findHeaderRowInSheet<T extends Record<string, string[]>>(
   primaryRequiredField: keyof T
 ): SheetHeaderScanResult<T> | null {
   const maxScanRows = Math.min(sheetRows.length, 11); // scan rows 0 to 10
+  let bestResult: SheetHeaderScanResult<T> | null = null;
+  let maxMatchedCount = 0;
+
   for (let r = 0; r < maxScanRows; r++) {
     const row = sheetRows[r];
     if (!Array.isArray(row)) continue;
     const colMap = new Map<number, keyof T>();
+    const mappedFields = new Set<keyof T>();
     let hasRequiredField = false;
 
     row.forEach((cell, colIdx) => {
       const matched = matchHeaderField(cell, aliasMap);
-      if (matched) {
+      if (matched && !mappedFields.has(matched)) {
+        mappedFields.add(matched);
         colMap.set(colIdx, matched);
         if (matched === primaryRequiredField) {
           hasRequiredField = true;
@@ -154,14 +187,15 @@ function findHeaderRowInSheet<T extends Record<string, string[]>>(
       }
     });
 
-    if (hasRequiredField) {
-      return {
+    if (hasRequiredField && colMap.size > maxMatchedCount) {
+      maxMatchedCount = colMap.size;
+      bestResult = {
         headerRowIndex: r,
         columnMap: colMap,
       };
     }
   }
-  return null;
+  return bestResult;
 }
 
 export interface ParsedProductRow {
