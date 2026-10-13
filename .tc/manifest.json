@@ -2,8 +2,8 @@
   "project": "MexucxichCuisine",
   "version": "1.0.0",
   "created_at": "2026-09-08T16:00:00+07:00",
-  "last_updated": "2026-10-12T16:05:00+07:00",
-  "active_tc": "TC-008",
+  "last_updated": "2026-10-13T14:15:00+07:00",
+  "active_tc": "TC-009",
   "changes": [
     {
       "id": "TC-001",
@@ -52,6 +52,12 @@
       "title": "Xử lý xung đột đồng bộ đa thiết bị (Desktop quầy vs Điện thoại chủ) & Trừ kho nguyên tử (ADR-0008)",
       "status": "deployed",
       "file": "TC-008-cross-device-sync-conflict-resolution.json"
+    },
+    {
+      "id": "TC-009",
+      "title": "Hộp Tìm Kiếm Khách Hàng Thông Minh (Customer Combobox) và Tối Giản Hóa Mẫu In Nhiệt (ADR-0009)",
+      "status": "implemented",
+      "file": "TC-009-pos-customer-combobox-and-thermal-receipt-minimal-layout.json"
     }
   ]
 }

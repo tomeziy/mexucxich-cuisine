@@ -629,6 +629,45 @@ export const SettingsPage: React.FC = () => {
                   className="w-4 h-4 rounded text-amber-500 focus:ring-amber-500"
                 />
               </label>
+
+              <label className="flex items-center justify-between p-2.5 rounded-xl border border-slate-200 bg-slate-50/50 cursor-pointer">
+                <div>
+                  <span className="font-bold text-slate-800 block">Hiển thị Hình thức đơn (Tại chỗ / Ship)</span>
+                  <span className="text-[10px] text-slate-400">Mặc định tắt để hóa đơn ngắn gọn</span>
+                </div>
+                <input
+                  type="checkbox"
+                  checked={!!settings.showOrderType}
+                  onChange={e => setSettings({ ...settings, showOrderType: e.target.checked })}
+                  className="w-4 h-4 rounded text-amber-500 focus:ring-amber-500"
+                />
+              </label>
+
+              <label className="flex items-center justify-between p-2.5 rounded-xl border border-slate-200 bg-slate-50/50 cursor-pointer">
+                <div>
+                  <span className="font-bold text-slate-800 block">Hiển thị Phương thức thanh toán</span>
+                  <span className="text-[10px] text-slate-400">Tiền mặt / Chuyển khoản / Ghi nợ 100%</span>
+                </div>
+                <input
+                  type="checkbox"
+                  checked={!!settings.showPaymentMethod}
+                  onChange={e => setSettings({ ...settings, showPaymentMethod: e.target.checked })}
+                  className="w-4 h-4 rounded text-amber-500 focus:ring-amber-500"
+                />
+              </label>
+
+              <label className="flex items-center justify-between p-2.5 rounded-xl border border-slate-200 bg-slate-50/50 cursor-pointer">
+                <div>
+                  <span className="font-bold text-slate-800 block">Hiển thị Chi tiết số tiền Ghi nợ</span>
+                  <span className="text-[10px] text-slate-400">Dòng "Ghi nợ đơn này: +...đ"</span>
+                </div>
+                <input
+                  type="checkbox"
+                  checked={!!settings.showDebtInfo}
+                  onChange={e => setSettings({ ...settings, showDebtInfo: e.target.checked })}
+                  className="w-4 h-4 rounded text-amber-500 focus:ring-amber-500"
+                />
+              </label>
             </div>
           </div>
 

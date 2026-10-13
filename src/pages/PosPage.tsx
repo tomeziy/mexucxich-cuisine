@@ -4,6 +4,7 @@ import { Product, OrderItem, Order, OrderType, PaymentMethod, OrderStatus } from
 import { matchesSearch } from '../utils/vietnamese';
 import { formatVND, formatDate } from '../utils/format';
 import { ReceiptModal } from '../components/pos/ReceiptModal';
+import { CustomerCombobox } from '../components/pos/CustomerCombobox';
 import { QuickAddCustomerModal } from '../components/pos/QuickAddCustomerModal';
 import { QuickEditCustomerModal } from '../components/pos/QuickEditCustomerModal';
 import { EditOrderModal } from '../components/pos/EditOrderModal';
@@ -53,6 +54,7 @@ export const PosPage: React.FC = () => {
   // Customer state
   const [selectedCustomerId, setSelectedCustomerId] = useState<string>(customers[0]?.id || 'KH01');
   const [isQuickAddCustomerOpen, setIsQuickAddCustomerOpen] = useState(false);
+  const [quickAddInitialName, setQuickAddInitialName] = useState('');
   const [isQuickEditCustomerOpen, setIsQuickEditCustomerOpen] = useState(false);
 
   // Cart state
@@ -606,7 +608,10 @@ export const PosPage: React.FC = () => {
                     Khách hàng & Công nợ
                   </label>
                   <button
-                    onClick={() => setIsQuickAddCustomerOpen(true)}
+                    onClick={() => {
+                      setQuickAddInitialName('');
+                      setIsQuickAddCustomerOpen(true);
+                    }}
                     className="text-[11px] font-bold text-amber-600 hover:underline flex items-center gap-1"
                   >
                     <UserPlus className="w-3 h-3" />
@@ -615,17 +620,15 @@ export const PosPage: React.FC = () => {
                 </div>
 
                 <div className="flex items-center gap-1.5">
-                  <select
-                    value={selectedCustomerId}
-                    onChange={e => setSelectedCustomerId(e.target.value)}
-                    className="flex-1 min-w-0 bg-slate-50 border border-slate-200 rounded-xl px-2.5 py-1.5 text-xs font-semibold text-slate-800 focus:outline-none focus:ring-1 focus:ring-amber-500"
-                  >
-                    {customers.map(c => (
-                      <option key={c.id} value={c.id}>
-                        {c.name} {c.phone ? `(${c.phone})` : ''} {c.debt > 0 ? `• Nợ: ${formatVND(c.debt)}` : ''}
-                      </option>
-                    ))}
-                  </select>
+                  <CustomerCombobox
+                    customers={customers}
+                    selectedCustomerId={selectedCustomerId}
+                    onSelectCustomer={cust => setSelectedCustomerId(cust.id)}
+                    onQuickAdd={query => {
+                      setQuickAddInitialName(query);
+                      setIsQuickAddCustomerOpen(true);
+                    }}
+                  />
                   {selectedCustomer && (
                     <button
                       type="button"
@@ -1043,7 +1046,11 @@ export const PosPage: React.FC = () => {
       {/* Quick Add Customer Modal */}
       <QuickAddCustomerModal
         isOpen={isQuickAddCustomerOpen}
-        onClose={() => setIsQuickAddCustomerOpen(false)}
+        initialName={quickAddInitialName}
+        onClose={() => {
+          setIsQuickAddCustomerOpen(false);
+          setQuickAddInitialName('');
+        }}
         onCustomerAdded={newCust => setSelectedCustomerId(newCust.id)}
       />
 

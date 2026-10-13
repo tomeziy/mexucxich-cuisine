@@ -97,6 +97,9 @@ export interface ReceiptSettings {
   showStaff: boolean;
   showCustomer: boolean;
   showVietQR: boolean;
+  showOrderType?: boolean;
+  showPaymentMethod?: boolean;
+  showDebtInfo?: boolean;
   logoUrl?: string;
 }
 

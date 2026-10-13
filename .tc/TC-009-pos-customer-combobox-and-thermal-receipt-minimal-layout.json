@@ -1,0 +1,39 @@
+{
+  "id": "TC-009",
+  "title": "Hộp Tìm Kiếm Khách Hàng Thông Minh (Customer Combobox) và Tối Giản Hóa Mẫu In Nhiệt (ADR-0009)",
+  "status": "implemented",
+  "created_at": "2026-10-13T14:05:00+07:00",
+  "updated_at": "2026-10-13T14:15:00+07:00",
+  "state_history": [
+    { "state": "planned", "timestamp": "2026-10-13T14:05:00+07:00", "actor": "Antigravity" },
+    { "state": "implemented", "timestamp": "2026-10-13T14:12:00+07:00", "actor": "Antigravity" },
+    { "state": "tested", "timestamp": "2026-10-13T14:14:00+07:00", "actor": "Antigravity" },
+    { "state": "verified", "timestamp": "2026-10-13T14:15:00+07:00", "actor": "Antigravity" }
+  ],
+  "context": {
+    "adr": ["ADR-0009"],
+    "features": [
+      "CustomerCombobox component với ô input nhập liệu trực quan, hiển thị chữ đang gõ, phím tắt mũi tên và nút xóa nhanh",
+      "Thuật toán xếp hạng tìm kiếm khách hàng: Khớp tiền tố (100đ) > Khách có nợ (80đ) > Khớp chuỗi con (60đ) > Khớp địa chỉ (40đ)",
+      "Lọc tiếng Việt không dấu/có dấu và tìm theo số điện thoại siêu tốc với danh sách hơn 3.000 khách",
+      "Lối tắt thêm nhanh khách hàng trực tiếp từ ô tìm kiếm nếu không tìm thấy",
+      "Loại bỏ 4 dòng dư thừa trên hóa đơn in nhiệt: Hình thức, Phương thức thanh toán, Dòng ghi nợ, và Slogan phụ chân bill",
+      "Bổ sung 3 công tắc bật/tắt (showOrderType, showPaymentMethod, showDebtInfo) trong Cài đặt với mặc định Tắt"
+    ]
+  },
+  "progress_summary": "Đã triển khai thành công Customer Combobox và tối giản mẫu in nhiệt theo quyết định ADR-0009. Giải quyết triệt để vấn đề gõ tìm khách hàng không thấy chữ và kết quả nhảy lung tung; bill in ra sạch sẽ gọn gàng, tiết kiệm 2-3cm giấy in; vượt qua 100% test suite scripts/test_adr0009.js, scripts/test_adr0007.js, scripts/test_sync_conflict.js và npm run build.",
+  "files_in_progress": [
+    "GLOSSARY.md",
+    "docs/adr/0009-pos-customer-combobox-and-thermal-receipt-minimal-layout.md",
+    "src/types/index.ts",
+    "src/data/initialData.ts",
+    "src/components/pos/CustomerCombobox.tsx",
+    "src/components/pos/QuickAddCustomerModal.tsx",
+    "src/pages/PosPage.tsx",
+    "src/components/pos/ThermalReceipt.tsx",
+    "src/pages/SettingsPage.tsx",
+    "scripts/test_adr0009.js"
+  ],
+  "blockers": [],
+  "next_steps": []
+}

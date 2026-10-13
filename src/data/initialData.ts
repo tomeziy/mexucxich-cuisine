@@ -165,4 +165,7 @@ export const DEFAULT_RECEIPT_SETTINGS: ReceiptSettings = {
   showStaff: false,
   showCustomer: true,
   showVietQR: true,
+  showOrderType: false,
+  showPaymentMethod: false,
+  showDebtInfo: false,
 };

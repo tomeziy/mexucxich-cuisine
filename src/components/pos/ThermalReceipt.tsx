@@ -123,12 +123,14 @@ export const ThermalReceipt: React.FC<ThermalReceiptProps> = ({
               <span className="text-right text-black font-medium">{order.customerAddress}</span>
             </div>
           )}
-          <div className="flex justify-between items-baseline">
-            <span className="text-black font-medium">Hình thức:</span>
-            <span className="font-semibold text-black uppercase">
-              {order.orderType === 'direct' ? 'Tại chỗ' : 'Giao hàng (Ship)'}
-            </span>
-          </div>
+          {settings.showOrderType && (
+            <div className="flex justify-between items-baseline">
+              <span className="text-black font-medium">Hình thức:</span>
+              <span className="font-semibold text-black uppercase">
+                {order.orderType === 'direct' ? 'Tại chỗ' : 'Giao hàng (Ship)'}
+              </span>
+            </div>
+          )}
           {order.shippingNote && (
             <div className="flex justify-between items-start gap-2 text-black">
               <span className="shrink-0 font-medium">Ghi chú ship:</span>
@@ -213,20 +215,22 @@ export const ThermalReceipt: React.FC<ThermalReceiptProps> = ({
           </span>
         </div>
 
-        <div className="flex justify-between text-black pt-0.5" style={{ fontSize: '0.88em' }}>
-          <span className="font-normal">Phương thức:</span>
-          <span className="font-medium text-black">
-            {order.paymentMethod === 'cash'
-              ? 'Tiền mặt'
-              : order.paymentMethod === 'transfer'
-              ? 'Chuyển khoản (VietQR)'
-              : order.paymentMethod === 'debt'
-              ? 'Ghi nợ 100%'
-              : `Trả một phần (Đã trả: ${formatVND(order.paidAmount)})`}
-          </span>
-        </div>
+        {settings.showPaymentMethod && (
+          <div className="flex justify-between text-black pt-0.5" style={{ fontSize: '0.88em' }}>
+            <span className="font-normal">Phương thức:</span>
+            <span className="font-medium text-black">
+              {order.paymentMethod === 'cash'
+                ? 'Tiền mặt'
+                : order.paymentMethod === 'transfer'
+                ? 'Chuyển khoản (VietQR)'
+                : order.paymentMethod === 'debt'
+                ? 'Ghi nợ 100%'
+                : `Trả một phần (Đã trả: ${formatVND(order.paidAmount)})`}
+            </span>
+          </div>
+        )}
 
-        {order.paymentMethod === 'cash' && order.cashGiven !== undefined && (
+        {settings.showPaymentMethod && order.paymentMethod === 'cash' && order.cashGiven !== undefined && (
           <>
             <div className="flex justify-between text-black" style={{ fontSize: '0.88em' }}>
               <span className="font-normal">Tiền khách đưa:</span>
@@ -239,7 +243,7 @@ export const ThermalReceipt: React.FC<ThermalReceiptProps> = ({
           </>
         )}
 
-        {order.debtAmount > 0 && (
+        {settings.showDebtInfo && order.debtAmount > 0 && (
           <div
             className="flex justify-between text-black font-semibold pt-1 border-t border-black"
             style={{ fontSize: '0.9em' }}
@@ -293,9 +297,6 @@ export const ThermalReceipt: React.FC<ThermalReceiptProps> = ({
       <div className="text-center pt-2 text-black space-y-0.5">
         <p className="font-medium text-black" style={{ fontSize: '0.92em' }}>
           {settings.footerMessage || 'Chúc quý khách có một bữa ăn hạnh phúc!'}
-        </p>
-        <p className="text-black font-normal italic" style={{ fontSize: '0.78em' }}>
-          MexucxichCuisine - Ẩm thực thủ công & Đặc sản tuyển chọn
         </p>
       </div>
     </div>

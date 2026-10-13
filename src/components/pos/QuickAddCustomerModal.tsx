@@ -8,18 +8,29 @@ interface QuickAddCustomerModalProps {
   isOpen: boolean;
   onClose: () => void;
   onCustomerAdded: (customer: Customer) => void;
+  initialName?: string;
 }
 
 export const QuickAddCustomerModal: React.FC<QuickAddCustomerModalProps> = ({
   isOpen,
   onClose,
   onCustomerAdded,
+  initialName = '',
 }) => {
   const { addCustomer } = useStore();
-  const [name, setName] = useState('');
+  const [name, setName] = useState(initialName);
   const [phone, setPhone] = useState('');
   const [address, setAddress] = useState('');
   const [error, setError] = useState('');
+
+  React.useEffect(() => {
+    if (isOpen) {
+      setName(initialName || '');
+      setPhone('');
+      setAddress('');
+      setError('');
+    }
+  }, [isOpen, initialName]);
 
   if (!isOpen) return null;
 
