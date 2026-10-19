@@ -97,6 +97,7 @@ export function mergeProductsWithConflictResolution(
   // 1. Duyệt qua toàn bộ sản phẩm từ Cloud
   for (const cloudP of cloudProducts || []) {
     if (!cloudP || !cloudP.id) continue;
+    if (processedIds.has(cloudP.id)) continue;
     processedIds.add(cloudP.id);
 
     const localP = localMap.get(cloudP.id);
@@ -151,6 +152,7 @@ export function mergeCustomersWithConflictResolution(
 
   for (const cloudC of cloudCustomers || []) {
     if (!cloudC || !cloudC.id) continue;
+    if (processedIds.has(cloudC.id)) continue;
     processedIds.add(cloudC.id);
 
     const localC = localMap.get(cloudC.id);

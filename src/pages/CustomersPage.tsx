@@ -1,4 +1,4 @@
-import React, { useState } from 'react';
+import React, { useState, useMemo, useEffect } from 'react';
 import { useStore } from '../context/StoreContext';
 import { Customer } from '../types';
 import { formatVND, formatDate } from '../utils/format';
@@ -291,15 +291,76 @@ export const CustomersPage: React.FC = () => {
   const [payMethod, setPayMethod] = useState<'cash' | 'transfer'>('cash');
   const [payNote, setPayNote] = useState('');
 
-  // Filtered customers
-  const filteredCustomers = customers.filter(c => {
-    const matchesQuery =
-      matchesSearch(c.name, searchQuery) ||
-      (c.phone && c.phone.includes(searchQuery)) ||
-      (c.address && matchesSearch(c.address, searchQuery));
-    const matchesDebt = filterOnlyDebt ? c.debt > 0 : true;
-    return matchesQuery && matchesDebt;
-  });
+  // Pagination states (KiotViet standard: 20 per page)
+  const [currentPage, setCurrentPage] = useState(1);
+  const [pageSize, setPageSize] = useState<number>(20);
+
+  // Auto-reset to first page whenever search query or debt toggle changes
+  useEffect(() => {
+    setCurrentPage(1);
+  }, [searchQuery, filterOnlyDebt]);
+
+  // Filtered & Ranked customers (Multi-token AND matching + Whole-word prioritization)
+  const filteredCustomers = useMemo(() => {
+    const raw = searchQuery.trim();
+    const matchesDebtFilter = (c: Customer) => (filterOnlyDebt ? c.debt > 0 : true);
+
+    if (!raw) {
+      return customers.filter(matchesDebtFilter);
+    }
+
+    const cleanQuery = removeVietnameseTones(raw);
+    const tokens = cleanQuery.split(/\s+/).filter(Boolean);
+    const numericQuery = raw.replace(/\D/g, '');
+
+    const scoredList: { customer: Customer; score: number }[] = [];
+
+    for (const c of customers) {
+      if (!matchesDebtFilter(c)) continue;
+
+      const nameClean = removeVietnameseTones(c.name);
+      const phone = c.phone || '';
+      const addressClean = c.address ? removeVietnameseTones(c.address) : '';
+      const combined = `${nameClean} ${phone} ${addressClean}`;
+
+      // All tokens must be present in customer info
+      const allTokensMatch = tokens.every(tok => combined.includes(tok));
+      if (!allTokensMatch) continue;
+
+      let score = 0;
+      const nameWords = nameClean.split(/\s+/).filter(Boolean);
+
+      const isNamePrefix = nameClean.startsWith(cleanQuery);
+      const isWordBoundaryMatch = nameWords.some(w => w === cleanQuery || (cleanQuery.length >= 2 && w.startsWith(cleanQuery)));
+      const isPhonePrefix = numericQuery.length > 0 && phone.startsWith(numericQuery);
+      const isNameSubstring = nameClean.includes(cleanQuery);
+
+      if (isNamePrefix) score = 120;
+      else if (isWordBoundaryMatch) score = 110;
+      else if (isPhonePrefix) score = 100;
+      else if (tokens.length > 1 && tokens.every(t => nameClean.includes(t))) score = 90;
+      else if (isNameSubstring) score = 60;
+      else score = 40;
+
+      if (c.debt > 0) score += 15;
+
+      scoredList.push({ customer: c, score });
+    }
+
+    scoredList.sort((a, b) => {
+      if (b.score !== a.score) return b.score - a.score;
+      return a.customer.name.length - b.customer.name.length;
+    });
+
+    return scoredList.map(s => s.customer);
+  }, [customers, searchQuery, filterOnlyDebt]);
+
+  const totalPages = Math.ceil(filteredCustomers.length / pageSize) || 1;
+
+  const paginatedCustomers = useMemo(() => {
+    const start = (currentPage - 1) * pageSize;
+    return filteredCustomers.slice(start, start + pageSize);
+  }, [filteredCustomers, currentPage, pageSize]);
 
   const totalOutstandingDebt = customers.reduce((sum, c) => sum + (c.debt || 0), 0);
   const totalDebtorCount = customers.filter(c => c.debt > 0).length;
@@ -516,7 +577,7 @@ export const CustomersPage: React.FC = () => {
                   </td>
                 </tr>
               ) : (
-                filteredCustomers.map(cust => (
+                paginatedCustomers.map(cust => (
                   <tr key={cust.id} className="hover:bg-amber-50/30 transition">
                     <td className="py-2.5 px-3.5">
                       <div className="flex items-center gap-2">
@@ -587,6 +648,80 @@ export const CustomersPage: React.FC = () => {
             </tbody>
           </table>
         </div>
+
+        {/* Pagination Bar (KiotViet Style) */}
+        {filteredCustomers.length > 0 && (
+          <div className="p-3 border-t border-slate-200 bg-slate-50/70 flex flex-wrap items-center justify-between gap-3 text-xs">
+            <div className="flex items-center gap-3 text-slate-600 font-medium">
+              <span>
+                Hiển thị <strong>{(currentPage - 1) * pageSize + 1}</strong> -{' '}
+                <strong>{Math.min(currentPage * pageSize, filteredCustomers.length)}</strong> trên tổng số{' '}
+                <strong>{filteredCustomers.length}</strong> khách
+              </span>
+              <span className="text-slate-300">|</span>
+              <div className="flex items-center gap-1.5">
+                <span>Số dòng:</span>
+                <select
+                  value={pageSize}
+                  onChange={e => {
+                    setPageSize(Number(e.target.value));
+                    setCurrentPage(1);
+                  }}
+                  className="bg-white border border-slate-200 rounded-lg px-2 py-1 text-xs font-bold text-slate-700 focus:outline-none"
+                >
+                  <option value={20}>20 khách/trang</option>
+                  <option value={50}>50 khách/trang</option>
+                  <option value={100}>100 khách/trang</option>
+                </select>
+              </div>
+            </div>
+
+            {/* Page Navigation */}
+            <div className="flex items-center gap-1.5 font-bold">
+              <button
+                type="button"
+                onClick={() => setCurrentPage(1)}
+                disabled={currentPage === 1}
+                className="px-2.5 py-1 rounded-lg border border-slate-200 bg-white hover:bg-slate-100 text-slate-600 disabled:opacity-40 disabled:cursor-not-allowed transition"
+                title="Trang đầu"
+              >
+                &laquo;
+              </button>
+              <button
+                type="button"
+                onClick={() => setCurrentPage(prev => Math.max(prev - 1, 1))}
+                disabled={currentPage === 1}
+                className="px-2.5 py-1 rounded-lg border border-slate-200 bg-white hover:bg-slate-100 text-slate-600 disabled:opacity-40 disabled:cursor-not-allowed transition"
+                title="Trang trước"
+              >
+                &lsaquo; Trước
+              </button>
+
+              <div className="px-3 py-1 bg-amber-500 text-white rounded-lg shadow-2xs font-extrabold text-xs">
+                Trang {currentPage} / {totalPages}
+              </div>
+
+              <button
+                type="button"
+                onClick={() => setCurrentPage(prev => Math.min(prev + 1, totalPages))}
+                disabled={currentPage === totalPages}
+                className="px-2.5 py-1 rounded-lg border border-slate-200 bg-white hover:bg-slate-100 text-slate-600 disabled:opacity-40 disabled:cursor-not-allowed transition"
+                title="Trang sau"
+              >
+                Sau &rsaquo;
+              </button>
+              <button
+                type="button"
+                onClick={() => setCurrentPage(totalPages)}
+                disabled={currentPage === totalPages}
+                className="px-2.5 py-1 rounded-lg border border-slate-200 bg-white hover:bg-slate-100 text-slate-600 disabled:opacity-40 disabled:cursor-not-allowed transition"
+                title="Trang cuối"
+              >
+                &raquo;
+              </button>
+            </div>
+          </div>
+        )}
       </div>
 
       {/* MODAL: EDIT CUSTOMER */}

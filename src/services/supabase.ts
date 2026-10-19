@@ -258,6 +258,7 @@ async function fetchTableWithPagination(
 ): Promise<any[]> {
   const batchSize = 1000;
   const allRows: any[] = [];
+  const seenIds = new Set<string>();
   let from = 0;
 
   while (from < maxLimit) {
@@ -266,14 +267,26 @@ async function fetchTableWithPagination(
       .from(table)
       .select('*')
       .range(from, to)
-      .order('created_at', { ascending: false });
+      .order('created_at', { ascending: false })
+      .order('id', { ascending: true });
 
     if (error) {
       console.error(`Error fetching paginated data from ${table} (range ${from}-${to}):`, error);
       break;
     }
     if (!data || data.length === 0) break;
-    allRows.push(...data);
+
+    for (const row of data) {
+      if (row && row.id) {
+        if (!seenIds.has(row.id)) {
+          seenIds.add(row.id);
+          allRows.push(row);
+        }
+      } else {
+        allRows.push(row);
+      }
+    }
+
     if (data.length < batchSize) break;
     from += batchSize;
   }

@@ -56,8 +56,14 @@
     {
       "id": "TC-009",
       "title": "Hộp Tìm Kiếm Khách Hàng Thông Minh (Customer Combobox) và Tối Giản Hóa Mẫu In Nhiệt (ADR-0009)",
-      "status": "implemented",
+      "status": "deployed",
       "file": "TC-009-pos-customer-combobox-and-thermal-receipt-minimal-layout.json"
+    },
+    {
+      "id": "TC-010",
+      "title": "Phân trang tất định, tối ưu tương tác chuột Combobox và phân trang khách hàng chuẩn KiotViet (ADR-0010)",
+      "status": "implemented",
+      "file": "TC-010-deterministic-pagination-combobox-mouse-scroll-and-kiotviet-table.json"
     }
   ]
 }

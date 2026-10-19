@@ -31,6 +31,7 @@ export const CustomerCombobox: React.FC<CustomerComboboxProps> = ({
   const containerRef = useRef<HTMLDivElement>(null);
   const inputRef = useRef<HTMLInputElement>(null);
   const listRef = useRef<HTMLDivElement>(null);
+  const isKeyboardNavRef = useRef(false);
 
   const selectedCustomer = useMemo(() => {
     return customers.find(c => c.id === selectedCustomerId) || customers[0];
@@ -47,15 +48,11 @@ export const CustomerCombobox: React.FC<CustomerComboboxProps> = ({
     return () => document.removeEventListener('mousedown', handleClickOutside);
   }, []);
 
-  // Filter & Ranking Algorithm (ADR-0009 Decision 2a)
-  // 1. Prefix match (name or phone) -> score = 100
-  // 2. Active debtor match (c.debt > 0) -> score = 80
-  // 3. Substring match on name or phone -> score = 60
-  // 4. Substring match on address -> score = 40
+  // Filter & Ranking Algorithm (ADR-0009 / ADR-0010)
+  // Multi-token AND matching + Whole-word prioritization (e.g. "Yến" ranks above "Nguyễn")
   const filteredCustomers = useMemo(() => {
     const rawTrimmed = query.trim();
     if (!rawTrimmed) {
-      // Empty query: prioritize selected customer, then debtors, then others up to 25 items
       const selected = selectedCustomer ? [selectedCustomer] : [];
       const others = customers
         .filter(c => c.id !== selectedCustomerId)
@@ -64,6 +61,7 @@ export const CustomerCombobox: React.FC<CustomerComboboxProps> = ({
     }
 
     const cleanQuery = removeVietnameseTones(rawTrimmed);
+    const tokens = cleanQuery.split(/\s+/).filter(Boolean);
     const numericQuery = rawTrimmed.replace(/\D/g, '');
 
     const ranked: RankedCustomer[] = [];
@@ -72,33 +70,47 @@ export const CustomerCombobox: React.FC<CustomerComboboxProps> = ({
       const nameClean = removeVietnameseTones(c.name);
       const phone = c.phone || '';
       const addressClean = c.address ? removeVietnameseTones(c.address) : '';
+      const combined = `${nameClean} ${phone} ${addressClean}`;
+
+      // All tokens must be present in customer info
+      const allTokensMatch = tokens.every(tok => combined.includes(tok));
+      if (!allTokensMatch) continue;
 
       let score = 0;
+      const nameWords = nameClean.split(/\s+/).filter(Boolean);
 
       const isNamePrefix = nameClean.startsWith(cleanQuery);
       const isPhonePrefix = numericQuery.length > 0 && phone.startsWith(numericQuery);
+      const isWordBoundaryMatch = nameWords.some(w => w === cleanQuery || (cleanQuery.length >= 2 && w.startsWith(cleanQuery)));
       const isNameSubstring = nameClean.includes(cleanQuery);
       const isPhoneSubstring = numericQuery.length > 0 && phone.includes(numericQuery);
       const isAddrSubstring = addressClean.includes(cleanQuery);
 
-      if (isNamePrefix || isPhonePrefix) {
+      if (isNamePrefix) {
+        score = 120;
+      } else if (isWordBoundaryMatch) {
+        // Khớp nguyên từ hoặc đầu từ trong tên (VD: "Lê Yến", "Hải Yến" khi gõ "yến")
+        score = 110;
+      } else if (isPhonePrefix) {
         score = 100;
-      } else if (c.debt > 0 && (isNameSubstring || isPhoneSubstring)) {
-        score = 80;
+      } else if (tokens.length > 1 && tokens.every(t => nameClean.includes(t))) {
+        score = 90;
       } else if (isNameSubstring || isPhoneSubstring) {
         score = 60;
       } else if (isAddrSubstring) {
         score = 40;
+      } else {
+        score = 30;
       }
 
-      if (score > 0) {
-        // Boost selected customer slightly if matching
-        if (c.id === selectedCustomerId) score += 5;
-        ranked.push({ customer: c, score });
-      }
+      // Ưu tiên cộng điểm nếu khách đang có dư nợ hoặc là khách vừa chọn
+      if (c.debt > 0) score += 20;
+      if (c.id === selectedCustomerId) score += 5;
+
+      ranked.push({ customer: c, score });
     }
 
-    // Sort by score descending, then by name length ascending (shorter matches are usually more exact)
+    // Sort by score descending, then by name length ascending
     ranked.sort((a, b) => {
       if (b.score !== a.score) return b.score - a.score;
       return a.customer.name.length - b.customer.name.length;
@@ -129,9 +141,11 @@ export const CustomerCombobox: React.FC<CustomerComboboxProps> = ({
 
     if (e.key === 'ArrowDown') {
       e.preventDefault();
+      isKeyboardNavRef.current = true;
       setHighlightedIndex(prev => (prev < filteredCustomers.length - 1 ? prev + 1 : 0));
     } else if (e.key === 'ArrowUp') {
       e.preventDefault();
+      isKeyboardNavRef.current = true;
       setHighlightedIndex(prev => (prev > 0 ? prev - 1 : filteredCustomers.length - 1));
     } else if (e.key === 'Enter') {
       e.preventDefault();
@@ -147,13 +161,14 @@ export const CustomerCombobox: React.FC<CustomerComboboxProps> = ({
     }
   };
 
-  // Scroll active item into view
+  // Scroll active item into view ONLY when navigating via keyboard (prevents scroll jumps on mouse drag)
   useEffect(() => {
-    if (isOpen && listRef.current) {
+    if (isOpen && listRef.current && isKeyboardNavRef.current) {
       const activeElement = listRef.current.children[highlightedIndex] as HTMLElement;
       if (activeElement) {
         activeElement.scrollIntoView({ block: 'nearest' });
       }
+      isKeyboardNavRef.current = false;
     }
   }, [highlightedIndex, isOpen]);
 
@@ -246,6 +261,10 @@ export const CustomerCombobox: React.FC<CustomerComboboxProps> = ({
                 return (
                   <div
                     key={c.id}
+                    onMouseDown={(e) => {
+                      e.preventDefault();
+                      handleSelect(c);
+                    }}
                     onClick={() => handleSelect(c)}
                     onMouseEnter={() => setHighlightedIndex(idx)}
                     className={`px-3 py-2 cursor-pointer flex items-center justify-between gap-2 transition ${

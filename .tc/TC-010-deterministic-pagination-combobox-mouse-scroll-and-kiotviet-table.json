@@ -1,0 +1,35 @@
+{
+  "id": "TC-010",
+  "title": "Phân trang tất định, tối ưu tương tác chuột Combobox và phân trang khách hàng chuẩn KiotViet (ADR-0010)",
+  "status": "implemented",
+  "created_at": "2026-10-19T17:15:00+07:00",
+  "updated_at": "2026-10-19T17:32:00+07:00",
+  "state_history": [
+    { "state": "planned", "timestamp": "2026-10-19T17:15:00+07:00", "actor": "Antigravity" },
+    { "state": "implemented", "timestamp": "2026-10-19T17:28:00+07:00", "actor": "Antigravity" },
+    { "state": "tested", "timestamp": "2026-10-19T17:30:00+07:00", "actor": "Antigravity" },
+    { "state": "verified", "timestamp": "2026-10-19T17:32:00+07:00", "actor": "Antigravity" }
+  ],
+  "context": {
+    "adr": ["ADR-0010"],
+    "features": [
+      "Sửa lỗi SQL query phân trang thiếu tiebreaker khiến 372 khách bị trùng lặp và làm mất khách Yến Thanh Phan",
+      "Bổ sung bộ lọc trùng phòng thủ seenIds trong fetchTableWithPagination và mergeCustomersWithConflictResolution",
+      "Tách biệt hành vi cuộn bàn phím và chuột trong CustomerCombobox, chấm dứt hoàn toàn lỗi giật nhảy đúp khi cuộn",
+      "Kích hoạt chọn khách tức thì bằng onMouseDown ngăn chặn hiện tượng click chuột không phản hồi",
+      "Nâng cấp tìm kiếm từ khóa đa từ và ưu tiên khớp nguyên từ (Whole-word match) giúp từ khóa Yến không bị lẫn với họ Nguyễn",
+      "Thêm thanh phân trang 20 khách/trang chuẩn KiotViet cho màn hình Quản lý Khách hàng & Công nợ"
+    ]
+  },
+  "progress_summary": "Đã triển khai thành công ADR-0010 giải quyết toàn bộ 4 phản ánh trong 2 video thực tế của bạn Hằng. Tải trọn vẹn 100% 3.077 khách hàng duy nhất; tìm kiếm Yến Thanh Phan ra ngay lập tức; cuộn chuột mượt mà không nhảy giật; bảng khách hàng phân trang 20 dòng/trang; vượt qua 100% test suite scripts/test_adr0010.js, test_adr0009.js, test_sync_conflict.js, test_adr0007.js; kiểm tra tsc 0 lỗi và npm run build production thành công.",
+  "files_in_progress": [
+    "src/services/supabase.ts",
+    "src/services/syncConflict.ts",
+    "src/components/pos/CustomerCombobox.tsx",
+    "src/pages/CustomersPage.tsx",
+    "scripts/test_adr0010.js",
+    "docs/adr/0010-deterministic-pagination-combobox-mouse-scroll-and-kiotviet-table.md"
+  ],
+  "blockers": [],
+  "next_steps": []
+}
