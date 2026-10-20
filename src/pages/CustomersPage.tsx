@@ -330,19 +330,22 @@ export const CustomersPage: React.FC = () => {
       let score = 0;
       const nameWords = nameClean.split(/\s+/).filter(Boolean);
 
+      const isExactMatch = nameClean === cleanQuery;
       const isNamePrefix = nameClean.startsWith(cleanQuery);
       const isWordBoundaryMatch = nameWords.some(w => w === cleanQuery || (cleanQuery.length >= 2 && w.startsWith(cleanQuery)));
       const isPhonePrefix = numericQuery.length > 0 && phone.startsWith(numericQuery);
       const isNameSubstring = nameClean.includes(cleanQuery);
 
-      if (isNamePrefix) score = 120;
+      if (isExactMatch) score = 150;
+      else if (isNamePrefix) score = 120;
       else if (isWordBoundaryMatch) score = 110;
       else if (isPhonePrefix) score = 100;
       else if (tokens.length > 1 && tokens.every(t => nameClean.includes(t))) score = 90;
       else if (isNameSubstring) score = 60;
       else score = 40;
 
-      if (c.debt > 0) score += 15;
+      // Tiebreaker nợ trong cùng bậc khớp chữ
+      if (c.debt > 0) score += 2;
 
       scoredList.push({ customer: c, score });
     }

@@ -79,6 +79,7 @@ export const CustomerCombobox: React.FC<CustomerComboboxProps> = ({
       let score = 0;
       const nameWords = nameClean.split(/\s+/).filter(Boolean);
 
+      const isExactMatch = nameClean === cleanQuery;
       const isNamePrefix = nameClean.startsWith(cleanQuery);
       const isPhonePrefix = numericQuery.length > 0 && phone.startsWith(numericQuery);
       const isWordBoundaryMatch = nameWords.some(w => w === cleanQuery || (cleanQuery.length >= 2 && w.startsWith(cleanQuery)));
@@ -86,7 +87,9 @@ export const CustomerCombobox: React.FC<CustomerComboboxProps> = ({
       const isPhoneSubstring = numericQuery.length > 0 && phone.includes(numericQuery);
       const isAddrSubstring = addressClean.includes(cleanQuery);
 
-      if (isNamePrefix) {
+      if (isExactMatch) {
+        score = 150;
+      } else if (isNamePrefix) {
         score = 120;
       } else if (isWordBoundaryMatch) {
         // Khớp nguyên từ hoặc đầu từ trong tên (VD: "Lê Yến", "Hải Yến" khi gõ "yến")
@@ -103,9 +106,9 @@ export const CustomerCombobox: React.FC<CustomerComboboxProps> = ({
         score = 30;
       }
 
-      // Ưu tiên cộng điểm nếu khách đang có dư nợ hoặc là khách vừa chọn
-      if (c.debt > 0) score += 20;
-      if (c.id === selectedCustomerId) score += 5;
+      // Điểm cộng nhỏ cho nợ/khách đang chọn đóng vai trò tiebreaker trong cùng bậc khớp chữ
+      if (c.debt > 0) score += 2;
+      if (c.id === selectedCustomerId) score += 1;
 
       ranked.push({ customer: c, score });
     }

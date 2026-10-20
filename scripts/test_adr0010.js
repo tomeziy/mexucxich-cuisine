@@ -21,19 +21,21 @@ function scoreCustomer(customer, rawQuery) {
   let score = 0;
   const nameWords = nameClean.split(/\s+/).filter(Boolean);
 
+  const isExactMatch = nameClean === cleanQuery;
   const isNamePrefix = nameClean.startsWith(cleanQuery);
   const isWordBoundaryMatch = nameWords.some(w => w === cleanQuery || (cleanQuery.length >= 2 && w.startsWith(cleanQuery)));
   const isPhonePrefix = numericQuery.length > 0 && phone.startsWith(numericQuery);
   const isNameSubstring = nameClean.includes(cleanQuery);
 
-  if (isNamePrefix) score = 120;
+  if (isExactMatch) score = 150;
+  else if (isNamePrefix) score = 120;
   else if (isWordBoundaryMatch) score = 110;
   else if (isPhonePrefix) score = 100;
   else if (tokens.length > 1 && tokens.every(t => nameClean.includes(t))) score = 90;
   else if (isNameSubstring) score = 60;
   else score = 40;
 
-  if (customer.debt > 0) score += 15;
+  if (customer.debt > 0) score += 2;
   return score;
 }
 
@@ -41,20 +43,23 @@ console.log('1. Testing whole-word ranking ("Yến" vs "Nguyễn")...');
 const custYenThanhPhan = { id: 'c1', name: 'Yến Thanh Phan', phone: '0912345678', debt: 0 };
 const custLeYen = { id: 'c2', name: 'Lê Yến', phone: '0932377552', debt: 0 };
 const custHaiYen = { id: 'c3', name: 'Hải Yến', phone: '0982858486', debt: 0 };
-const custNguyenTuan = { id: 'c4', name: 'Anh Nguyễn Tuấn', phone: '0912345678', debt: 0 };
+const custNguyenTuanWithDebt = { id: 'c4', name: 'Anh Nguyễn Tuấn', phone: '0912345678', debt: 500000 };
+const custNguyenThiThuYenWithDebt = { id: 'c5', name: 'Nguyễn Thị Thu Yến', phone: '0988776655', debt: 200000 };
 
 const scoreYenThanhPhan = scoreCustomer(custYenThanhPhan, 'yến');
 const scoreLeYen = scoreCustomer(custLeYen, 'yến');
 const scoreHaiYen = scoreCustomer(custHaiYen, 'yến');
-const scoreNguyenTuan = scoreCustomer(custNguyenTuan, 'yến');
+const scoreNguyenTuan = scoreCustomer(custNguyenTuanWithDebt, 'yến');
+const scoreNguyenThiThuYen = scoreCustomer(custNguyenThiThuYenWithDebt, 'yến');
 
 assert.ok(scoreYenThanhPhan >= 120, 'Yến Thanh Phan should have prefix score 120');
 assert.ok(scoreLeYen >= 110, 'Lê Yến should have whole-word score 110');
 assert.ok(scoreHaiYen >= 110, 'Hải Yến should have whole-word score 110');
-assert.strictEqual(scoreNguyenTuan, 60, 'Nguyễn Tuấn only contains substring "yen", should have score 60');
+assert.strictEqual(scoreNguyenTuan, 62, 'Nguyễn Tuấn contains substring "yen" + debt tiebreaker = 62');
 
 assert.ok(scoreYenThanhPhan > scoreNguyenTuan, 'Yến must rank strictly higher than Nguyễn');
-assert.ok(scoreLeYen > scoreNguyenTuan, 'Lê Yến must rank strictly higher than Nguyễn');
+assert.ok(scoreYenThanhPhan > scoreNguyenThiThuYen, 'Prefix match Yến Thanh Phan must rank higher than internal word match Nguyễn Thị Thu Yến even if latter owes debt');
+assert.ok(scoreLeYen > scoreNguyenTuan, 'Lê Yến must rank strictly higher than Nguyễn Tuấn');
 console.log('✓ Whole-word prioritization prevents "Yến" from getting buried in "Nguyễn".');
 
 console.log('2. Testing multi-token search ("yến thanh phan")...');
