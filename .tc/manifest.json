@@ -2,8 +2,8 @@
   "project": "MexucxichCuisine",
   "version": "1.0.0",
   "created_at": "2026-09-08T16:00:00+07:00",
-  "last_updated": "2026-10-13T14:15:00+07:00",
-  "active_tc": "TC-009",
+  "last_updated": "2026-10-22T16:30:00+07:00",
+  "active_tc": "TC-011",
   "changes": [
     {
       "id": "TC-001",
@@ -62,8 +62,14 @@
     {
       "id": "TC-010",
       "title": "Phân trang tất định, tối ưu tương tác chuột Combobox và phân trang khách hàng chuẩn KiotViet (ADR-0010)",
-      "status": "implemented",
+      "status": "deployed",
       "file": "TC-010-deterministic-pagination-combobox-mouse-scroll-and-kiotviet-table.json"
+    },
+    {
+      "id": "TC-011",
+      "title": "Hỗ trợ số lượng thập phân (Fractional Quantities) và tùy chỉnh cỡ chữ Khối Giao hàng cho Shipper (ADR-0011)",
+      "status": "implemented",
+      "file": "TC-011-fractional-quantities-and-delivery-callout-header.json"
     }
   ]
 }

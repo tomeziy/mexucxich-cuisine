@@ -1,7 +1,8 @@
 import React, { useState, useEffect } from 'react';
 import { useStore } from '../../context/StoreContext';
 import { Order, OrderItem, OrderType, PaymentMethod, OrderStatus, Product } from '../../types';
-import { formatVND } from '../../utils/format';
+import { formatVND, parseQuantity } from '../../utils/format';
+import { QuantityInput } from './QuantityInput';
 import {
   X,
   Plus,
@@ -59,7 +60,7 @@ export const EditOrderModal: React.FC<EditOrderModalProps> = ({ order, isOpen, o
   const selectedCustomer = customers.find(c => c.id === customerId) || customers[0];
 
   // Calculations
-  const subtotal = items.reduce((sum, item) => sum + item.price * item.qty, 0);
+  const subtotal = items.reduce((sum, item) => sum + Math.round(item.price * item.qty), 0);
   const discountAmount =
     discountType === 'percent'
       ? Math.round((subtotal * discountValue) / 100)
@@ -86,8 +87,22 @@ export const EditOrderModal: React.FC<EditOrderModalProps> = ({ order, isOpen, o
       prev
         .map(i => {
           if (i.productId === productId) {
-            const newQty = i.qty + delta;
-            return newQty > 0 ? { ...i, qty: newQty } : i;
+            const newQty = Math.round((i.qty + delta) * 10000) / 10000;
+            return { ...i, qty: newQty };
+          }
+          return i;
+        })
+        .filter(i => i.qty > 0)
+    );
+  };
+
+  const handleSetQty = (productId: string, rawQty: number | string) => {
+    const parsedQty = typeof rawQty === 'number' ? rawQty : parseQuantity(rawQty);
+    setItems(prev =>
+      prev
+        .map(i => {
+          if (i.productId === productId) {
+            return { ...i, qty: parsedQty };
           }
           return i;
         })
@@ -124,7 +139,9 @@ export const EditOrderModal: React.FC<EditOrderModalProps> = ({ order, isOpen, o
     setItems(prev => {
       const existing = prev.find(i => i.productId === prod.id);
       if (existing) {
-        return prev.map(i => (i.productId === prod.id ? { ...i, qty: i.qty + 1 } : i));
+        return prev.map(i =>
+          i.productId === prod.id ? { ...i, qty: Math.round((i.qty + 1) * 10000) / 10000 } : i
+        );
       }
       return [
         ...prev,
@@ -368,17 +385,21 @@ export const EditOrderModal: React.FC<EditOrderModalProps> = ({ order, isOpen, o
                         <button
                           type="button"
                           onClick={() => handleUpdateQty(item.productId, -1)}
-                          className="w-5 h-5 rounded bg-white text-slate-700 hover:bg-slate-200 font-bold flex items-center justify-center"
+                          className="w-5 h-5 rounded bg-white text-slate-700 hover:bg-slate-200 font-bold flex items-center justify-center transition"
+                          title="Giảm 1"
                         >
                           <Minus className="w-3 h-3" />
                         </button>
-                        <span className="w-6 text-center font-bold text-slate-800 text-xs">
-                          {item.qty}
-                        </span>
+                        <QuantityInput
+                          value={item.qty}
+                          onChange={val => handleSetQty(item.productId, val)}
+                          className="w-12 px-0.5 py-0.5 text-center font-bold text-slate-800 text-xs bg-transparent border-0 focus:outline-none focus:bg-white focus:ring-1 focus:ring-amber-500 rounded"
+                        />
                         <button
                           type="button"
                           onClick={() => handleUpdateQty(item.productId, 1)}
-                          className="w-5 h-5 rounded bg-white text-slate-700 hover:bg-slate-200 font-bold flex items-center justify-center"
+                          className="w-5 h-5 rounded bg-white text-slate-700 hover:bg-slate-200 font-bold flex items-center justify-center transition"
+                          title="Tăng 1"
                         >
                           <Plus className="w-3 h-3" />
                         </button>
@@ -386,7 +407,7 @@ export const EditOrderModal: React.FC<EditOrderModalProps> = ({ order, isOpen, o
 
                       {/* Total */}
                       <div className="w-20 text-right font-black text-slate-900 shrink-0">
-                        {formatVND(item.price * item.qty)}
+                        {formatVND(Math.round(item.price * item.qty))}
                       </div>
 
                       <button

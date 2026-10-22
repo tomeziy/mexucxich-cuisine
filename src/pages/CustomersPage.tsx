@@ -1,7 +1,7 @@
 import React, { useState, useMemo, useEffect } from 'react';
 import { useStore } from '../context/StoreContext';
 import { Customer } from '../types';
-import { formatVND, formatDate } from '../utils/format';
+import { formatVND, formatDate, formatDisplayQty } from '../utils/format';
 import { matchesSearch, removeVietnameseTones } from '../utils/vietnamese';
 import {
   Users,
@@ -916,7 +916,7 @@ export const CustomersPage: React.FC = () => {
                             </span>
                           </div>
                           <p className="text-[11px] text-slate-500 truncate max-w-xs mt-0.5">
-                            {o.items.map(i => `${i.name} (x${i.qty})`).join(', ')}
+                            {o.items.map(i => `${i.name} (x${formatDisplayQty(i.qty)})`).join(', ')}
                           </p>
                         </div>
                         <div className="text-right">

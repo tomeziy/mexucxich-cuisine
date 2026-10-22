@@ -23,3 +23,11 @@ _Avoid_: Credit account, loan, tabs
 **Atomic Stock Adjustment**:
 A database-level stored procedure incrementing or decrementing product inventory by a delta value to prevent concurrent overwrite race conditions across devices.
 _Avoid_: Absolute stock overwrite, stock sync
+
+**Fractional Quantity**:
+A non-integer quantity value (e.g. 0.5kg, 0.59kg) assigned to line items measured by weight or custom portions.
+_Avoid_: Split quantity, sub-unit, partial piece
+
+**Delivery Callout Header**:
+An enlarged, high-contrast customer information block (Recipient Name, Phone, Delivery Address, Shipping Note) on the thermal receipt formatted for delivery driver readability while preserving compact itemized rows.
+_Avoid_: Shipper note, driver box, large address banner

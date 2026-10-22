@@ -154,7 +154,8 @@ export const DEFAULT_RECEIPT_SETTINGS: ReceiptSettings = {
   facebook: 'Hoàng Minh Hằng - 0904047976',
   footerMessage: 'Chúc quý khách có một bữa ăn hạnh phúc!',
   paperSize: 'k80',
-  fontSize: 'medium',
+  fontSize: 'small',
+  deliveryCalloutSize: 'standard_large',
   fontFamily: 'arial',
   printCopies: 1,
   bankCode: 'TCB', // Techcombank

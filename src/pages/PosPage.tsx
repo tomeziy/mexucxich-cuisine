@@ -1,13 +1,14 @@
 import React, { useState } from 'react';
 import { useStore } from '../context/StoreContext';
-import { Product, OrderItem, Order, OrderType, PaymentMethod, OrderStatus } from '../types';
+import { Product, OrderItem, CartItem, Order, OrderType, PaymentMethod, OrderStatus } from '../types';
 import { matchesSearch } from '../utils/vietnamese';
-import { formatVND, formatDate } from '../utils/format';
+import { formatVND, formatDate, formatReceiptQty, formatDisplayQty, parseQuantity } from '../utils/format';
 import { ReceiptModal } from '../components/pos/ReceiptModal';
 import { CustomerCombobox } from '../components/pos/CustomerCombobox';
 import { QuickAddCustomerModal } from '../components/pos/QuickAddCustomerModal';
 import { QuickEditCustomerModal } from '../components/pos/QuickEditCustomerModal';
 import { EditOrderModal } from '../components/pos/EditOrderModal';
+import { QuantityInput } from '../components/pos/QuantityInput';
 import {
   Search,
   Plus,
@@ -28,8 +29,6 @@ import {
   AlertCircle,
   RotateCcw,
 } from 'lucide-react';
-
-interface CartItem extends OrderItem {}
 
 export const PosPage: React.FC = () => {
   const {
@@ -109,14 +108,16 @@ export const PosPage: React.FC = () => {
     setCart(prev => {
       const existing = prev.find(item => item.productId === product.id);
       if (existing) {
-        if (existing.qty + 1 > product.stock) {
+        const nextQty = Math.round((existing.qty + 1) * 10000) / 10000;
+        if (nextQty > product.stock) {
           alert(`Món "${product.name}" chỉ còn ${product.stock} ${product.unit} trong kho!`);
           return prev;
         }
         return prev.map(item =>
-          item.productId === product.id ? { ...item, qty: item.qty + 1 } : item
+          item.productId === product.id ? { ...item, qty: nextQty } : item
         );
       }
+      const initialQty = product.stock < 1 ? product.stock : 1;
       return [
         ...prev,
         {
@@ -126,7 +127,7 @@ export const PosPage: React.FC = () => {
           price: product.price,
           originalPrice: product.price,
           cost: product.cost,
-          qty: 1,
+          qty: initialQty,
           image: product.image,
         },
       ];
@@ -161,7 +162,7 @@ export const PosPage: React.FC = () => {
       const existing = prev.find(item => item.productId === productId);
       if (!existing) return prev;
 
-      const newQty = existing.qty + delta;
+      const newQty = Math.round((existing.qty + delta) * 10000) / 10000;
       if (newQty <= 0) {
         return prev.filter(item => item.productId !== productId);
       }
@@ -173,6 +174,33 @@ export const PosPage: React.FC = () => {
         item.productId === productId ? { ...item, qty: newQty } : item
       );
     });
+  };
+
+  const handleSetQty = (productId: string, rawQty: number | string) => {
+    const product = products.find(p => p.id === productId);
+    if (!product) return;
+
+    const parsedQty = typeof rawQty === 'number' ? rawQty : parseQuantity(rawQty);
+    if (parsedQty <= 0) {
+      setCart(prev => prev.filter(item => item.productId !== productId));
+      return;
+    }
+
+    if (parsedQty > product.stock) {
+      alert(`Món "${product.name}" chỉ còn ${product.stock} ${product.unit} trong kho!`);
+      setCart(prev =>
+        prev.map(item =>
+          item.productId === productId ? { ...item, qty: product.stock } : item
+        )
+      );
+      return;
+    }
+
+    setCart(prev =>
+      prev.map(item =>
+        item.productId === productId ? { ...item, qty: parsedQty } : item
+      )
+    );
   };
 
   const handleRemoveItem = (productId: string) => {
@@ -190,7 +218,7 @@ export const PosPage: React.FC = () => {
   };
 
   // Calculations
-  const subtotal = cart.reduce((sum, item) => sum + item.price * item.qty, 0);
+  const subtotal = cart.reduce((sum, item) => sum + Math.round(item.price * item.qty), 0);
 
   let discountAmount = 0;
   if (discountType === 'percent') {
@@ -353,7 +381,7 @@ export const PosPage: React.FC = () => {
                     </div>
 
                     <p className="text-xs text-slate-700 font-medium line-clamp-1">
-                      {order.items.map(i => `${i.name} (x${i.qty})`).join(', ')}
+                      {order.items.map(i => `${i.name} (x${formatDisplayQty(i.qty)})`).join(', ')}
                     </p>
 
                     <div className="flex items-center gap-3 text-[11px] text-slate-500">
@@ -583,7 +611,7 @@ export const PosPage: React.FC = () => {
                       <div className="shrink-0 flex items-center gap-1.5">
                         {inCartItem && (
                           <span className="bg-amber-500 text-white text-[11px] font-extrabold px-2 py-1 rounded-lg shadow-2xs">
-                            x{inCartItem.qty}
+                            {formatReceiptQty(inCartItem.qty)}
                           </span>
                         )}
                         <button
@@ -794,22 +822,31 @@ export const PosPage: React.FC = () => {
 
                           <div className="flex items-center gap-1 bg-slate-50 border border-slate-200 rounded-lg p-0.5 shrink-0">
                             <button
+                              type="button"
                               onClick={() => handleUpdateQty(item.productId, -1)}
-                              className="w-5 h-5 rounded bg-white text-slate-700 hover:bg-slate-200 font-bold flex items-center justify-center"
+                              className="w-5 h-5 rounded bg-white text-slate-700 hover:bg-slate-200 font-bold flex items-center justify-center transition"
+                              title="Giảm 1"
                             >
                               <Minus className="w-3 h-3" />
                             </button>
-                            <span className="w-6 text-center font-bold text-slate-800 text-xs">{item.qty}</span>
+                            <QuantityInput
+                              value={item.qty}
+                              onChange={val => handleSetQty(item.productId, val)}
+                              max={products.find(p => p.id === item.productId)?.stock}
+                              className="w-12 px-0.5 py-0.5 text-center font-bold text-slate-800 text-xs bg-transparent border-0 focus:outline-none focus:bg-white focus:ring-1 focus:ring-amber-500 rounded"
+                            />
                             <button
+                              type="button"
                               onClick={() => handleUpdateQty(item.productId, 1)}
-                              className="w-5 h-5 rounded bg-white text-slate-700 hover:bg-slate-200 font-bold flex items-center justify-center"
+                              className="w-5 h-5 rounded bg-white text-slate-700 hover:bg-slate-200 font-bold flex items-center justify-center transition"
+                              title="Tăng 1"
                             >
                               <Plus className="w-3 h-3" />
                             </button>
                           </div>
 
-                          <div className="w-16 text-right font-black text-slate-900 shrink-0">
-                            {formatVND(item.price * item.qty)}
+                          <div className="w-20 text-right font-black text-slate-900 shrink-0">
+                            {formatVND(Math.round(item.price * item.qty))}
                           </div>
 
                           <button
@@ -835,7 +872,7 @@ export const PosPage: React.FC = () => {
               {/* Pricing Breakdown */}
               <div className="pt-2 border-t border-slate-200 space-y-2 text-xs">
                 <div className="flex justify-between text-slate-600">
-                  <span>Tiền hàng ({totalItemCount} món):</span>
+                  <span>Tiền hàng ({formatDisplayQty(totalItemCount)} món):</span>
                   <span className="font-bold text-slate-900">{formatVND(subtotal)}</span>
                 </div>
 

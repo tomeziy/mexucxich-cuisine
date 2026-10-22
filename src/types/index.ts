@@ -34,6 +34,8 @@ export interface OrderItem {
   image: string;
 }
 
+export interface CartItem extends OrderItem {}
+
 export type OrderType = 'direct' | 'delivery';
 export type OrderStatus = 'preparing' | 'delivering' | 'completed' | 'cancelled';
 export type PaymentMethod = 'cash' | 'transfer' | 'debt' | 'partial';
@@ -77,6 +79,7 @@ export interface DebtPayment {
 export type PaperSize = 'k80' | 'k57' | 'a5' | 'a4';
 export type PrintFontSize = 'small' | 'medium' | 'large';
 export type PrintCopies = 1 | 2;
+export type DeliveryCalloutSize = 'standard_large' | 'extra_large';
 
 export interface ReceiptSettings {
   storeName: string;
@@ -87,6 +90,7 @@ export interface ReceiptSettings {
   footerMessage: string;
   paperSize: PaperSize;
   fontSize?: PrintFontSize;
+  deliveryCalloutSize?: DeliveryCalloutSize;
   fontFamily?: 'arial' | 'system';
   printCopies?: PrintCopies;
   bankCode: string;

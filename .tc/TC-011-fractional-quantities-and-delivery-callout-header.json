@@ -1,0 +1,39 @@
+{
+  "id": "TC-011",
+  "title": "Hỗ trợ số lượng thập phân (Fractional Quantities) và tùy chỉnh cỡ chữ Khối Giao hàng cho Shipper (ADR-0011)",
+  "status": "implemented",
+  "adr_reference": "docs/adr/0011-fractional-quantities-and-delivery-callout-header.md",
+  "created_at": "2026-10-22T11:28:00+07:00",
+  "completed_at": "2026-10-22T16:30:00+07:00",
+  "description": "Cho phép nhập số lượng thập phân/lẻ trực tiếp trên giỏ hàng POS và hộp thoại sửa đơn, chuẩn hóa định dạng in số lượng trên hóa đơn K80, cố định cỡ chữ nhỏ toàn bill để tiết kiệm giấy và cung cấp 2 mức phóng to khối thông tin giao hàng cho shipper.",
+  "tasks": [
+    {
+      "task": "Cập nhật types: bổ sung DeliveryCalloutSize vào ReceiptSettings",
+      "status": "completed"
+    },
+    {
+      "task": "Nâng cấp giỏ hàng PosPage: biến span qty thành input hỗ trợ số thực, dấu chấm và phẩy",
+      "status": "completed"
+    },
+    {
+      "task": "Nâng cấp EditOrderModal: hỗ trợ nhập số lượng thực tương tự giỏ hàng",
+      "status": "completed"
+    },
+    {
+      "task": "Chuẩn hóa ThermalReceipt: format số lượng gọn gàng (x1 vs x0.59) và phóng to khối Delivery Callout Header theo 2 mức",
+      "status": "completed"
+    },
+    {
+      "task": "Cập nhật SettingsPage & ReceiptModal: tinh gọn cài đặt cỡ chữ và thêm 2 nút chọn kích thước khối giao hàng",
+      "status": "completed"
+    },
+    {
+      "task": "Viết unit test scripts/test_adr0011.js kiểm thử tính toán số lượng lẻ, làm tròn và định dạng in ấn",
+      "status": "completed"
+    },
+    {
+      "task": "Biên dịch TypeScript, build production và chạy verification",
+      "status": "completed"
+    }
+  ]
+}

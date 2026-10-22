@@ -1,6 +1,6 @@
 import React from 'react';
 import { Order, ReceiptSettings } from '../../types';
-import { formatVND, formatDate } from '../../utils/format';
+import { formatVND, formatDate, formatReceiptQty, formatDisplayQty, getDeliveryCalloutConfig } from '../../utils/format';
 
 export interface ThermalReceiptProps {
   order: Order;
@@ -30,6 +30,7 @@ export const ThermalReceipt: React.FC<ThermalReceiptProps> = ({
       : '';
 
   const totalQty = order.items.reduce((sum, i) => sum + i.qty, 0);
+  const calloutConfig = getDeliveryCalloutConfig(settings.deliveryCalloutSize);
 
   return (
     <div
@@ -102,41 +103,61 @@ export const ThermalReceipt: React.FC<ThermalReceiptProps> = ({
         </p>
       </div>
 
-      {/* Customer Details */}
-      {settings.showCustomer && (
-        <div className="py-1.5 border-b border-dashed border-black space-y-1" style={{ fontSize: '0.9em' }}>
-          <div className="flex justify-between items-baseline">
-            <span className="text-black font-medium">Khách hàng:</span>
-            <span className="text-black font-semibold text-right">
+      {/* Customer Recipient Block / Delivery Callout Header (ADR-0011) */}
+      {(settings.showCustomer || order.orderType === 'delivery') && (
+        <div
+          data-testid="delivery-callout-header"
+          className={`py-2 px-2 ${calloutConfig.borderClass} my-1.5 text-black ${calloutConfig.fontWeightClass} ${calloutConfig.lineHeightClass}`}
+          style={{
+            fontSize: calloutConfig.fontSize,
+          }}
+        >
+          {order.orderType === 'delivery' && (
+            <div className="text-center pb-1 border-b border-dashed border-black mb-1.5">
+              <span className="font-black uppercase tracking-wider text-black text-xs block">
+                ★ GIAO HÀNG (SHIPPER) ★
+              </span>
+            </div>
+          )}
+
+          <div className="flex justify-between items-baseline gap-1.5">
+            <span className="shrink-0 font-bold">Khách:</span>
+            <span className="text-right font-black break-words flex-1">
               {order.customerName || 'Khách lẻ tại quầy'}
             </span>
           </div>
+
           {order.customerPhone && (
-            <div className="flex justify-between items-baseline">
-              <span className="text-black font-medium">SĐT:</span>
-              <span className="font-medium text-black">{order.customerPhone}</span>
-            </div>
-          )}
-          {order.customerAddress && (
-            <div className="flex justify-between items-start gap-2">
-              <span className="text-black font-medium shrink-0">Địa chỉ:</span>
-              <span className="text-right text-black font-medium">{order.customerAddress}</span>
-            </div>
-          )}
-          {settings.showOrderType && (
-            <div className="flex justify-between items-baseline">
-              <span className="text-black font-medium">Hình thức:</span>
-              <span className="font-semibold text-black uppercase">
-                {order.orderType === 'direct' ? 'Tại chỗ' : 'Giao hàng (Ship)'}
+            <div className="flex justify-between items-baseline gap-1.5 pt-0.5">
+              <span className="shrink-0 font-bold">SĐT:</span>
+              <span className="text-right font-black tracking-wide flex-1">
+                {order.customerPhone}
               </span>
             </div>
           )}
+
+          {order.customerAddress && (
+            <div className="flex flex-col gap-0.5 pt-1">
+              <span className="shrink-0 font-bold">Địa chỉ:</span>
+              <span className="font-black text-left break-words pl-0.5">
+                {order.customerAddress}
+              </span>
+            </div>
+          )}
+
           {order.shippingNote && (
-            <div className="flex justify-between items-start gap-2 text-black">
-              <span className="shrink-0 font-medium">Ghi chú ship:</span>
-              <span className="text-right italic font-normal" style={{ fontSize: '0.9em' }}>
+            <div className="flex flex-col gap-0.5 pt-1 mt-1 border-t border-dashed border-black">
+              <span className="shrink-0 font-bold">Ghi chú ship:</span>
+              <span className="font-extrabold italic text-left break-words pl-0.5">
                 {order.shippingNote}
               </span>
+            </div>
+          )}
+
+          {settings.showOrderType && order.orderType !== 'delivery' && (
+            <div className="flex justify-between items-baseline pt-1 text-xs font-bold">
+              <span>Hình thức:</span>
+              <span className="uppercase">Tại chỗ</span>
             </div>
           )}
         </div>
@@ -170,9 +191,9 @@ export const ThermalReceipt: React.FC<ThermalReceiptProps> = ({
               {/* Line 2: 3 Columns - Price | Qty | Total */}
               <div className="flex justify-between items-center text-black" style={{ fontSize: '0.92em' }}>
                 <span className="w-1/3 text-left font-normal">{formatVND(item.price)}</span>
-                <span className="w-1/3 text-center font-medium">x{item.qty}</span>
+                <span className="w-1/3 text-center font-medium">{formatReceiptQty(item.qty)}</span>
                 <span className="w-1/3 text-right font-semibold text-black" style={{ fontSize: '1em' }}>
-                  {formatVND(item.price * item.qty)}
+                  {formatVND(Math.round(item.price * item.qty))}
                 </span>
               </div>
             </div>
@@ -184,7 +205,7 @@ export const ThermalReceipt: React.FC<ThermalReceiptProps> = ({
       <div className="py-2 border-b border-dashed border-black space-y-1" style={{ fontSize: '0.9em' }}>
         <div className="flex justify-between text-black">
           <span className="font-normal">Tổng số lượng:</span>
-          <span className="font-semibold text-black">{totalQty}</span>
+          <span className="font-semibold text-black">{formatDisplayQty(totalQty)}</span>
         </div>
 
         <div className="flex justify-between text-black">

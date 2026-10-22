@@ -39,13 +39,13 @@ export const ReceiptModal: React.FC<ReceiptModalProps> = ({
       ? 'w-[210mm] max-w-[210mm]'
       : 'w-[80mm] max-w-[80mm]'; // default k80
 
-  // Smart proportional base font size
+  // Smart proportional base font size (defaults to compact 11.5px to save paper)
   const baseFontSizePx =
-    settings.fontSize === 'small'
-      ? 11.5
-      : settings.fontSize === 'large'
+    settings.fontSize === 'large'
       ? 16
-      : 13.5;
+      : settings.fontSize === 'medium'
+      ? 13.5
+      : 11.5;
 
   const printCopies = settings.printCopies || 1;
   const printRoot = typeof document !== 'undefined' ? document.getElementById('print-root') : null;
@@ -71,28 +71,34 @@ export const ReceiptModal: React.FC<ReceiptModalProps> = ({
 
           {/* Quick Toolbar: Chỉnh trực tiếp Cỡ chữ & Số liên ngay trên popup */}
           <div className="bg-amber-50 px-3.5 py-2.5 border-b border-amber-200 flex flex-wrap items-center justify-between gap-2.5 text-xs shrink-0">
-            {/* Cỡ chữ in */}
+            {/* Khối Shipper Selector (ADR-0011) */}
             <div className="flex items-center gap-1.5">
-              <span className="font-bold text-slate-700 text-xs">Cỡ chữ:</span>
+              <span className="font-bold text-slate-700 text-xs">Khối Shipper:</span>
               <div className="inline-flex bg-white p-0.5 rounded-lg border border-amber-200 font-bold text-xs shadow-2xs">
-                {[
-                  { id: 'small', label: 'Nhỏ (11.5px)' },
-                  { id: 'medium', label: 'Vừa (13.5px)' },
-                  { id: 'large', label: 'To (16px)' },
-                ].map(f => (
-                  <button
-                    key={f.id}
-                    type="button"
-                    onClick={() => updateReceiptSettings({ fontSize: f.id as PrintFontSize })}
-                    className={`px-2.5 py-1 rounded-md transition ${
-                      (settings.fontSize || 'medium') === f.id
-                        ? 'bg-amber-500 text-white shadow-xs'
-                        : 'text-slate-600 hover:text-slate-900 hover:bg-slate-50'
-                    }`}
-                  >
-                    {f.label}
-                  </button>
-                ))}
+                <button
+                  type="button"
+                  onClick={() => updateReceiptSettings({ deliveryCalloutSize: 'standard_large' })}
+                  className={`px-2.5 py-1 rounded-md transition ${
+                    (settings.deliveryCalloutSize || 'standard_large') === 'standard_large'
+                      ? 'bg-amber-500 text-white shadow-xs'
+                      : 'text-slate-600 hover:text-slate-900 hover:bg-slate-50'
+                  }`}
+                  title="🌟 Khuyên dùng cho Shipper (To rõ - Tiết kiệm giấy)"
+                >
+                  🌟 To rõ (15px)
+                </button>
+                <button
+                  type="button"
+                  onClick={() => updateReceiptSettings({ deliveryCalloutSize: 'extra_large' })}
+                  className={`px-2.5 py-1 rounded-md transition ${
+                    settings.deliveryCalloutSize === 'extra_large'
+                      ? 'bg-amber-500 text-white shadow-xs'
+                      : 'text-slate-600 hover:text-slate-900 hover:bg-slate-50'
+                  }`}
+                  title="🔍 Cỡ Đại nổi bật"
+                >
+                  🔍 Cỡ Đại (18px)
+                </button>
               </div>
             </div>
 
@@ -184,7 +190,7 @@ export const ReceiptModal: React.FC<ReceiptModalProps> = ({
                 </button>
               )}
               <div className="text-[11px] text-slate-400 font-medium hidden sm:block">
-                In: <strong className="text-slate-700">{printCopies} liên</strong> • Cỡ chữ: <strong className="text-slate-700">{settings.fontSize === 'small' ? 'Nhỏ' : settings.fontSize === 'large' ? 'To' : 'Vừa'}</strong>
+                In: <strong className="text-slate-700">{printCopies} liên</strong> • Khối Shipper: <strong className="text-slate-700">{(settings.deliveryCalloutSize || 'standard_large') === 'extra_large' ? 'Cỡ Đại (18px)' : 'To rõ (15px)'}</strong>
               </div>
             </div>
 

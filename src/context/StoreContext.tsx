@@ -377,7 +377,10 @@ export const StoreProvider: React.FC<{ children: React.ReactNode }> = ({ childre
     const qtyByProduct = new Map<string, number>();
     for (const item of newOrder.items || []) {
       if (item && item.productId) {
-        qtyByProduct.set(item.productId, (qtyByProduct.get(item.productId) || 0) + (Number(item.qty) || 0));
+        qtyByProduct.set(
+          item.productId,
+          Math.round(((qtyByProduct.get(item.productId) || 0) + (Number(item.qty) || 0)) * 10000) / 10000
+        );
       }
     }
 
@@ -395,7 +398,7 @@ export const StoreProvider: React.FC<{ children: React.ReactNode }> = ({ childre
 
       const adjustments = Array.from(qtyByProduct.entries()).map(([productId, qty]) => ({
         productId,
-        delta: -qty,
+        delta: Math.round(-qty * 10000) / 10000,
       }));
 
       cloudAdjustProductsStockBatch(adjustments).then(results => {
@@ -404,7 +407,7 @@ export const StoreProvider: React.FC<{ children: React.ReactNode }> = ({ childre
             prev.map(p => {
               const match = results.find(r => r.productId === p.id && r.success && typeof r.newStock === 'number');
               if (match && typeof match.newStock === 'number') {
-                return { ...p, stock: match.newStock };
+                return { ...p, stock: Math.round(match.newStock * 10000) / 10000 };
               }
               return p;
             })
@@ -476,14 +479,20 @@ export const StoreProvider: React.FC<{ children: React.ReactNode }> = ({ childre
       const oldQtyMap = new Map<string, number>();
       for (const item of oldOrder.items || []) {
         if (item && item.productId) {
-          oldQtyMap.set(item.productId, (oldQtyMap.get(item.productId) || 0) + (Number(item.qty) || 0));
+          oldQtyMap.set(
+            item.productId,
+            Math.round(((oldQtyMap.get(item.productId) || 0) + (Number(item.qty) || 0)) * 10000) / 10000
+          );
         }
       }
 
       const newQtyMap = new Map<string, number>();
       for (const item of updatedOrder.items || []) {
         if (item && item.productId) {
-          newQtyMap.set(item.productId, (newQtyMap.get(item.productId) || 0) + (Number(item.qty) || 0));
+          newQtyMap.set(
+            item.productId,
+            Math.round(((newQtyMap.get(item.productId) || 0) + (Number(item.qty) || 0)) * 10000) / 10000
+          );
         }
       }
 
@@ -493,9 +502,9 @@ export const StoreProvider: React.FC<{ children: React.ReactNode }> = ({ childre
       for (const pId of allProdIds) {
         const oldQ = oldQtyMap.get(pId) || 0;
         const newQ = newQtyMap.get(pId) || 0;
-        const qtyDiff = newQ - oldQ; // dương = mua thêm (delta = -qtyDiff), âm = bớt đi (delta = +)
+        const qtyDiff = Math.round((newQ - oldQ) * 10000) / 10000; // dương = mua thêm (delta = -qtyDiff), âm = bớt đi (delta = +)
         if (qtyDiff !== 0) {
-          adjustments.push({ productId: pId, delta: -qtyDiff });
+          adjustments.push({ productId: pId, delta: Math.round(-qtyDiff * 10000) / 10000 });
         }
       }
 
@@ -518,7 +527,7 @@ export const StoreProvider: React.FC<{ children: React.ReactNode }> = ({ childre
               prev.map(p => {
                 const match = results.find(r => r.productId === p.id && r.success && typeof r.newStock === 'number');
                 if (match && typeof match.newStock === 'number') {
-                  return { ...p, stock: match.newStock };
+                  return { ...p, stock: Math.round(match.newStock * 10000) / 10000 };
                 }
                 return p;
               })
@@ -603,13 +612,16 @@ export const StoreProvider: React.FC<{ children: React.ReactNode }> = ({ childre
       const returnQtyMap = new Map<string, number>();
       for (const item of orderToDelete.items || []) {
         if (item && item.productId) {
-          returnQtyMap.set(item.productId, (returnQtyMap.get(item.productId) || 0) + (Number(item.qty) || 0));
+          returnQtyMap.set(
+            item.productId,
+            Math.round(((returnQtyMap.get(item.productId) || 0) + (Number(item.qty) || 0)) * 10000) / 10000
+          );
         }
       }
 
       const adjustments = Array.from(returnQtyMap.entries()).map(([productId, qty]) => ({
         productId,
-        delta: qty, // hoàn kho: delta dương
+        delta: Math.round(qty * 10000) / 10000, // hoàn kho: delta dương
       }));
 
       if (adjustments.length > 0) {
@@ -631,7 +643,7 @@ export const StoreProvider: React.FC<{ children: React.ReactNode }> = ({ childre
               prev.map(p => {
                 const match = results.find(r => r.productId === p.id && r.success && typeof r.newStock === 'number');
                 if (match && typeof match.newStock === 'number') {
-                  return { ...p, stock: match.newStock };
+                  return { ...p, stock: Math.round(match.newStock * 10000) / 10000 };
                 }
                 return p;
               })
@@ -681,13 +693,16 @@ export const StoreProvider: React.FC<{ children: React.ReactNode }> = ({ childre
     const returnQtyMap = new Map<string, number>();
     for (const item of orderToCancel.items || []) {
       if (item && item.productId) {
-        returnQtyMap.set(item.productId, (returnQtyMap.get(item.productId) || 0) + (Number(item.qty) || 0));
+        returnQtyMap.set(
+          item.productId,
+          Math.round(((returnQtyMap.get(item.productId) || 0) + (Number(item.qty) || 0)) * 10000) / 10000
+        );
       }
     }
 
     const adjustments = Array.from(returnQtyMap.entries()).map(([productId, qty]) => ({
       productId,
-      delta: qty, // restock
+      delta: Math.round(qty * 10000) / 10000, // restock
     }));
 
     if (adjustments.length > 0) {
@@ -709,7 +724,7 @@ export const StoreProvider: React.FC<{ children: React.ReactNode }> = ({ childre
             prev.map(p => {
               const match = results.find(r => r.productId === p.id && r.success && typeof r.newStock === 'number');
               if (match && typeof match.newStock === 'number') {
-                return { ...p, stock: match.newStock };
+                return { ...p, stock: Math.round(match.newStock * 10000) / 10000 };
               }
               return p;
             })

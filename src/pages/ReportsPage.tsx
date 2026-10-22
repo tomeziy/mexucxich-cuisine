@@ -1,7 +1,7 @@
 import React, { useState } from 'react';
 import { useStore } from '../context/StoreContext';
 import { Order } from '../types';
-import { formatVND, formatDate } from '../utils/format';
+import { formatVND, formatDate, formatDisplayQty } from '../utils/format';
 import { ReceiptModal } from '../components/pos/ReceiptModal';
 import { EditOrderModal } from '../components/pos/EditOrderModal';
 import {
@@ -39,9 +39,10 @@ export const ReportsPage: React.FC = () => {
 
   const handleDeleteOrder = (order: Order) => {
     const isCancelled = order.status === 'cancelled';
+    const totalOrderQty = order.items.reduce((sum, i) => sum + i.qty, 0);
     const confirmMsg = isCancelled
       ? `Bạn có chắc chắn muốn xóa vĩnh viễn đơn #${order.id}?`
-      : `Bạn có chắc chắn muốn XÓA VĨNH VIỄN đơn #${order.id}?\n\n- Các món ăn trong đơn sẽ được TỰ ĐỘNG HOÀN KHO (+${order.items.reduce((sum, i) => sum + i.qty, 0)} sản phẩm).\n- Nếu đơn có ghi nợ, số dư nợ của khách ${order.customerName} sẽ được TỰ ĐỘNG KHẤU TRỪ.\n- Doanh thu sẽ được cập nhật lại!`;
+      : `Bạn có chắc chắn muốn XÓA VĨNH VIỄN đơn #${order.id}?\n\n- Các món ăn trong đơn sẽ được TỰ ĐỘNG HOÀN KHO (+${formatDisplayQty(totalOrderQty)} sản phẩm).\n- Nếu đơn có ghi nợ, số dư nợ của khách ${order.customerName} sẽ được TỰ ĐỘNG KHẤU TRỪ.\n- Doanh thu sẽ được cập nhật lại!`;
 
     if (window.confirm(confirmMsg)) {
       deleteOrder(order.id);
@@ -86,7 +87,7 @@ export const ReportsPage: React.FC = () => {
 
   // Cost of goods sold (Tổng giá vốn)
   const totalCost = validOrders.reduce((sum, o) => {
-    const orderCost = o.items.reduce((iSum, item) => iSum + (item.cost || 0) * item.qty, 0);
+    const orderCost = o.items.reduce((iSum, item) => iSum + Math.round((item.cost || 0) * item.qty), 0);
     return sum + orderCost;
   }, 0);
 
@@ -289,7 +290,7 @@ export const ReportsPage: React.FC = () => {
                         </span>
                       </td>
                       <td className="py-2.5 px-3 text-slate-600 max-w-xs truncate text-[11px]">
-                        {order.items.map(i => `${i.name} (x${i.qty})`).join(', ')}
+                        {order.items.map(i => `${i.name} (x${formatDisplayQty(i.qty)})`).join(', ')}
                       </td>
                       <td className="py-2.5 px-3 text-right">
                         <strong className="text-slate-900 block font-bold">

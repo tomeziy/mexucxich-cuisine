@@ -72,6 +72,15 @@ const SAMPLE_ORDER: Order = {
       image: '🌭',
     },
     {
+      productId: 'SP02',
+      name: 'Lõi vai bò vân tuyết Aukobe (Cân ký lẻ)',
+      unit: 'kg',
+      price: 380000,
+      cost: 260000,
+      qty: 0.59,
+      image: '🥩',
+    },
+    {
       productId: 'SP03',
       name: 'Pate Gan Gà Nấm Truffle Thượng Hạng',
       unit: 'Hũ 250g',
@@ -81,15 +90,15 @@ const SAMPLE_ORDER: Order = {
       image: '🥣',
     },
   ],
-  subtotal: 265000,
+  subtotal: 489200,
   discountType: 'cash',
   discountValue: 0,
   discountAmount: 0,
   shippingFee: 25000,
-  shippingNote: 'Giao trong chiều nay',
-  total: 290000,
+  shippingNote: 'Giao giờ hành chính, gọi trước khi đến',
+  total: 514200,
   paymentMethod: 'transfer',
-  paidAmount: 290000,
+  paidAmount: 514200,
   debtAmount: 0,
 };
 
@@ -460,22 +469,82 @@ export const SettingsPage: React.FC = () => {
                 </div>
               </div>
 
-              {/* Font Size Selection */}
-              <div>
-                <label className="font-bold text-slate-700 block mb-1.5">Cỡ chữ hóa đơn in:</label>
+              {/* Delivery Callout Header Size Selection (ADR-0011) */}
+              <div className="space-y-1.5 pt-1">
+                <div className="flex items-center justify-between">
+                  <label className="font-bold text-slate-700 block text-xs">
+                    Khối thông tin người nhận cho Shipper:
+                  </label>
+                  <span className="text-[10px] font-extrabold text-amber-700 bg-amber-100 px-2 py-0.5 rounded-full border border-amber-300">
+                    ADR-0011 Mới
+                  </span>
+                </div>
+                <div className="grid grid-cols-1 sm:grid-cols-2 gap-2">
+                  <button
+                    type="button"
+                    onClick={() => setSettings({ ...settings, deliveryCalloutSize: 'standard_large' })}
+                    className={`p-2.5 rounded-xl border text-left transition ${
+                      (settings.deliveryCalloutSize || 'standard_large') === 'standard_large'
+                        ? 'border-amber-500 bg-amber-50 text-amber-950 shadow-xs ring-1 ring-amber-500'
+                        : 'border-slate-200 hover:bg-slate-50 text-slate-700'
+                    }`}
+                  >
+                    <div className="flex items-center justify-between">
+                      <strong className="text-xs font-bold text-slate-900">
+                        🌟 Khuyên dùng cho Shipper (To rõ - Tiết kiệm giấy)
+                      </strong>
+                      <span className="text-[10px] font-black px-1.5 py-0.5 bg-amber-200 text-amber-900 rounded shrink-0 ml-1">
+                        ~15px
+                      </span>
+                    </div>
+                    <span className="text-[10px] text-slate-500 mt-1 block">
+                      To rõ gấp ~1.5x cỡ bill • font-black • Ngắt dòng tối ưu, bill chỉ dài thêm ~1cm giấy
+                    </span>
+                  </button>
+
+                  <button
+                    type="button"
+                    onClick={() => setSettings({ ...settings, deliveryCalloutSize: 'extra_large' })}
+                    className={`p-2.5 rounded-xl border text-left transition ${
+                      settings.deliveryCalloutSize === 'extra_large'
+                        ? 'border-amber-500 bg-amber-50 text-amber-950 shadow-xs ring-1 ring-amber-500'
+                        : 'border-slate-200 hover:bg-slate-50 text-slate-700'
+                    }`}
+                  >
+                    <div className="flex items-center justify-between">
+                      <strong className="text-xs font-bold text-slate-900">
+                        🔍 Cỡ Đại nổi bật
+                      </strong>
+                      <span className="text-[10px] font-black px-1.5 py-0.5 bg-purple-200 text-purple-900 rounded shrink-0 ml-1">
+                        ~18px
+                      </span>
+                    </div>
+                    <span className="text-[10px] text-slate-500 mt-1 block">
+                      Cực kỳ to rõ gấp ~1.8x • Dễ đọc khi chạy xe máy • Kiểm soát line-height chống tràn lề K80
+                    </span>
+                  </button>
+                </div>
+              </div>
+
+              {/* Simplified Whole-Bill Font Size */}
+              <div className="pt-2 border-t border-slate-100">
+                <div className="flex items-center justify-between mb-1.5">
+                  <label className="font-bold text-slate-700 block text-xs">Cỡ chữ danh sách món & tổng tiền:</label>
+                  <span className="text-[10px] text-slate-400">Mặc định: Nhỏ (Tiết kiệm giấy in)</span>
+                </div>
                 <div className="grid grid-cols-3 gap-1.5">
                   {[
-                    { id: 'small', name: 'Nhỏ', desc: '11px' },
-                    { id: 'medium', name: 'Vừa', desc: '13px (KiotViet)' },
-                    { id: 'large', name: 'To', desc: '15px (Rõ nét)' },
+                    { id: 'small', name: 'Nhỏ (11.5px)', desc: '🌟 Tiết kiệm giấy' },
+                    { id: 'medium', name: 'Vừa (13.5px)', desc: 'Chuẩn KiotViet' },
+                    { id: 'large', name: 'To (16px)', desc: 'Chữ to toàn bill' },
                   ].map(f => (
                     <button
                       key={f.id}
                       type="button"
                       onClick={() => setSettings({ ...settings, fontSize: f.id as PrintFontSize })}
                       className={`p-2 rounded-xl border text-center font-bold transition ${
-                        (settings.fontSize || 'medium') === f.id
-                          ? 'border-amber-500 bg-amber-50 text-amber-900 shadow-xs'
+                        (settings.fontSize || 'small') === f.id
+                          ? 'border-amber-500 bg-amber-50 text-amber-900 shadow-xs ring-1 ring-amber-500'
                           : 'border-slate-200 hover:bg-slate-50 text-slate-700'
                       }`}
                     >
@@ -927,7 +996,7 @@ export const SettingsPage: React.FC = () => {
               className={`${paperWidthStyle} bg-white p-4 text-slate-900 font-sans border-t-4 border-amber-500 rounded-xs shadow-sm`}
               style={{
                 fontSize: `${
-                  settings.fontSize === 'small' ? 11.5 : settings.fontSize === 'large' ? 16 : 13.5
+                  settings.fontSize === 'large' ? 16 : settings.fontSize === 'medium' ? 13.5 : 11.5
                 }px`,
                 lineHeight: 1.35,
               }}
@@ -954,7 +1023,7 @@ export const SettingsPage: React.FC = () => {
           className={settings.fontFamily === 'system' ? 'font-system' : 'font-arial'}
           style={{
             fontSize: `${
-              settings.fontSize === 'small' ? 11.5 : settings.fontSize === 'large' ? 16 : 13.5
+              settings.fontSize === 'large' ? 16 : settings.fontSize === 'medium' ? 13.5 : 11.5
             }px`,
             lineHeight: 1.35,
             width: settings.paperSize === 'k57' ? '57mm' : '80mm',
