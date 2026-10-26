@@ -120,7 +120,15 @@ Thao tác mở popup cập nhật tức thời Số điện thoại và Địa c
 _Avoid_: Thoát màn hình để sửa, sửa đè đơn cũ
 
 **Phông chữ in nhiệt (Thermal Print Font Family)**:
-Tùy chọn phông chữ in ấn hóa đơn chuyên dụng (mặc định: Arial) với đặc tính thanh mảnh, tiết kiệm diện tích in ngang và triệt tiêu hiện tượng nhòe mực nhiệt (thermal dot gain) so với phông chữ hình học bo tròn của giao diện web.
+Tùy chọn phông chữ in ấn hóa đơn chuyên dụng (mặc định: Plus Jakarta Sans; tùy chọn thêm: Arial, Phông hệ thống) với đặc tính sắc nét, chuẩn tiếng Việt không lỗi dấu và triệt tiêu hiện tượng nhòe mực nhiệt (thermal dot gain).
 _Avoid_: Font web in bill, font đậm béo
+
+**Quy đổi trọng lượng phần lẻ động (Dynamic Portion Weight Scaling - ADR-0012)**:
+Cơ chế tự động trích xuất thông số khối lượng đóng gói (ví dụ: `Gói 500g`, `Hũ 250g`, `Khay 1kg`, `Hộp 600g`) và nhân tỷ lệ thuận với số lượng lẻ nhập vào (`qty`). Khi bán nửa gói (`0.5`) hoặc cắt khúc cân ký (`0.56`), hệ thống tự động tính toán và hiển thị trọng lượng thực nhận tương ứng (`250g` hoặc `280g`) trên giỏ hàng (`⚖️ Gói 500g → 250g`), danh sách đơn hàng và hóa đơn in nhiệt (`x0.56 (280g)`).
+_Avoid_: Tính nhẩm ngoài đời, ghi tay trọng lượng
+
+**Chuẩn hóa nét chữ in hóa đơn (Receipt Typography Normalization - ADR-0012)**:
+Triệt tiêu lỗi nhòe nét do bôi đậm giả lập (faux-bold smear) bằng cách hạ `font-black` (900) về `font-bold` (700) cho khối thông tin người nhận Shipper; đồng thời mở rộng khoảng cách ký tự `tracking-normal` và đồng bộ phông chữ mặc định `Plus Jakarta Sans` hỗ trợ trọn vẹn bộ ký tự tiếng Việt mở rộng (GF Latin Pro) nhằm loại bỏ hoàn toàn hiện tượng lệch dấu và nát chữ khi in nhiệt hoặc xem trước hóa đơn.
+_Avoid_: Font chữ lỗi, bôi đen xé chữ
 
 
