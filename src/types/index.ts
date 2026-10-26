@@ -91,7 +91,7 @@ export interface ReceiptSettings {
   paperSize: PaperSize;
   fontSize?: PrintFontSize;
   deliveryCalloutSize?: DeliveryCalloutSize;
-  fontFamily?: 'arial' | 'system';
+  fontFamily?: 'plus_jakarta' | 'arial' | 'system';
   printCopies?: PrintCopies;
   bankCode: string;
   bankAccount: string;

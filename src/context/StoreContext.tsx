@@ -122,7 +122,12 @@ export const StoreProvider: React.FC<{ children: React.ReactNode }> = ({ childre
           footerMessage: 'Chúc quý khách có một bữa ăn hạnh phúc!',
         };
       }
-      return { ...DEFAULT_RECEIPT_SETTINGS, ...parsed };
+      const merged = { ...DEFAULT_RECEIPT_SETTINGS, ...parsed };
+      // Auto-upgrade legacy default 'arial' to 'plus_jakarta' for clean Vietnamese font rendering
+      if (!parsed.fontFamily || parsed.fontFamily === 'arial') {
+        merged.fontFamily = 'plus_jakarta';
+      }
+      return merged;
     } catch {
       return DEFAULT_RECEIPT_SETTINGS;
     }

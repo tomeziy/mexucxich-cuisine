@@ -1,7 +1,7 @@
 import React, { useState, useEffect } from 'react';
 import { useStore } from '../../context/StoreContext';
 import { Order, OrderItem, OrderType, PaymentMethod, OrderStatus, Product } from '../../types';
-import { formatVND, parseQuantity } from '../../utils/format';
+import { formatVND, parseQuantity, formatEffectiveUnit } from '../../utils/format';
 import { QuantityInput } from './QuantityInput';
 import {
   X,
@@ -344,6 +344,7 @@ export const EditOrderModal: React.FC<EditOrderModalProps> = ({ order, isOpen, o
                 const isPriceEdited =
                   item.originalPrice !== undefined && item.price !== item.originalPrice;
                 const isBelowCost = item.price < item.cost;
+                const { displayUnit, effectiveWeight } = formatEffectiveUnit(item.unit, item.qty, item.name);
 
                 return (
                   <div key={item.productId} className="p-2.5 bg-white hover:bg-amber-50/20 transition space-y-1">
@@ -352,8 +353,18 @@ export const EditOrderModal: React.FC<EditOrderModalProps> = ({ order, isOpen, o
                         <h5 className="font-bold text-slate-900 truncate">
                           {item.image} {item.name}
                         </h5>
-                        <div className="flex items-center gap-2 text-[10px] text-slate-500 mt-0.5">
-                          <span>{item.unit}</span>
+                        <div className="flex items-center flex-wrap gap-x-1.5 gap-y-0.5 text-[10px] text-slate-500 mt-0.5">
+                          {effectiveWeight ? (
+                            <span
+                              className="font-bold text-amber-900 bg-amber-100 border border-amber-300 px-1 py-0.2 rounded text-[10px] inline-flex items-center gap-1 shadow-2xs"
+                              title={`Trọng lượng thực nhận: ${effectiveWeight}`}
+                            >
+                              <span>⚖️</span>
+                              <span>{displayUnit}</span>
+                            </span>
+                          ) : (
+                            <span>{item.unit}</span>
+                          )}
                           <span>•</span>
                           <span>Đơn giá:</span>
                           <input

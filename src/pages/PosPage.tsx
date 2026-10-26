@@ -2,7 +2,14 @@ import React, { useState } from 'react';
 import { useStore } from '../context/StoreContext';
 import { Product, OrderItem, CartItem, Order, OrderType, PaymentMethod, OrderStatus } from '../types';
 import { matchesSearch } from '../utils/vietnamese';
-import { formatVND, formatDate, formatReceiptQty, formatDisplayQty, parseQuantity } from '../utils/format';
+import {
+  formatVND,
+  formatDate,
+  formatReceiptQty,
+  formatDisplayQty,
+  parseQuantity,
+  formatEffectiveUnit,
+} from '../utils/format';
 import { ReceiptModal } from '../components/pos/ReceiptModal';
 import { CustomerCombobox } from '../components/pos/CustomerCombobox';
 import { QuickAddCustomerModal } from '../components/pos/QuickAddCustomerModal';
@@ -381,7 +388,10 @@ export const PosPage: React.FC = () => {
                     </div>
 
                     <p className="text-xs text-slate-700 font-medium line-clamp-1">
-                      {order.items.map(i => `${i.name} (x${formatDisplayQty(i.qty)})`).join(', ')}
+                      {order.items.map(i => {
+                        const { effectiveWeight } = formatEffectiveUnit(i.unit, i.qty, i.name);
+                        return `${i.name} (x${formatDisplayQty(i.qty)}${effectiveWeight ? ` • ${effectiveWeight}` : ''})`;
+                      }).join(', ')}
                     </p>
 
                     <div className="flex items-center gap-3 text-[11px] text-slate-500">
@@ -759,6 +769,7 @@ export const PosPage: React.FC = () => {
                   cart.map(item => {
                     const isPriceEdited = item.originalPrice !== undefined && item.price !== item.originalPrice;
                     const isBelowCost = item.price < item.cost;
+                    const { displayUnit, effectiveWeight } = formatEffectiveUnit(item.unit, item.qty, item.name);
 
                     return (
                       <div
@@ -774,8 +785,18 @@ export const PosPage: React.FC = () => {
                         <div className="flex items-center justify-between gap-2 text-xs">
                           <div className="flex-1 min-w-0">
                             <h5 className="font-bold text-slate-900 truncate">{item.name}</h5>
-                            <div className="flex items-center flex-wrap gap-x-2 gap-y-1 text-[11px] text-slate-500 mt-0.5">
-                              <span className="font-semibold text-slate-400 text-[10px]">{item.unit}</span>
+                            <div className="flex items-center flex-wrap gap-x-1.5 gap-y-1 text-[11px] text-slate-500 mt-0.5">
+                              {effectiveWeight ? (
+                                <span
+                                  className="font-bold text-amber-900 bg-amber-100 border border-amber-300 px-1.5 py-0.5 rounded text-[10.5px] inline-flex items-center gap-1 shadow-2xs"
+                                  title={`Trọng lượng thực nhận: ${effectiveWeight}`}
+                                >
+                                  <span>⚖️</span>
+                                  <span>{displayUnit}</span>
+                                </span>
+                              ) : (
+                                <span className="font-semibold text-slate-400 text-[10px]">{item.unit}</span>
+                              )}
                               <span className="text-slate-300">•</span>
                               <div className="inline-flex items-center gap-1">
                                 <span className="text-slate-400 text-[10px]">Đơn giá:</span>

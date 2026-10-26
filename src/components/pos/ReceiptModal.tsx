@@ -50,6 +50,13 @@ export const ReceiptModal: React.FC<ReceiptModalProps> = ({
   const printCopies = settings.printCopies || 1;
   const printRoot = typeof document !== 'undefined' ? document.getElementById('print-root') : null;
 
+  const receiptFontFamily =
+    settings.fontFamily === 'system'
+      ? "system-ui, -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif"
+      : settings.fontFamily === 'arial'
+      ? 'Arial, "Helvetica Neue", Helvetica, sans-serif'
+      : "'Plus Jakarta Sans', system-ui, -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif";
+
   return (
     <>
       {/* 1. ON-SCREEN INTERACTIVE MODAL (Rendered inside #root, completely hidden during window.print()) */}
@@ -135,8 +142,8 @@ export const ReceiptModal: React.FC<ReceiptModalProps> = ({
           {/* On-Screen Receipt Paper Preview */}
           <div className="flex-1 min-h-0 overflow-y-auto custom-scroll bg-slate-200/80 p-4 sm:p-6 flex flex-col items-center">
             <div
-              className={`${paperWidthClass} bg-white text-black font-sans shadow-xl rounded-xs border-t-4 border-amber-500 box-border p-4 sm:p-5 h-auto shrink-0 mb-6`}
-              style={{ fontSize: `${baseFontSizePx}px`, lineHeight: 1.35 }}
+              className={`${paperWidthClass} bg-white text-black shadow-xl rounded-xs border-t-4 border-amber-500 box-border p-4 sm:p-5 h-auto shrink-0 mb-6`}
+              style={{ fontFamily: receiptFontFamily, fontSize: `${baseFontSizePx}px`, lineHeight: 1.35 }}
             >
               {printCopies === 2 ? (
                 <div>
@@ -216,8 +223,9 @@ export const ReceiptModal: React.FC<ReceiptModalProps> = ({
       {/* 2. REAL THERMAL PRINT PORTAL (Rendered directly into #print-root outside #root) */}
       {printRoot && createPortal(
         <div
-          className={settings.fontFamily === 'system' ? 'font-system' : 'font-arial'}
+          className={settings.fontFamily === 'system' ? 'font-system' : settings.fontFamily === 'arial' ? 'font-arial' : 'font-plus-jakarta'}
           style={{
+            fontFamily: receiptFontFamily,
             fontSize: `${baseFontSizePx}px`,
             lineHeight: 1.35,
             width: settings.paperSize === 'k57' ? '57mm' : '80mm',

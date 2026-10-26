@@ -556,22 +556,36 @@ export const SettingsPage: React.FC = () => {
               </div>
             </div>
 
-            {/* Font Family Selection (Arial vs System) */}
+            {/* Font Family Selection (Plus Jakarta Sans vs Arial vs System) */}
             <div className="pt-2 border-t border-slate-100 text-xs">
               <label className="font-bold text-slate-700 block mb-1.5">Phông chữ in nhiệt:</label>
-              <div className="grid grid-cols-1 sm:grid-cols-2 gap-2">
+              <div className="grid grid-cols-1 sm:grid-cols-3 gap-2">
+                <button
+                  type="button"
+                  onClick={() => setSettings({ ...settings, fontFamily: 'plus_jakarta' })}
+                  className={`p-2.5 rounded-xl border text-left transition ${
+                    (settings.fontFamily || 'plus_jakarta') === 'plus_jakarta'
+                      ? 'border-amber-500 bg-amber-50/50 text-amber-900 shadow-xs ring-1 ring-amber-400'
+                      : 'border-slate-200 hover:bg-slate-50 text-slate-700'
+                  }`}
+                >
+                  <strong className="block text-xs font-bold text-amber-700">🌟 Plus Jakarta Sans (Khuyên dùng)</strong>
+                  <span className="text-[10px] text-slate-500 mt-0.5 block">
+                    Sắc nét, không lỗi dấu tiếng Việt, triệt tiêu nhòe mực
+                  </span>
+                </button>
                 <button
                   type="button"
                   onClick={() => setSettings({ ...settings, fontFamily: 'arial' })}
                   className={`p-2.5 rounded-xl border text-left transition ${
-                    (settings.fontFamily || 'arial') === 'arial'
-                      ? 'border-amber-500 bg-amber-50/50 text-amber-900 shadow-xs'
+                    settings.fontFamily === 'arial'
+                      ? 'border-amber-500 bg-amber-50/50 text-amber-900 shadow-xs ring-1 ring-amber-400'
                       : 'border-slate-200 hover:bg-slate-50 text-slate-700'
                   }`}
                 >
-                  <strong className="block text-xs font-bold">Arial (Khuyên dùng in nhiệt)</strong>
+                  <strong className="block text-xs font-bold">Arial (Truyền thống)</strong>
                   <span className="text-[10px] text-slate-500 mt-0.5 block">
-                    Nét chữ thanh mảnh, triệt tiêu bết dính mực ở 203 DPI
+                    Nét mảnh chuẩn in hóa đơn văn phòng
                   </span>
                 </button>
                 <button
@@ -579,13 +593,13 @@ export const SettingsPage: React.FC = () => {
                   onClick={() => setSettings({ ...settings, fontFamily: 'system' })}
                   className={`p-2.5 rounded-xl border text-left transition ${
                     settings.fontFamily === 'system'
-                      ? 'border-amber-500 bg-amber-50/50 text-amber-900 shadow-xs'
+                      ? 'border-amber-500 bg-amber-50/50 text-amber-900 shadow-xs ring-1 ring-amber-400'
                       : 'border-slate-200 hover:bg-slate-50 text-slate-700'
                   }`}
                 >
                   <strong className="block text-xs font-bold">Phông hệ thống</strong>
                   <span className="text-[10px] text-slate-500 mt-0.5 block">
-                    Phông web mặc định của hệ điều hành
+                    Mặc định của trình duyệt / máy POS
                   </span>
                 </button>
               </div>
@@ -1020,7 +1034,7 @@ export const SettingsPage: React.FC = () => {
       {/* Real Thermal Print Portal for Settings Test Print */}
       {printRoot && createPortal(
         <div
-          className={settings.fontFamily === 'system' ? 'font-system' : 'font-arial'}
+          className={settings.fontFamily === 'system' ? 'font-system' : settings.fontFamily === 'arial' ? 'font-arial' : 'font-plus-jakarta'}
           style={{
             fontSize: `${
               settings.fontSize === 'large' ? 16 : settings.fontSize === 'medium' ? 13.5 : 11.5

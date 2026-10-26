@@ -69,10 +69,10 @@
     height: auto !important;
   }
 
-  /* 3. STRICT 100% PURE SOLID BLACK ON THERMAL PAPER (NO DITHERING / NO GRAY) & ARIAL FONT */
+  /* 3. STRICT 100% PURE SOLID BLACK ON THERMAL PAPER (NO DITHERING / NO GRAY) & CRISP VIETNAMESE FONT */
   #print-root,
   #print-root * {
-    font-family: Arial, "Helvetica Neue", Helvetica, sans-serif !important;
+    font-family: 'Plus Jakarta Sans', Arial, "Helvetica Neue", Helvetica, sans-serif !important;
     color: #000000 !important;
     border-color: #000000 !important;
     text-shadow: none !important;
@@ -81,7 +81,17 @@
     print-color-adjust: exact !important;
   }
 
-  /* Support switching to system font when user selects system font in ReceiptSettings */
+  /* Support switching font family when user customizes in ReceiptSettings */
+  #print-root .font-plus-jakarta,
+  #print-root .font-plus-jakarta * {
+    font-family: 'Plus Jakarta Sans', Arial, sans-serif !important;
+  }
+
+  #print-root .font-arial,
+  #print-root .font-arial * {
+    font-family: Arial, "Helvetica Neue", Helvetica, sans-serif !important;
+  }
+
   #print-root .font-system,
   #print-root .font-system * {
     font-family: system-ui, -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif !important;

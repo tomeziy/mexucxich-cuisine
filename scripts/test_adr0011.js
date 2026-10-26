@@ -134,14 +134,14 @@ console.log('4. Testing Real Production getDeliveryCalloutConfig...');
 const standardCallout = getDeliveryCalloutConfig('standard_large');
 assert.strictEqual(standardCallout.fontSize, '15px', 'standard_large must use 15px font (~1.5x bill small body)');
 assert.strictEqual(standardCallout.lineHeightClass, 'leading-snug', 'standard_large line-height must be leading-snug');
-assert.strictEqual(standardCallout.fontWeightClass, 'font-black', 'standard_large must be font-black for legibility');
+assert.strictEqual(standardCallout.fontWeightClass, 'font-bold', 'standard_large must be font-bold (700) for clean thermal print without faux-bold smear');
 assert.ok(standardCallout.borderClass.includes('border-dashed'), 'standard_large must have dashed border');
 
 // extra_large
 const extraLargeCallout = getDeliveryCalloutConfig('extra_large');
 assert.strictEqual(extraLargeCallout.fontSize, '18px', 'extra_large must use 18px font (~1.8x bill small body)');
 assert.strictEqual(extraLargeCallout.lineHeightClass, 'leading-tight', 'extra_large line-height must be leading-tight to prevent overflow');
-assert.strictEqual(extraLargeCallout.fontWeightClass, 'font-black', 'extra_large must be font-black');
+assert.strictEqual(extraLargeCallout.fontWeightClass, 'font-bold', 'extra_large must be font-bold (700)');
 
 // undefined fallback
 const fallbackCallout = getDeliveryCalloutConfig(undefined);

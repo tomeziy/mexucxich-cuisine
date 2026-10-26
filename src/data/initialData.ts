@@ -156,7 +156,7 @@ export const DEFAULT_RECEIPT_SETTINGS: ReceiptSettings = {
   paperSize: 'k80',
   fontSize: 'small',
   deliveryCalloutSize: 'standard_large',
-  fontFamily: 'arial',
+  fontFamily: 'plus_jakarta',
   printCopies: 1,
   bankCode: 'TCB', // Techcombank
   bankAccount: '10520110621010',

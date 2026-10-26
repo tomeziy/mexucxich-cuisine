@@ -1,6 +1,13 @@
 import React from 'react';
 import { Order, ReceiptSettings } from '../../types';
-import { formatVND, formatDate, formatReceiptQty, formatDisplayQty, getDeliveryCalloutConfig } from '../../utils/format';
+import {
+  formatVND,
+  formatDate,
+  formatReceiptQty,
+  formatDisplayQty,
+  getDeliveryCalloutConfig,
+  formatEffectiveUnit,
+} from '../../utils/format';
 
 export interface ThermalReceiptProps {
   order: Order;
@@ -15,10 +22,12 @@ export const ThermalReceipt: React.FC<ThermalReceiptProps> = ({
   copyTitle,
   isPreview = false,
 }) => {
-  const isArial = settings.fontFamily !== 'system';
-  const fontFamilyStyle = isArial
-    ? 'Arial, "Helvetica Neue", Helvetica, sans-serif'
-    : "system-ui, -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif";
+  const fontFamilyStyle =
+    settings.fontFamily === 'system'
+      ? "system-ui, -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif"
+      : settings.fontFamily === 'arial'
+      ? 'Arial, "Helvetica Neue", Helvetica, sans-serif'
+      : "'Plus Jakarta Sans', system-ui, -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif";
 
   // VietQR Napas format
   const vietQrAmount = order.paymentMethod === 'partial' ? (order.paidAmount || order.total) : order.total;
@@ -34,7 +43,7 @@ export const ThermalReceipt: React.FC<ThermalReceiptProps> = ({
 
   return (
     <div
-      className="space-y-2 text-black leading-snug tracking-tight"
+      className="space-y-2 text-black leading-snug tracking-normal"
       style={{
         fontFamily: fontFamilyStyle,
         color: '#000000',
@@ -114,7 +123,7 @@ export const ThermalReceipt: React.FC<ThermalReceiptProps> = ({
         >
           {order.orderType === 'delivery' && (
             <div className="text-center pb-1 border-b border-dashed border-black mb-1.5">
-              <span className="font-black uppercase tracking-wider text-black text-xs block">
+              <span className="font-bold uppercase tracking-wider text-black text-xs block">
                 ★ GIAO HÀNG (SHIPPER) ★
               </span>
             </div>
@@ -122,7 +131,7 @@ export const ThermalReceipt: React.FC<ThermalReceiptProps> = ({
 
           <div className="flex justify-between items-baseline gap-1.5">
             <span className="shrink-0 font-bold">Khách:</span>
-            <span className="text-right font-black break-words flex-1">
+            <span className="text-right font-bold break-words flex-1">
               {order.customerName || 'Khách lẻ tại quầy'}
             </span>
           </div>
@@ -130,7 +139,7 @@ export const ThermalReceipt: React.FC<ThermalReceiptProps> = ({
           {order.customerPhone && (
             <div className="flex justify-between items-baseline gap-1.5 pt-0.5">
               <span className="shrink-0 font-bold">SĐT:</span>
-              <span className="text-right font-black tracking-wide flex-1">
+              <span className="text-right font-bold tracking-wide flex-1">
                 {order.customerPhone}
               </span>
             </div>
@@ -139,7 +148,7 @@ export const ThermalReceipt: React.FC<ThermalReceiptProps> = ({
           {order.customerAddress && (
             <div className="flex flex-col gap-0.5 pt-1">
               <span className="shrink-0 font-bold">Địa chỉ:</span>
-              <span className="font-black text-left break-words pl-0.5">
+              <span className="font-bold text-left break-words pl-0.5">
                 {order.customerAddress}
               </span>
             </div>
@@ -148,7 +157,7 @@ export const ThermalReceipt: React.FC<ThermalReceiptProps> = ({
           {order.shippingNote && (
             <div className="flex flex-col gap-0.5 pt-1 mt-1 border-t border-dashed border-black">
               <span className="shrink-0 font-bold">Ghi chú ship:</span>
-              <span className="font-extrabold italic text-left break-words pl-0.5">
+              <span className="font-bold italic text-left break-words pl-0.5">
                 {order.shippingNote}
               </span>
             </div>
@@ -175,29 +184,39 @@ export const ThermalReceipt: React.FC<ThermalReceiptProps> = ({
           <span className="w-1/3 text-right">Thành tiền</span>
         </div>
 
-        {/* Item Rows */}
+        {/* Item Rows with Dynamic Portion Weight Display (ADR-0012) */}
         <div className="divide-y divide-dashed divide-black">
-          {order.items.map((item, idx) => (
-            <div key={idx} className="py-1.5 space-y-0.5">
-              {/* Line 1: Item Name */}
-              <div className="font-semibold text-black leading-snug" style={{ fontSize: '1em' }}>
-                {item.name}
-                {item.unit && (
-                  <span className="font-normal text-black ml-1" style={{ fontSize: '0.85em' }}>
-                    ({item.unit})
+          {order.items.map((item, idx) => {
+            const { displayUnit, effectiveWeight } = formatEffectiveUnit(item.unit, item.qty, item.name);
+            return (
+              <div key={idx} className="py-1.5 space-y-0.5">
+                {/* Line 1: Item Name & Scaled Unit */}
+                <div className="font-semibold text-black leading-snug" style={{ fontSize: '1em' }}>
+                  {item.name}
+                  {item.unit && (
+                    <span className="font-normal text-black ml-1" style={{ fontSize: '0.85em' }}>
+                      ({displayUnit})
+                    </span>
+                  )}
+                </div>
+                {/* Line 2: 3 Columns - Price | Qty (with Weight) | Total */}
+                <div className="flex justify-between items-center text-black" style={{ fontSize: '0.92em' }}>
+                  <span className="w-1/3 text-left font-normal">{formatVND(item.price)}</span>
+                  <span className="w-1/3 text-center font-medium">
+                    {formatReceiptQty(item.qty)}
+                    {effectiveWeight && (
+                      <span className="block font-bold text-[0.85em] text-black">
+                        ({effectiveWeight})
+                      </span>
+                    )}
                   </span>
-                )}
+                  <span className="w-1/3 text-right font-semibold text-black" style={{ fontSize: '1em' }}>
+                    {formatVND(Math.round(item.price * item.qty))}
+                  </span>
+                </div>
               </div>
-              {/* Line 2: 3 Columns - Price | Qty | Total */}
-              <div className="flex justify-between items-center text-black" style={{ fontSize: '0.92em' }}>
-                <span className="w-1/3 text-left font-normal">{formatVND(item.price)}</span>
-                <span className="w-1/3 text-center font-medium">{formatReceiptQty(item.qty)}</span>
-                <span className="w-1/3 text-right font-semibold text-black" style={{ fontSize: '1em' }}>
-                  {formatVND(Math.round(item.price * item.qty))}
-                </span>
-              </div>
-            </div>
-          ))}
+            );
+          })}
         </div>
       </div>
 
