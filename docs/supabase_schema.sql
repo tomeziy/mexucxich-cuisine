@@ -1,6 +1,17 @@
 -- ==============================================================================
 -- MEXUCXICH CUISINE - SUPABASE DATABASE INITIALIZATION SCRIPT (ADR-0006 & ADR-0008)
 -- ==============================================================================
+-- Hướng dẫn:
+-- 1. Đăng nhập vào https://supabase.com và tạo một Project mới (Miễn phí 100%).
+-- 2. Vào mục "SQL Editor" ở menu bên trái.
+-- 3. Sao chép toàn bộ nội dung file này, dán vào và nhấn "Run" (hoặc F5).
+-- 4. Vào mục "Project Settings" -> "API", sao chép:
+--    - Project URL
+--    - Project API Keys (anon public)
+-- 5. Mở ứng dụng MexucxichCuisine -> vào tab "Cài đặt" -> dán URL và Key -> Bấm "Kiểm tra & Kết nối".
+-- ==============================================================================
+
+-- 1. BẢNG SẢN PHẨM & KHO HÀNG (PRODUCTS)
 create table if not exists products (
   id text primary key,
   name text not null,
@@ -14,6 +25,7 @@ create table if not exists products (
   updated_at timestamptz default now()
 );
 
+-- 2. BẢNG KHÁCH HÀNG & CÔNG NỢ (CUSTOMERS)
 create table if not exists customers (
   id text primary key,
   name text not null,
@@ -26,6 +38,7 @@ create table if not exists customers (
   updated_at timestamptz default now()
 );
 
+-- 3. BẢNG ĐƠN HÀNG (ORDERS)
 create table if not exists orders (
   id text primary key,
   created_at timestamptz default now(),
@@ -51,6 +64,7 @@ create table if not exists orders (
   debt_amount numeric default 0
 );
 
+-- 4. BẢNG LỊCH SỬ THU NỢ (DEBT_PAYMENTS)
 create table if not exists debt_payments (
   id text primary key,
   customer_id text,
@@ -62,6 +76,7 @@ create table if not exists debt_payments (
   updated_at timestamptz default now()
 );
 
+-- 5. BẢNG CÀI ĐẶT CỬA HÀNG & MẪU IN (STORE_SETTINGS)
 create table if not exists store_settings (
   id text primary key default 'default_settings',
   data jsonb not null,
@@ -75,7 +90,7 @@ alter table orders add column if not exists updated_at timestamptz default now()
 alter table debt_payments add column if not exists updated_at timestamptz default now();
 
 -- ==============================================================================
--- HÀM ĐIỀU CHỈNH TỒN KHO NGUYÊN TỬ (ATOMIC STOCK ADJUSTMENT - ADR-0008)
+-- 6. HÀM ĐIỀU CHỈNH TỒN KHO NGUYÊN TỬ (ATOMIC STOCK ADJUSTMENT - ADR-0008)
 -- Ngăn chặn Race Condition khi nhiều thiết bị (PC quầy & ĐT chủ) bán hàng đồng thời
 -- ==============================================================================
 create or replace function adjust_product_stock(p_id text, p_delta numeric)
@@ -98,13 +113,26 @@ $$;
 
 grant execute on function adjust_product_stock(p_id text, p_delta numeric) to anon, authenticated, service_role;
 
--- Phân quyền Row Level Security (RLS)
+-- ==============================================================================
+-- PHÂN QUYỀN TRUY CẬP (DATA API GRANTS & ROW LEVEL SECURITY - SUPABASE OCT 30 COMPLIANT)
+-- Cho phép ứng dụng đọc/ghi trực tiếp qua Anon Public Key mà không cần đăng nhập
+-- ==============================================================================
+
+-- 1. Cấp quyền truy cập Data API (Bắt buộc theo chuẩn Supabase từ 30/10)
+grant select, insert, update, delete on public.products to anon, authenticated, service_role;
+grant select, insert, update, delete on public.customers to anon, authenticated, service_role;
+grant select, insert, update, delete on public.orders to anon, authenticated, service_role;
+grant select, insert, update, delete on public.debt_payments to anon, authenticated, service_role;
+grant select, insert, update, delete on public.store_settings to anon, authenticated, service_role;
+
+-- 2. Kích hoạt Row Level Security (RLS)
 alter table products enable row level security;
 alter table customers enable row level security;
 alter table orders enable row level security;
 alter table debt_payments enable row level security;
 alter table store_settings enable row level security;
 
+-- 3. Tạo policies cho phép public anon full quyền (SELECT, INSERT, UPDATE, DELETE)
 drop policy if exists "Anon full access products" on products;
 create policy "Anon full access products" on products for all using (true) with check (true);
 

@@ -114,17 +114,25 @@ $$;
 grant execute on function adjust_product_stock(p_id text, p_delta numeric) to anon, authenticated, service_role;
 
 -- ==============================================================================
--- PHÂN QUYỀN TRUY CẬP (ROW LEVEL SECURITY & ANON ACCESS)
+-- PHÂN QUYỀN TRUY CẬP (DATA API GRANTS & ROW LEVEL SECURITY - SUPABASE OCT 30 COMPLIANT)
 -- Cho phép ứng dụng đọc/ghi trực tiếp qua Anon Public Key mà không cần đăng nhập
 -- ==============================================================================
 
+-- 1. Cấp quyền truy cập Data API (Bắt buộc theo chuẩn Supabase từ 30/10)
+grant select, insert, update, delete on public.products to anon, authenticated, service_role;
+grant select, insert, update, delete on public.customers to anon, authenticated, service_role;
+grant select, insert, update, delete on public.orders to anon, authenticated, service_role;
+grant select, insert, update, delete on public.debt_payments to anon, authenticated, service_role;
+grant select, insert, update, delete on public.store_settings to anon, authenticated, service_role;
+
+-- 2. Kích hoạt Row Level Security (RLS)
 alter table products enable row level security;
 alter table customers enable row level security;
 alter table orders enable row level security;
 alter table debt_payments enable row level security;
 alter table store_settings enable row level security;
 
--- Tạo policies cho phép public anon full quyền (SELECT, INSERT, UPDATE, DELETE)
+-- 3. Tạo policies cho phép public anon full quyền (SELECT, INSERT, UPDATE, DELETE)
 drop policy if exists "Anon full access products" on products;
 create policy "Anon full access products" on products for all using (true) with check (true);
 
