@@ -560,16 +560,16 @@ export const CustomersPage: React.FC = () => {
       {/* Customers Table */}
       <div className="bg-white rounded-2xl border border-slate-200 shadow-xs overflow-hidden">
         <div className="overflow-x-auto custom-scroll">
-          <table className="w-full text-left border-collapse text-xs min-w-[880px]">
+          <table className="w-full text-left border-collapse text-xs min-w-[820px]">
             <thead>
               <tr className="bg-slate-50/80 border-b border-slate-200 text-slate-500 uppercase text-[10px] font-extrabold tracking-wider">
-                <th className="py-3 px-3.5 whitespace-nowrap min-w-[180px]">Khách hàng</th>
-                <th className="py-3 px-3 whitespace-nowrap min-w-[110px]">Điện thoại</th>
-                <th className="py-3 px-3 whitespace-nowrap min-w-[170px]">Địa chỉ</th>
-                <th className="py-3 px-2 text-center whitespace-nowrap min-w-[60px]">Số đơn</th>
-                <th className="py-3 px-3 text-right whitespace-nowrap min-w-[100px]">Tổng chi tiêu</th>
-                <th className="py-3 px-3 text-right whitespace-nowrap min-w-[110px]">Dư nợ hiện tại</th>
-                <th className="py-3 px-3 text-center whitespace-nowrap min-w-[155px] w-[155px] sticky right-0 bg-slate-50 border-l border-slate-200/80 shadow-[-4px_0_8px_-2px_rgba(0,0,0,0.04)] z-10">
+                <th className="py-2.5 px-3 whitespace-nowrap">Khách hàng</th>
+                <th className="py-2.5 px-2.5 whitespace-nowrap">Điện thoại</th>
+                <th className="py-2.5 px-2.5 whitespace-nowrap">Địa chỉ</th>
+                <th className="py-2.5 px-2 text-center whitespace-nowrap">Số đơn</th>
+                <th className="py-2.5 px-2.5 text-right whitespace-nowrap">Tổng chi tiêu</th>
+                <th className="py-2.5 px-2.5 text-right whitespace-nowrap">Dư nợ hiện tại</th>
+                <th className="py-2.5 px-2.5 text-center whitespace-nowrap min-w-[145px] w-[145px] sticky right-0 bg-slate-50 border-l border-slate-200/80 shadow-[-4px_0_8px_-2px_rgba(0,0,0,0.04)] z-10">
                   Thao tác
                 </th>
               </tr>
@@ -584,42 +584,42 @@ export const CustomersPage: React.FC = () => {
               ) : (
                 paginatedCustomers.map(cust => (
                   <tr key={cust.id} className="group hover:bg-amber-50/30 transition">
-                    <td className="py-2.5 px-3.5 min-w-[180px]">
+                    <td className="py-2 px-3">
                       <div className="flex items-center gap-2">
-                        <div className="w-8 h-8 rounded-full bg-slate-100 border border-slate-200 text-slate-600 font-extrabold flex items-center justify-center text-xs shrink-0">
+                        <div className="w-7 h-7 rounded-full bg-slate-100 border border-slate-200 text-slate-600 font-extrabold flex items-center justify-center text-[11px] shrink-0">
                           {cust.name.slice(0, 1).toUpperCase()}
                         </div>
                         <div className="min-w-0">
-                          <strong className="text-slate-900 block truncate max-w-[160px] lg:max-w-[200px]" title={cust.name}>
+                          <strong className="text-slate-900 block truncate max-w-[140px] xl:max-w-[170px]" title={cust.name}>
                             {cust.name}
                           </strong>
-                          <span className="text-[10px] text-slate-400 font-mono truncate block max-w-[130px]" title={cust.id}>
+                          <span className="text-[10px] text-slate-400 font-mono truncate block max-w-[110px]" title={cust.id}>
                             {cust.id}
                           </span>
                         </div>
                       </div>
                     </td>
-                    <td className="py-2.5 px-3 text-slate-600 font-mono whitespace-nowrap min-w-[110px]">
+                    <td className="py-2 px-2.5 text-slate-600 font-mono whitespace-nowrap">
                       {cust.phone ? (
-                        <span className="block truncate max-w-[120px]" title={cust.phone}>
+                        <span className="block truncate max-w-[105px]" title={cust.phone}>
                           {cust.phone}
                         </span>
                       ) : (
                         <span className="text-slate-300 italic">-</span>
                       )}
                     </td>
-                    <td className="py-2.5 px-3 text-slate-500 min-w-[170px]">
-                      <div className="max-w-[180px] lg:max-w-[240px] truncate" title={cust.address || ''}>
+                    <td className="py-2 px-2.5 text-slate-500">
+                      <div className="max-w-[150px] xl:max-w-[200px] truncate" title={cust.address || ''}>
                         {cust.address || <span className="text-slate-300 italic">-</span>}
                       </div>
                     </td>
-                    <td className="py-2.5 px-2 text-center font-bold text-slate-700 whitespace-nowrap min-w-[60px]">
+                    <td className="py-2 px-2 text-center font-bold text-slate-700 whitespace-nowrap">
                       {cust.orderCount || 0}
                     </td>
-                    <td className="py-2.5 px-3 text-right font-bold text-slate-800 whitespace-nowrap min-w-[100px]">
+                    <td className="py-2 px-2.5 text-right font-bold text-slate-800 whitespace-nowrap">
                       {formatVND(cust.totalSpent || 0)}
                     </td>
-                    <td className="py-2.5 px-3 text-right whitespace-nowrap min-w-[110px]">
+                    <td className="py-2 px-2.5 text-right whitespace-nowrap">
                       {cust.debt > 0 ? (
                         <span className="text-rose-600 font-black text-xs">
                           {formatVND(cust.debt)}
@@ -630,8 +630,8 @@ export const CustomersPage: React.FC = () => {
                         </span>
                       )}
                     </td>
-                    <td className="py-2.5 px-3 text-center whitespace-nowrap min-w-[155px] w-[155px] sticky right-0 bg-white group-hover:bg-amber-50/50 border-l border-slate-100 shadow-[-4px_0_8px_-2px_rgba(0,0,0,0.04)] z-10">
-                      <div className="flex items-center justify-center gap-1.5 shrink-0">
+                    <td className="py-2 px-2.5 text-center whitespace-nowrap min-w-[145px] w-[145px] sticky right-0 bg-white group-hover:bg-amber-50/50 border-l border-slate-100 shadow-[-4px_0_8px_-2px_rgba(0,0,0,0.04)] z-10">
+                      <div className="flex items-center justify-center gap-1 shrink-0">
                         <button
                           onClick={() => setSelectedCustomerForDetail(cust)}
                           className="p-1.5 rounded-lg border border-slate-200 bg-white hover:bg-slate-100 text-slate-600 transition"
@@ -651,7 +651,7 @@ export const CustomersPage: React.FC = () => {
                         {cust.debt > 0 && (
                           <button
                             onClick={() => openPayDebtModal(cust)}
-                            className="px-2.5 py-1 rounded-lg bg-emerald-600 hover:bg-emerald-700 text-white text-[11px] font-bold shadow-2xs transition flex items-center gap-1 shrink-0"
+                            className="px-2 py-1 rounded-lg bg-emerald-600 hover:bg-emerald-700 text-white text-[11px] font-bold shadow-2xs transition flex items-center gap-1 shrink-0"
                           >
                             <ArrowDownCircle className="w-3 h-3" />
                             <span>Thu nợ</span>

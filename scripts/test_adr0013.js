@@ -19,40 +19,40 @@ assert.ok(
 );
 console.log('✓ Layout.tsx min-w-0 verified.');
 
-// 2. Verify Table min-w-[880px] and overflow wrapper
+// 2. Verify Table min-w-[820px] and overflow wrapper
 console.log('2. Testing CustomersPage table container and min-width...');
 assert.ok(
-  customersPageContent.includes('min-w-[880px]'),
-  'Customers table must specify min-w-[880px] to prevent column squishing on laptop/mobile'
+  customersPageContent.includes('min-w-[820px]'),
+  'Customers table must specify min-w-[820px] to prevent column squishing on laptop/mobile'
 );
 assert.ok(
   customersPageContent.includes('overflow-x-auto custom-scroll'),
   'Table container must provide overflow-x-auto custom-scroll'
 );
-console.log('✓ Customers table min-w-[880px] and overflow wrapper verified.');
+console.log('✓ Customers table min-w-[820px] and overflow wrapper verified.');
 
 // 3. Verify Thao tác column width and sticky right pinning
 console.log('3. Testing Thao tác column width and sticky pinning...');
 assert.ok(
   customersPageContent.includes('sticky right-0') &&
-  customersPageContent.includes('min-w-[155px]') &&
-  customersPageContent.includes('w-[155px]'),
-  'Thao tác TH and TD must have sticky right-0 and min-w-[155px] to prevent action buttons from being clipped'
+  customersPageContent.includes('min-w-[145px]') &&
+  customersPageContent.includes('w-[145px]'),
+  'Thao tác TH and TD must have sticky right-0 and min-w-[145px] to prevent action buttons from being clipped'
 );
 assert.ok(
-  customersPageContent.includes('whitespace-nowrap min-w-[155px]'),
+  customersPageContent.includes('whitespace-nowrap min-w-[145px]'),
   'Thao tác TH must enforce whitespace-nowrap so "THAO TÁC" never clips to "THAO T"'
 );
-console.log('✓ Thao tác column width (155px) and sticky pinning verified.');
+console.log('✓ Thao tác column width (145px) and sticky pinning verified.');
 
 // 4. Verify Content truncation safety
 console.log('4. Testing Address, Phone, and Customer ID truncation...');
 assert.ok(
-  customersPageContent.includes('max-w-[180px] lg:max-w-[240px] truncate'),
+  customersPageContent.includes('max-w-[150px] xl:max-w-[200px] truncate'),
   'Address must be wrapped in a truncate div with max-w to prevent table blow-out'
 );
 assert.ok(
-  customersPageContent.includes('truncate max-w-[160px] lg:max-w-[200px]'),
+  customersPageContent.includes('truncate max-w-[140px] xl:max-w-[170px]'),
   'Customer name must be bounded with truncate to preserve table layout'
 );
 console.log('✓ Column content truncation safety verified.');
