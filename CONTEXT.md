@@ -131,4 +131,9 @@ _Avoid_: Tính nhẩm ngoài đời, ghi tay trọng lượng
 Triệt tiêu lỗi nhòe nét do bôi đậm giả lập (faux-bold smear) bằng cách hạ `font-black` (900) về `font-bold` (700) cho khối thông tin người nhận Shipper; đồng thời mở rộng khoảng cách ký tự `tracking-normal` và đồng bộ phông chữ mặc định `Plus Jakarta Sans` hỗ trợ trọn vẹn bộ ký tự tiếng Việt mở rộng (GF Latin Pro) nhằm loại bỏ hoàn toàn hiện tượng lệch dấu và nát chữ khi in nhiệt hoặc xem trước hóa đơn.
 _Avoid_: Font chữ lỗi, bôi đen xé chữ
 
+**Bảng khách hàng thích ứng & Ghim cột thao tác (Responsive Customer Table & Action Pinning - ADR-0013)**:
+Thiết kế bảng danh sách khách hàng và công nợ với cơ chế ghim cột Thao tác cố định (`sticky right-0`) kèm viền đổ bóng nổi, giới hạn chiều rộng cột tối thiểu 145px và `whitespace-nowrap`, đảm bảo trọn bộ 3 nút thao tác (Xem sổ nợ, Sửa thông tin, Thu nợ nhanh) luôn hiển thị đầy đủ 100% không bị xén chữ hoặc cắt cụt mép trên mọi độ phân giải màn hình (Laptop Windows 125% scaling, Desktop 1440px và Điện thoại). Đồng thời chuẩn hóa kích thước các cột dữ liệu (Khách hàng, Điện thoại, Địa chỉ có `truncate` và tooltip) để toàn bộ 7 cột vừa khít 990px trên màn hình máy tính mà không cần cuộn ngang.
+_Avoid_: Bảng bị thiếu chỗ, cắt cụt nút thao tác, che khuất dư nợ
+
+
 
