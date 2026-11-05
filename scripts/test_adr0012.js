@@ -70,11 +70,31 @@ assert.strictEqual(
   '1l * 0.5 must convert to 500ml'
 );
 
-// Case 7: Inactive when qty is 1 (standard whole pack)
+// Case 7: Inactive when qty is an integer (standard whole packs 1, 2, 4, 5... - ADR-0014)
 assert.strictEqual(
   calculateEffectiveWeight('Gói 500g', 'Xúc xích Bò Tiêu Đen (500g)', 1),
   null,
   'When qty is 1, effective weight must be null (no portion scaling needed)'
+);
+assert.strictEqual(
+  calculateEffectiveWeight('Gói 500g', 'Mọc nấm hương băm tay (Gói 500g)', 2),
+  null,
+  'When qty is 2, effective weight must be null (do not multiply discrete packs to 1kg)'
+);
+assert.strictEqual(
+  calculateEffectiveWeight('Hộp', 'Sốt mỳ ý bò bằm 600g', 4),
+  null,
+  'When qty is 4, effective weight must be null (do not multiply discrete boxes to 2.4kg)'
+);
+assert.strictEqual(
+  calculateEffectiveWeight('set 5 gói', 'Mỳ trộn dao cắt Sơn Tây', 3),
+  null,
+  'set 5 gói must not match 5g and must not multiply to 15g'
+);
+assert.strictEqual(
+  calculateEffectiveWeight('set 5 gói', 'Mỳ trộn dao cắt Sơn Tây', 0.5),
+  null,
+  'set 5 gói must not match grams even for fractional quantities'
 );
 
 // Case 8: Non-weight items (e.g. pieces, sets)

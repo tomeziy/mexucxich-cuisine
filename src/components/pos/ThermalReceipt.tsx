@@ -184,10 +184,10 @@ export const ThermalReceipt: React.FC<ThermalReceiptProps> = ({
           <span className="w-1/3 text-right">Thành tiền</span>
         </div>
 
-        {/* Item Rows with Dynamic Portion Weight Display (ADR-0012) */}
+        {/* Item Rows with Dynamic Portion Weight Display (ADR-0012/ADR-0014) */}
         <div className="divide-y divide-dashed divide-black">
           {order.items.map((item, idx) => {
-            const { displayUnit, effectiveWeight } = formatEffectiveUnit(item.unit, item.qty, item.name);
+            const { displayUnit } = formatEffectiveUnit(item.unit, item.qty, item.name);
             return (
               <div key={idx} className="py-1.5 space-y-0.5">
                 {/* Line 1: Item Name & Scaled Unit */}
@@ -199,16 +199,11 @@ export const ThermalReceipt: React.FC<ThermalReceiptProps> = ({
                     </span>
                   )}
                 </div>
-                {/* Line 2: 3 Columns - Price | Qty (with Weight) | Total */}
+                {/* Line 2: 3 Columns - Price | Qty (Clean without bracketed weight) | Total (ADR-0014) */}
                 <div className="flex justify-between items-center text-black" style={{ fontSize: '0.92em' }}>
                   <span className="w-1/3 text-left font-normal">{formatVND(item.price)}</span>
                   <span className="w-1/3 text-center font-medium">
                     {formatReceiptQty(item.qty)}
-                    {effectiveWeight && (
-                      <span className="block font-bold text-[0.85em] text-black">
-                        ({effectiveWeight})
-                      </span>
-                    )}
                   </span>
                   <span className="w-1/3 text-right font-semibold text-black" style={{ fontSize: '1em' }}>
                     {formatVND(Math.round(item.price * item.qty))}

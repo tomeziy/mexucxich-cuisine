@@ -135,5 +135,10 @@ _Avoid_: Font chữ lỗi, bôi đen xé chữ
 Thiết kế bảng danh sách khách hàng và công nợ với cơ chế ghim cột Thao tác cố định (`sticky right-0`) kèm viền đổ bóng nổi, giới hạn chiều rộng cột tối thiểu 145px và `whitespace-nowrap`, đảm bảo trọn bộ 3 nút thao tác (Xem sổ nợ, Sửa thông tin, Thu nợ nhanh) luôn hiển thị đầy đủ 100% không bị xén chữ hoặc cắt cụt mép trên mọi độ phân giải màn hình (Laptop Windows 125% scaling, Desktop 1440px và Điện thoại). Đồng thời chuẩn hóa kích thước các cột dữ liệu (Khách hàng, Điện thoại, Địa chỉ có `truncate` và tooltip) để toàn bộ 7 cột vừa khít 990px trên màn hình máy tính mà không cần cuộn ngang.
 _Avoid_: Bảng bị thiếu chỗ, cắt cụt nút thao tác, che khuất dư nợ
 
+**Chuẩn hóa số lượng hóa đơn & Khử nhân dồn bao bì (Receipt Quantity Normalization & Unicode Unit Safety - ADR-0014)**:
+Bảo vệ quy cách đóng gói gốc của sản phẩm đối với toàn bộ các đơn vị số lượng nguyên (`1, 2, 3, 4, 5...`), triệt tiêu hoàn toàn hiện tượng nhân dồn trọng lượng khi mua nhiều sản phẩm (ví dụ: mua 4 hộp sốt 600g hiển thị đúng 4 hộp sốt, không tự động nhân thành 1 xô 2.4kg). Đồng thời làm sạch cột `SL` trên hóa đơn in nhiệt K80 (chỉ hiển thị số lượng sạch `x1, x2, x4, x0.5`, loại bỏ hoàn toàn dòng phụ trong ngoặc ở dưới số lượng). Nâng cấp biểu thức trích xuất đơn vị lên chuẩn Unicode `(?![a-zA-Z\p{L}])` nhằm ngăn chặn tuyệt đối lỗi nhận nhầm chữ cái tiếng Việt (như `set 5 gói` bị nhận nhầm thành `5g` rồi nhân lên `15g`).
+_Avoid_: Tự nhân số lượng trong ngoặc, SL in kèm trọng lượng rối mắt, nhận nhầm set gói thành gram
+
+
 
 

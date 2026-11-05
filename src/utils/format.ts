@@ -92,14 +92,19 @@ export function calculateEffectiveWeight(
   name?: string | null,
   qty?: number | null
 ): string | null {
-  if (qty === undefined || qty === null || qty <= 0 || qty === 1) {
+  // Số lượng nguyên (1, 2, 3, 4, 5...) đại diện cho các đơn vị đóng gói riêng biệt (gói, hộp, hũ),
+  // tuyệt đối không nhân dồn trọng lượng của nhiều gói/hộp lại với nhau (ADR-0014).
+  if (qty === undefined || qty === null || qty <= 0 || Number.isInteger(qty)) {
     return null;
   }
 
   // Trích xuất số lượng và đơn vị đo từ chuỗi (hỗ trợ g, kg, gr, gram, ml, l, lít)
+  // Sử dụng Unicode-safe lookahead (?![a-zA-Z\p{L}]) để tránh nhận nhầm 'gói', 'gà', 'ly' thành gram/lít
   const extract = (str?: string | null) => {
     if (!str) return null;
-    const match = str.match(/(?:^|\s|\(|\/)(\d+(?:[.,]\d+)?)\s*(kg|kilogram|g|gr|gram|ml|l|lít)(?:\b|\)|\/|$)/i);
+    const match = str.match(
+      /(?:^|\s|\(|\/)(\d+(?:[.,]\d+)?)\s*(kg|kilogram|g|gr|gram|ml|l|lít)(?![a-zA-Z\p{L}])/iu
+    );
     if (!match) return null;
     const num = parseFloat(match[1].replace(',', '.'));
     const rawUnit = match[2].toLowerCase();
