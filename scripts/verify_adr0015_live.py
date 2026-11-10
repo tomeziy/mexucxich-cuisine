@@ -71,18 +71,6 @@ def verify_adr0015():
                     page.screenshot(path=receipt_screenshot)
                     print(f"  ✓ Saved customer receipt screenshot: {receipt_screenshot}", flush=True)
 
-                    # Close receipt modal
-                    close_btn = page.locator("button:has-text('Đóng')").first
-                    if close_btn.count() > 0:
-                        close_btn.click()
-                        page.wait_for_timeout(400)
-
-            # Close customer modal
-            close_cust_btn = page.locator("button:has-text('Đóng')").last
-            if close_cust_btn.count() > 0:
-                close_cust_btn.click()
-                page.wait_for_timeout(400)
-
         # ----------------------------------------------------------------------
         # Test 3: Edit Order Modal Product Combobox
         # ----------------------------------------------------------------------
