@@ -1,7 +1,7 @@
 import * as XLSX from 'xlsx';
-import { Product, Customer, Order } from '../types';
-import { removeVietnameseTones } from './vietnamese';
-import { formatDisplayQty } from './format';
+import type { Product, Customer, Order } from '../types/index.ts';
+import { removeVietnameseTones } from './vietnamese.ts';
+import { formatDisplayQty } from './format.ts';
 
 /**
  * Normalize header string to lowercase alphanumeric without Vietnamese tones
@@ -47,10 +47,12 @@ export const CUSTOMER_HEADER_ALIASES = {
     'name', 'ten', 'khach', 'nguoimua', 'nguoilienhe'
   ],
   phone: [
-    'sodienthoai', 'sdt', 'dienthoai', 'phone', 'tel', 'didong', 'sodt', 'dienthoaididong', 'sdtlienhe'
+    'sodienthoai', 'sdt', 'dienthoai', 'phone', 'tel', 'didong', 'sodt',
+    'dienthoaididong', 'sdtlienhe', 'dt', 'dthoai', 'mobile', 'sdtlh'
   ],
   address: [
-    'diachi', 'diachigiaohang', 'address', 'noio', 'dc', 'diachinhanhang'
+    'diachi', 'diachigiaohang', 'address', 'noio', 'dc', 'diachinhanhang',
+    'diachinhan', 'diachigiao'
   ],
   debt: [
     'dunobandau', 'duno', 'congno', 'nocu', 'tienno', 'debt',
@@ -115,10 +117,9 @@ export function parseVietnameseNumber(value: any): number {
 }
 
 /**
- * Normalize Vietnamese phone numbers
- * Preserves or prepends leading '0' if 9 digits or starts with '84' / '+84'
+ * Normalize a single candidate Vietnamese phone number string
  */
-export function normalizeVietnamesePhone(phone: any): string {
+export function normalizeSinglePhone(phone: any): string {
   if (phone === null || phone === undefined) return '';
   let str = String(phone).replace(/[^0-9+]/g, '').trim();
   if (!str) return '';
@@ -140,6 +141,67 @@ export function normalizeVietnamesePhone(phone: any): string {
   }
 
   return str;
+}
+
+/**
+ * Normalize Vietnamese phone numbers (single or multiple phones)
+ * If cell contains multiple phones (separated by /, ,, ;, -, newline),
+ * parses each, deduplicates, and formats as "0869229160 / 0986476328".
+ * Also recovers 20-digit concatenated phones resulting from prior faulty strip.
+ */
+export function normalizeVietnamesePhone(phone: any): string {
+  if (phone === null || phone === undefined) return '';
+  const raw = String(phone).trim();
+  if (!raw) return '';
+
+  // Split by common delimiters: slash, comma, semicolon, newline, pipe, or dash surrounded by whitespace/digits
+  const parts = raw.split(/[\/,;\n\r|]|\s+-\s+/).map(p => p.trim()).filter(Boolean);
+
+  const validPhones: string[] = [];
+
+  for (const part of parts) {
+    // If the part contains multiple 10-digit numbers run together or space separated
+    const subParts = part.match(/(?:\+84|0|\b)[0-9]{9,11}\b/g);
+    if (subParts && subParts.length > 1) {
+      for (const sp of subParts) {
+        const norm = normalizeSinglePhone(sp);
+        if (norm && !validPhones.includes(norm)) validPhones.push(norm);
+      }
+    } else {
+      const norm = normalizeSinglePhone(part);
+      if (norm) {
+        // Recovery: if someone passed 20 digits like 08692291600986476328 from past concatenated imports
+        if (norm.length === 20 && norm.startsWith('0')) {
+          const p1 = normalizeSinglePhone(norm.slice(0, 10));
+          const p2 = normalizeSinglePhone(norm.slice(10));
+          if (p1 && !validPhones.includes(p1)) validPhones.push(p1);
+          if (p2 && !validPhones.includes(p2)) validPhones.push(p2);
+        } else if (!validPhones.includes(norm)) {
+          validPhones.push(norm);
+        }
+      }
+    }
+  }
+
+  if (validPhones.length === 0) {
+    const single = normalizeSinglePhone(raw);
+    if (single.length === 20 && single.startsWith('0')) {
+      return `${single.slice(0, 10)} / ${single.slice(10)}`;
+    }
+    return single;
+  }
+
+  return validPhones.join(' / ');
+}
+
+/**
+ * Check if two phone strings share any matching normalized phone number
+ */
+export function isPhoneMatching(phoneA: string, phoneB: string): boolean {
+  if (!phoneA || !phoneB) return false;
+  const listA = phoneA.split(/[\/,;\s]+/).map(p => normalizeSinglePhone(p)).filter(Boolean);
+  const listB = phoneB.split(/[\/,;\s]+/).map(p => normalizeSinglePhone(p)).filter(Boolean);
+  return listA.some(pa => listB.includes(pa));
 }
 
 function matchHeaderField<T extends Record<string, string[]>>(

@@ -139,6 +139,11 @@ _Avoid_: Bảng bị thiếu chỗ, cắt cụt nút thao tác, che khuất dư 
 Bảo vệ quy cách đóng gói gốc của sản phẩm đối với toàn bộ các đơn vị số lượng nguyên (`1, 2, 3, 4, 5...`), triệt tiêu hoàn toàn hiện tượng nhân dồn trọng lượng khi mua nhiều sản phẩm (ví dụ: mua 4 hộp sốt 600g hiển thị đúng 4 hộp sốt, không tự động nhân thành 1 xô 2.4kg). Đồng thời làm sạch cột `SL` trên hóa đơn in nhiệt K80 (chỉ hiển thị số lượng sạch `x1, x2, x4, x0.5`, loại bỏ hoàn toàn dòng phụ trong ngoặc ở dưới số lượng). Nâng cấp biểu thức trích xuất đơn vị lên chuẩn Unicode `(?![a-zA-Z\p{L}])` nhằm ngăn chặn tuyệt đối lỗi nhận nhầm chữ cái tiếng Việt (như `set 5 gói` bị nhận nhầm thành `5g` rồi nhân lên `15g`).
 _Avoid_: Tự nhân số lượng trong ngoặc, SL in kèm trọng lượng rối mắt, nhận nhầm set gói thành gram
 
+**Bảo vệ danh bạ khi nhập Excel, Tìm kiếm đơn hàng & Hộp chọn món thông minh (Customer Import Safety, Order Search & Product Combobox - ADR-0015)**:
+Cải tiến toàn diện 4 điểm chạm nghiệp vụ: (1) Khử hoàn toàn lỗi ghi đè nhầm thông tin khách hàng khi nạp Excel bằng cơ chế đối soát trùng lặp nghiêm ngặt chỉ theo Số điện thoại (`normPhone`), hỗ trợ nhiều số điện thoại trong 1 ô (`0869... / 0986...`), tự phục hồi số bị dính 20 chữ số và bảo vệ bất biến SĐT/Địa chỉ đã xác thực của khách cũ khi cộng dồn nợ; (2) Tích hợp ô tìm kiếm đơn hàng tức thời trên màn hình Báo cáo (`ReportsPage`) theo Mã hóa đơn (#HD...), Tên khách hàng (không dấu), Số điện thoại và Tên món ăn, tự động mở rộng phạm vi tìm kiếm trên toàn bộ lịch sử đơn; (3) Cho phép nhấp trực tiếp vào từng đơn hàng gần đây trong sổ chi tiết khách hàng (`CustomersPage`) để mở xem toàn bộ nội dung hóa đơn nhiệt (`ReceiptModal`), hỗ trợ in lại và sửa đơn nhanh; (4) Thay thế thẻ chọn món truyền thống trong màn hình Chỉnh sửa đơn (`EditOrderModal`) bằng hộp chọn tìm kiếm tức thời `ProductCombobox` hỗ trợ tìm kiếm món theo tên không dấu, mã món, danh mục, giá tiền và phím tắt điều hướng.
+_Avoid_: Nhập Excel bị đè sai số điện thoại/địa chỉ, tìm đơn hàng bằng mắt, không xem được hóa đơn từ khách hàng, cuộn tìm món thủ công khi sửa đơn
+
+
 
 
 

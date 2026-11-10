@@ -3,6 +3,7 @@ import { useStore } from '../../context/StoreContext';
 import { Order, OrderItem, OrderType, PaymentMethod, OrderStatus, Product } from '../../types';
 import { formatVND, parseQuantity, formatEffectiveUnit } from '../../utils/format';
 import { QuantityInput } from './QuantityInput';
+import { ProductCombobox } from './ProductCombobox';
 import {
   X,
   Plus,
@@ -129,6 +130,30 @@ export const EditOrderModal: React.FC<EditOrderModalProps> = ({ order, isOpen, o
 
   const handleRemoveItem = (productId: string) => {
     setItems(prev => prev.filter(i => i.productId !== productId));
+  };
+
+  const handleAddProductDirectly = (prod: Product) => {
+    setItems(prev => {
+      const existing = prev.find(i => i.productId === prod.id);
+      if (existing) {
+        return prev.map(i =>
+          i.productId === prod.id ? { ...i, qty: Math.round((i.qty + 1) * 10000) / 10000 } : i
+        );
+      }
+      return [
+        ...prev,
+        {
+          productId: prod.id,
+          name: prod.name,
+          unit: prod.unit,
+          price: prod.price,
+          originalPrice: prod.price,
+          cost: prod.cost,
+          qty: 1,
+          image: prod.image,
+        },
+      ];
+    });
   };
 
   const handleAddItem = () => {
@@ -313,30 +338,13 @@ export const EditOrderModal: React.FC<EditOrderModalProps> = ({ order, isOpen, o
                 <span>Danh sách món ăn ({items.length} món)</span>
               </span>
 
-              {/* Add item dropdown */}
-              <div className="flex items-center gap-1.5">
-                <select
-                  value={selectedProductIdToAdd}
-                  onChange={e => setSelectedProductIdToAdd(e.target.value)}
-                  className="bg-slate-100 border border-slate-300 rounded-lg px-2 py-1 text-xs font-semibold text-slate-700 focus:outline-none max-w-[160px] sm:max-w-xs"
-                >
-                  <option value="">-- Thêm món vào đơn --</option>
-                  {products.map(p => (
-                    <option key={p.id} value={p.id}>
-                      {p.image} {p.name} ({formatVND(p.price)})
-                    </option>
-                  ))}
-                </select>
-                <button
-                  type="button"
-                  onClick={handleAddItem}
-                  disabled={!selectedProductIdToAdd}
-                  className="px-2.5 py-1 bg-amber-500 hover:bg-amber-600 disabled:opacity-40 text-white font-bold rounded-lg transition flex items-center gap-1"
-                >
-                  <Plus className="w-3 h-3" />
-                  <span>Thêm</span>
-                </button>
-              </div>
+              {/* Searchable Product Combobox (ADR-0015) */}
+              <ProductCombobox
+                products={products}
+                onSelectProduct={handleAddProductDirectly}
+                placeholder="Gõ tìm món để thêm..."
+                className="w-56 sm:w-72"
+              />
             </div>
 
             <div className="divide-y divide-slate-100 border border-slate-200 rounded-xl overflow-hidden bg-slate-50/50 max-h-56 overflow-y-auto custom-scroll">

@@ -1,8 +1,10 @@
 import React, { useState, useMemo, useEffect } from 'react';
 import { useStore } from '../context/StoreContext';
-import { Customer } from '../types';
+import { Customer, Order } from '../types';
 import { formatVND, formatDate, formatDisplayQty } from '../utils/format';
 import { matchesSearch, removeVietnameseTones } from '../utils/vietnamese';
+import { ReceiptModal } from '../components/pos/ReceiptModal';
+import { EditOrderModal } from '../components/pos/EditOrderModal';
 import {
   Users,
   DollarSign,
@@ -30,6 +32,7 @@ import {
   downloadCustomerTemplate,
   parseCustomersExcel,
   normalizeVietnamesePhone,
+  isPhoneMatching,
   ParsedCustomerRow,
 } from '../utils/excel';
 
@@ -45,7 +48,17 @@ export interface CustomerImportRowItem {
 }
 
 export const CustomersPage: React.FC = () => {
-  const { customers, orders, debtPayments, addCustomer, addCustomersBatch, updateCustomer, payDebt } = useStore();
+  const {
+    customers,
+    orders,
+    debtPayments,
+    receiptSettings,
+    addCustomer,
+    addCustomersBatch,
+    updateCustomer,
+    deleteOrder,
+    payDebt,
+  } = useStore();
 
   const [searchQuery, setSearchQuery] = useState('');
   const [filterOnlyDebt, setFilterOnlyDebt] = useState(false);
@@ -54,6 +67,12 @@ export const CustomersPage: React.FC = () => {
   const [isAddCustomerOpen, setIsAddCustomerOpen] = useState(false);
   const [selectedCustomerForDetail, setSelectedCustomerForDetail] = useState<Customer | null>(null);
   const [payingCustomer, setPayingCustomer] = useState<Customer | null>(null);
+
+  // Receipt & Edit Order from Customer Detail Modal
+  const [selectedOrderForReceipt, setSelectedOrderForReceipt] = useState<Order | null>(null);
+  const [isReceiptModalOpen, setIsReceiptModalOpen] = useState(false);
+  const [editingOrderFromCust, setEditingOrderFromCust] = useState<Order | null>(null);
+  const [isEditModalFromCustOpen, setIsEditModalFromCustOpen] = useState(false);
 
   // Edit Customer Modal State
   const [editingCustomer, setEditingCustomer] = useState<Customer | null>(null);
@@ -87,13 +106,12 @@ export const CustomersPage: React.FC = () => {
 
       const mapped: CustomerImportRowItem[] = parsed.map((p, idx) => {
         const normPPhone = normalizeVietnamesePhone(p.phone);
+        // ADR-0015: Match duplicates STRICTLY by normalized phone number
+        // Never match purely by unaccented name to prevent different Vietnamese customers from merging
         const matchByPhone = normPPhone
-          ? customers.find(c => c.phone && normalizeVietnamesePhone(c.phone) === normPPhone)
+          ? customers.find(c => c.phone && isPhoneMatching(c.phone, normPPhone))
           : null;
-        const matchByName = !matchByPhone
-          ? customers.find(c => removeVietnameseTones(c.name) === removeVietnameseTones(p.name))
-          : null;
-        const existing = matchByPhone || matchByName;
+        const existing = matchByPhone;
         return {
           id: `cust_row_${Date.now()}_${idx}`,
           name: p.name,
@@ -138,12 +156,9 @@ export const CustomersPage: React.FC = () => {
           const newPhone = normalizeVietnamesePhone(rowEditPhone.trim());
           // Re-evaluate duplication with modified phone / name
           const matchByPhone = newPhone
-            ? customers.find(c => c.phone && normalizeVietnamesePhone(c.phone) === newPhone)
+            ? customers.find(c => c.phone && isPhoneMatching(c.phone, newPhone))
             : null;
-          const matchByName = !matchByPhone
-            ? customers.find(c => removeVietnameseTones(c.name) === removeVietnameseTones(newName))
-            : null;
-          const existing = matchByPhone || matchByName;
+          const existing = matchByPhone;
           return {
             ...r,
             name: newName,
@@ -202,34 +217,40 @@ export const CustomersPage: React.FC = () => {
             action: 'overwrite',
           });
         } else {
-          // 'accumulate'
+          // 'accumulate' (ADR-0015: strictly preserve verified contact info)
           const existingAcc = updatedCustomersMap.get(row.existingCustomer.id);
           const baseDebt = existingAcc ? existingAcc.debt : row.existingCustomer.debt;
+          const baseName = existingAcc ? existingAcc.name : row.existingCustomer.name;
+          const basePhone = existingAcc ? existingAcc.phone : row.existingCustomer.phone;
+          const baseAddress = existingAcc ? existingAcc.address : row.existingCustomer.address;
           updatedCustomersMap.set(row.existingCustomer.id, {
             id: row.existingCustomer.id,
-            name: row.name || row.existingCustomer.name,
-            phone: row.phone || row.existingCustomer.phone,
-            address: row.address || row.existingCustomer.address,
+            name: baseName || row.name,
+            phone: basePhone || row.phone,
+            address: baseAddress || row.address,
             debt: baseDebt + row.debt,
             action: 'accumulate',
           });
         }
       } else {
-        // Group new customers within the file by normalized phone OR normalized name
+        // Group new customers within the file ONLY by normalized phone (ADR-0015)
+        // Never group by unaccented name, as different customers can share common Vietnamese names
         const normPhone = row.phone ? normalizeVietnamesePhone(row.phone) : '';
-        const normName = row.name ? removeVietnameseTones(row.name).trim().toLowerCase() : '';
 
         let targetKey: string | null = null;
-        if (normPhone && phoneToNewCustKey.has(normPhone)) {
-          targetKey = phoneToNewCustKey.get(normPhone)!;
-        } else if (normName && nameToNewCustKey.has(normName)) {
-          targetKey = nameToNewCustKey.get(normName)!;
+        if (normPhone) {
+          for (const [existingPhone, key] of phoneToNewCustKey.entries()) {
+            if (isPhoneMatching(existingPhone, normPhone)) {
+              targetKey = key;
+              break;
+            }
+          }
         }
 
         if (targetKey && newCustomersMap.has(targetKey)) {
           const existingNew = newCustomersMap.get(targetKey)!;
           const mergedPhone = existingNew.phone || normPhone;
-          const mergedAddress = row.address || existingNew.address;
+          const mergedAddress = existingNew.address || row.address;
           const mergedDebt = existingNew.debt + row.debt;
 
           newCustomersMap.set(targetKey, {
@@ -240,7 +261,6 @@ export const CustomersPage: React.FC = () => {
           });
 
           if (mergedPhone) phoneToNewCustKey.set(mergedPhone, targetKey);
-          if (normName) nameToNewCustKey.set(normName, targetKey);
         } else {
           const newCustKey = `new_cust_${idx}`;
           newCustomersMap.set(newCustKey, {
@@ -251,7 +271,6 @@ export const CustomersPage: React.FC = () => {
           });
 
           if (normPhone) phoneToNewCustKey.set(normPhone, newCustKey);
-          if (normName) nameToNewCustKey.set(normName, newCustKey);
         }
       }
     });
@@ -436,13 +455,22 @@ export const CustomersPage: React.FC = () => {
     setEditingCustomer(null);
   };
 
-  // History for selected customer
-  const customerOrders = selectedCustomerForDetail
-    ? orders.filter(o => o.customerId === selectedCustomerForDetail.id)
+  // Reactive customer reference for Detail Modal (ADR-0015)
+  const activeCustomer = selectedCustomerForDetail
+    ? customers.find(c => c.id === selectedCustomerForDetail.id) || selectedCustomerForDetail
+    : null;
+
+  // History for selected customer sorted descending by creation date
+  const customerOrders = activeCustomer
+    ? orders
+        .filter(o => o.customerId === activeCustomer.id)
+        .sort((a, b) => new Date(b.createdAt).getTime() - new Date(a.createdAt).getTime())
     : [];
 
-  const customerDebtHistory = selectedCustomerForDetail
-    ? debtPayments.filter(p => p.customerId === selectedCustomerForDetail.id)
+  const customerDebtHistory = activeCustomer
+    ? debtPayments
+        .filter(p => p.customerId === activeCustomer.id)
+        .sort((a, b) => new Date(b.createdAt).getTime() - new Date(a.createdAt).getTime())
     : [];
 
   return (
@@ -819,20 +847,20 @@ export const CustomersPage: React.FC = () => {
       )}
 
       {/* MODAL: CUSTOMER DETAILS & DEBT LEDGER */}
-      {selectedCustomerForDetail && (
+      {activeCustomer && (
         <div className="fixed inset-0 bg-black/50 backdrop-blur-2xs z-50 flex items-center justify-center p-3">
           <div className="bg-white rounded-2xl max-w-lg w-full p-4 sm:p-5 shadow-2xl animate-in fade-in zoom-in duration-150 max-h-[90vh] flex flex-col">
             <div className="flex items-center justify-between pb-3 border-b border-slate-100">
               <div className="flex items-center gap-2">
                 <div className="w-9 h-9 rounded-xl bg-amber-500 text-white flex items-center justify-center font-bold">
-                  {selectedCustomerForDetail.name.slice(0, 1)}
+                  {activeCustomer.name.slice(0, 1)}
                 </div>
                 <div>
                   <h3 className="font-extrabold text-sm text-slate-900">
-                    {selectedCustomerForDetail.name}
+                    {activeCustomer.name}
                   </h3>
                   <p className="text-[10px] text-slate-400 font-mono">
-                    {selectedCustomerForDetail.id} • {selectedCustomerForDetail.phone || 'Chưa có SĐT'}
+                    {activeCustomer.id} • {activeCustomer.phone || 'Chưa có SĐT'}
                   </p>
                 </div>
               </div>
@@ -849,28 +877,28 @@ export const CustomersPage: React.FC = () => {
               <div className="bg-slate-50 p-2 rounded-xl">
                 <span className="text-[10px] text-slate-400 block font-bold">Đã mua</span>
                 <strong className="text-xs text-slate-800 font-extrabold">
-                  {selectedCustomerForDetail.orderCount || 0} đơn
+                  {activeCustomer.orderCount || 0} đơn
                 </strong>
               </div>
               <div className="bg-slate-50 p-2 rounded-xl">
                 <span className="text-[10px] text-slate-400 block font-bold">Tổng chi tiêu</span>
                 <strong className="text-xs text-slate-800 font-extrabold">
-                  {formatVND(selectedCustomerForDetail.totalSpent || 0)}
+                  {formatVND(activeCustomer.totalSpent || 0)}
                 </strong>
               </div>
               <div className="bg-rose-50 p-2 rounded-xl border border-rose-100">
                 <span className="text-[10px] text-rose-500 block font-bold">Dư nợ hiện tại</span>
                 <strong className="text-xs text-rose-600 font-black">
-                  {formatVND(selectedCustomerForDetail.debt)}
+                  {formatVND(activeCustomer.debt)}
                 </strong>
               </div>
             </div>
 
             {/* Address */}
-            {selectedCustomerForDetail.address && (
+            {activeCustomer.address && (
               <div className="py-2.5 border-b border-slate-100 text-xs flex items-start gap-1.5 text-slate-600">
                 <MapPin className="w-3.5 h-3.5 text-slate-400 shrink-0 mt-0.5" />
-                <span>{selectedCustomerForDetail.address}</span>
+                <span>{activeCustomer.address}</span>
               </div>
             )}
 
@@ -912,6 +940,7 @@ export const CustomersPage: React.FC = () => {
                 <h4 className="text-[11px] font-extrabold text-slate-400 uppercase tracking-wider mb-2 flex items-center gap-1.5">
                   <Receipt className="w-3.5 h-3.5 text-slate-400" />
                   <span>Các đơn hàng gần đây ({customerOrders.length})</span>
+                  <span className="text-[10px] text-amber-600 font-normal lowercase">(bấm vào đơn để xem bill)</span>
                 </h4>
                 {customerOrders.length === 0 ? (
                   <p className="text-xs text-slate-400 italic">Khách hàng chưa có đơn hàng nào</p>
@@ -920,20 +949,31 @@ export const CustomersPage: React.FC = () => {
                     {customerOrders.slice(0, 5).map(o => (
                       <div
                         key={o.id}
-                        className="p-2 rounded-xl bg-slate-50 border border-slate-150 text-xs flex items-center justify-between"
+                        onClick={() => {
+                          setSelectedOrderForReceipt(o);
+                          setIsReceiptModalOpen(true);
+                        }}
+                        className="group p-2.5 rounded-xl bg-slate-50 hover:bg-amber-50/70 border border-slate-200/80 hover:border-amber-300 text-xs flex items-center justify-between cursor-pointer transition shadow-2xs"
+                        title="Bấm để xem chi tiết hóa đơn & in lại"
                       >
-                        <div>
+                        <div className="min-w-0 pr-2">
                           <div className="flex items-center gap-1.5">
-                            <strong className="text-slate-800">#{o.id}</strong>
+                            <strong className="text-slate-800 font-mono group-hover:text-amber-600 transition">
+                              #{o.id}
+                            </strong>
                             <span className="text-[10px] text-slate-400 font-mono">
                               {formatDate(o.createdAt)}
+                            </span>
+                            <span className="opacity-0 group-hover:opacity-100 transition text-[10px] text-amber-600 font-bold flex items-center gap-0.5">
+                              <Eye className="w-3 h-3" />
+                              <span>Xem bill</span>
                             </span>
                           </div>
                           <p className="text-[11px] text-slate-500 truncate max-w-xs mt-0.5">
                             {o.items.map(i => `${i.name} (x${formatDisplayQty(i.qty)})`).join(', ')}
                           </p>
                         </div>
-                        <div className="text-right">
+                        <div className="text-right shrink-0">
                           <span className="font-bold text-slate-900 block">{formatVND(o.total)}</span>
                           {o.debtAmount > 0 && (
                             <span className="text-[10px] font-bold text-rose-600 block">
@@ -1441,6 +1481,43 @@ export const CustomersPage: React.FC = () => {
             </div>
           </div>
         </div>
+      )}
+
+      {/* MODAL: VIEW RECEIPT FROM CUSTOMER DETAIL (ADR-0015) */}
+      {selectedOrderForReceipt && receiptSettings && (
+        <ReceiptModal
+          order={selectedOrderForReceipt}
+          isOpen={isReceiptModalOpen}
+          onClose={() => {
+            setIsReceiptModalOpen(false);
+            setSelectedOrderForReceipt(null);
+          }}
+          settings={receiptSettings}
+          onEdit={(orderToEdit) => {
+            setIsReceiptModalOpen(false);
+            setEditingOrderFromCust(orderToEdit);
+            setIsEditModalFromCustOpen(true);
+          }}
+          onDelete={(orderToDelete) => {
+            if (window.confirm(`Bạn có chắc chắn muốn xóa vĩnh viễn đơn #${orderToDelete.id}?`)) {
+              deleteOrder(orderToDelete.id);
+              setIsReceiptModalOpen(false);
+              setSelectedOrderForReceipt(null);
+            }
+          }}
+        />
+      )}
+
+      {/* MODAL: EDIT ORDER FROM CUSTOMER DETAIL (ADR-0015) */}
+      {editingOrderFromCust && (
+        <EditOrderModal
+          order={editingOrderFromCust}
+          isOpen={isEditModalFromCustOpen}
+          onClose={() => {
+            setIsEditModalFromCustOpen(false);
+            setEditingOrderFromCust(null);
+          }}
+        />
       )}
     </div>
   );

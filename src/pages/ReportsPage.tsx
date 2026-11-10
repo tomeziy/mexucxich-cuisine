@@ -2,6 +2,7 @@ import React, { useState } from 'react';
 import { useStore } from '../context/StoreContext';
 import { Order } from '../types';
 import { formatVND, formatDate, formatDisplayQty } from '../utils/format';
+import { matchesSearch } from '../utils/vietnamese';
 import { ReceiptModal } from '../components/pos/ReceiptModal';
 import { EditOrderModal } from '../components/pos/EditOrderModal';
 import {
@@ -19,6 +20,8 @@ import {
   DollarSign,
   Package,
   FileSpreadsheet,
+  Search,
+  X,
 } from 'lucide-react';
 import { exportOrdersToExcel } from '../utils/excel';
 
@@ -28,6 +31,7 @@ export const ReportsPage: React.FC = () => {
   const [dateFilter, setDateFilter] = useState<'today' | '7days' | 'month' | 'all'>('today');
   const [statusFilter, setStatusFilter] = useState<string>('all');
   const [typeFilter, setTypeFilter] = useState<string>('all');
+  const [searchQuery, setSearchQuery] = useState('');
 
   // Modal for reprint
   const [selectedOrder, setSelectedOrder] = useState<Order | null>(null);
@@ -58,19 +62,46 @@ export const ReportsPage: React.FC = () => {
   const filteredOrders = orders.filter(o => {
     const orderTime = new Date(o.createdAt).getTime();
 
+    const hasSearch = searchQuery.trim().length > 0;
     let matchesDate = true;
-    if (dateFilter === 'today') {
-      matchesDate = orderTime >= startOfToday;
-    } else if (dateFilter === '7days') {
-      matchesDate = orderTime >= startOf7Days;
-    } else if (dateFilter === 'month') {
-      matchesDate = orderTime >= startOfMonth;
+    // ADR-0015 Smart Date Scope: when searching, auto-bypass date filter so user finds orders across entire history
+    if (!hasSearch) {
+      if (dateFilter === 'today') {
+        matchesDate = orderTime >= startOfToday;
+      } else if (dateFilter === '7days') {
+        matchesDate = orderTime >= startOf7Days;
+      } else if (dateFilter === 'month') {
+        matchesDate = orderTime >= startOfMonth;
+      }
     }
 
     const matchesStatus = statusFilter === 'all' || o.status === statusFilter;
     const matchesType = typeFilter === 'all' || o.orderType === typeFilter;
 
-    return matchesDate && matchesStatus && matchesType;
+    if (!matchesDate || !matchesStatus || !matchesType) return false;
+
+    if (!hasSearch) return true;
+
+    const trimmed = searchQuery.trim();
+    const numQ = trimmed.replace(/\D/g, '');
+    const cleanOrderId = o.id.toLowerCase().replace(/[^a-z0-9]/g, '');
+    const cleanSearchId = trimmed.toLowerCase().replace(/[^a-z0-9]/g, '');
+
+    // 1. Search by Order ID (#HD1234, HD1234, 1234)
+    const matchesId =
+      cleanOrderId.includes(cleanSearchId) || (numQ.length > 0 && cleanOrderId.includes(numQ));
+
+    // 2. Search by Customer Name (tone-insensitive, token matching)
+    const matchesCustomer = matchesSearch(o.customerName || '', trimmed);
+
+    // 3. Search by Customer Phone
+    const matchesPhone =
+      o.customerPhone && numQ.length > 0 && o.customerPhone.replace(/\D/g, '').includes(numQ);
+
+    // 4. Search by Dishes / Products in order
+    const matchesItems = o.items.some(i => matchesSearch(i.name, trimmed));
+
+    return matchesId || matchesCustomer || matchesPhone || matchesItems;
   });
 
   // Calculate Metrics on filtered valid orders (exclude cancelled)
@@ -206,38 +237,67 @@ export const ReportsPage: React.FC = () => {
         </div>
       </div>
 
-      {/* Filter Row */}
-      <div className="bg-white p-3 rounded-2xl border border-slate-200 shadow-xs flex flex-wrap items-center justify-between gap-2 text-xs font-medium">
-        <div className="flex items-center gap-2">
-          <Filter className="w-3.5 h-3.5 text-slate-400" />
-          <span className="font-bold text-slate-700">Lọc theo:</span>
+      {/* Filter & Search Row (ADR-0015) */}
+      <div className="bg-white p-3 rounded-2xl border border-slate-200 shadow-xs flex flex-wrap items-center justify-between gap-3 text-xs font-medium">
+        <div className="flex flex-wrap items-center gap-2 flex-1 min-w-[280px]">
+          {/* Search Box */}
+          <div className="relative flex-1 min-w-[220px] max-w-sm">
+            <Search className="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-slate-400" />
+            <input
+              type="text"
+              value={searchQuery}
+              onChange={e => setSearchQuery(e.target.value)}
+              placeholder="Tìm theo tên khách, SĐT, mã đơn (#HD...)"
+              className="w-full pl-9 pr-8 py-1.5 bg-slate-50 border border-slate-200 rounded-xl text-xs font-semibold text-slate-800 placeholder-slate-400 focus:outline-none focus:ring-2 focus:ring-amber-400 focus:bg-white transition"
+            />
+            {searchQuery && (
+              <button
+                type="button"
+                onClick={() => setSearchQuery('')}
+                className="absolute right-2.5 top-1/2 -translate-y-1/2 text-slate-400 hover:text-slate-600 p-0.5 rounded-full"
+                title="Xóa tìm kiếm"
+              >
+                <X className="w-3.5 h-3.5" />
+              </button>
+            )}
+          </div>
 
-          <select
-            value={statusFilter}
-            onChange={e => setStatusFilter(e.target.value)}
-            className="bg-slate-50 border border-slate-200 rounded-lg px-2.5 py-1 text-xs font-bold text-slate-700 focus:outline-none"
-          >
-            <option value="all">Tất cả trạng thái</option>
-            <option value="completed">Đã hoàn thành</option>
-            <option value="preparing">Đang chuẩn bị</option>
-            <option value="delivering">Đang giao hàng</option>
-            <option value="cancelled">Đã hủy</option>
-          </select>
+          <div className="flex items-center gap-1.5 shrink-0">
+            <Filter className="w-3.5 h-3.5 text-slate-400" />
+            <select
+              value={statusFilter}
+              onChange={e => setStatusFilter(e.target.value)}
+              className="bg-slate-50 border border-slate-200 rounded-lg px-2.5 py-1.5 text-xs font-bold text-slate-700 focus:outline-none"
+            >
+              <option value="all">Tất cả trạng thái</option>
+              <option value="completed">Đã hoàn thành</option>
+              <option value="preparing">Đang chuẩn bị</option>
+              <option value="delivering">Đang giao hàng</option>
+              <option value="cancelled">Đã hủy</option>
+            </select>
 
-          <select
-            value={typeFilter}
-            onChange={e => setTypeFilter(e.target.value)}
-            className="bg-slate-50 border border-slate-200 rounded-lg px-2.5 py-1 text-xs font-bold text-slate-700 focus:outline-none"
-          >
-            <option value="all">Mọi hình thức bán</option>
-            <option value="direct">Bán tại chỗ</option>
-            <option value="delivery">Đơn giao hàng</option>
-          </select>
+            <select
+              value={typeFilter}
+              onChange={e => setTypeFilter(e.target.value)}
+              className="bg-slate-50 border border-slate-200 rounded-lg px-2.5 py-1.5 text-xs font-bold text-slate-700 focus:outline-none"
+            >
+              <option value="all">Mọi hình thức</option>
+              <option value="direct">Tại chỗ</option>
+              <option value="delivery">Giao hàng</option>
+            </select>
+          </div>
         </div>
 
-        <span className="text-slate-400 text-[11px]">
-          Hiển thị <strong>{filteredOrders.length}</strong> đơn hàng
-        </span>
+        <div className="flex items-center gap-2 text-slate-500 text-[11px] shrink-0">
+          {searchQuery.trim() && (
+            <span className="bg-amber-100 text-amber-800 text-[10px] font-bold px-2 py-0.5 rounded-full">
+              Toàn bộ thời gian
+            </span>
+          )}
+          <span>
+            Hiển thị <strong>{filteredOrders.length}</strong> đơn hàng
+          </span>
+        </div>
       </div>
 
       {/* Orders History Table */}
