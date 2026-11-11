@@ -61,7 +61,13 @@ export const PosPage: React.FC = () => {
   const [selectedCustomerId, setSelectedCustomerId] = useState<string>(customers[0]?.id || 'KH01');
   const [isQuickAddCustomerOpen, setIsQuickAddCustomerOpen] = useState(false);
   const [quickAddInitialName, setQuickAddInitialName] = useState('');
+  const [quickAddInitialPhone, setQuickAddInitialPhone] = useState('');
   const [isQuickEditCustomerOpen, setIsQuickEditCustomerOpen] = useState(false);
+
+  // Order-level delivery contact snapshot (ADR-0016: Non-mutating CRM delivery isolation)
+  const [deliveryName, setDeliveryName] = useState('');
+  const [deliveryPhone, setDeliveryPhone] = useState('');
+  const [deliveryAddress, setDeliveryAddress] = useState('');
 
   // Cart state
   const [cart, setCart] = useState<CartItem[]>([]);
@@ -104,6 +110,15 @@ export const PosPage: React.FC = () => {
   });
 
   const selectedCustomer = customers.find(c => c.id === selectedCustomerId) || customers[0];
+
+  // Sync delivery contact with selected customer
+  React.useEffect(() => {
+    if (selectedCustomer) {
+      setDeliveryName(selectedCustomer.name || '');
+      setDeliveryPhone(selectedCustomer.phone || '');
+      setDeliveryAddress(selectedCustomer.address || '');
+    }
+  }, [selectedCustomerId]);
 
   // Cart Actions
   const handleAddToCart = (product: Product) => {
@@ -222,6 +237,11 @@ export const PosPage: React.FC = () => {
     setShippingNote('');
     setCashGiven(0);
     setPartialPaidAmount(0);
+    if (selectedCustomer) {
+      setDeliveryName(selectedCustomer.name || '');
+      setDeliveryPhone(selectedCustomer.phone || '');
+      setDeliveryAddress(selectedCustomer.address || '');
+    }
   };
 
   // Calculations
@@ -258,15 +278,28 @@ export const PosPage: React.FC = () => {
 
   const totalItemCount = cart.reduce((sum, item) => sum + item.qty, 0);
 
-  // Checkout
+  // Checkout (ADR-0016: Order-Level Delivery Contact Snapshot)
   const handleCheckout = () => {
     if (cart.length === 0) {
       alert('Vui lòng chọn món ăn vào giỏ trước khi thanh toán!');
       return;
     }
 
-    if (orderType === 'delivery' && !selectedCustomer?.phone && !selectedCustomer?.address) {
-      if (!window.confirm('Đơn giao hàng chưa có SĐT hoặc địa chỉ khách. Bạn vẫn muốn tiếp tục?')) {
+    const finalCustomerName =
+      orderType === 'delivery' && deliveryName.trim()
+        ? deliveryName.trim()
+        : selectedCustomer?.name || 'Khách lẻ tại quầy';
+    const finalCustomerPhone =
+      orderType === 'delivery'
+        ? deliveryPhone.trim()
+        : selectedCustomer?.phone || '';
+    const finalCustomerAddress =
+      orderType === 'delivery'
+        ? deliveryAddress.trim()
+        : selectedCustomer?.address || '';
+
+    if (orderType === 'delivery' && !finalCustomerPhone && !finalCustomerAddress) {
+      if (!window.confirm('Đơn giao hàng chưa có SĐT hoặc địa chỉ người nhận. Bạn vẫn muốn tiếp tục?')) {
         return;
       }
     }
@@ -275,9 +308,9 @@ export const PosPage: React.FC = () => {
 
     const newOrder = createOrder({
       customerId: selectedCustomer?.id || 'KH01',
-      customerName: selectedCustomer?.name || 'Khách lẻ tại quầy',
-      customerPhone: selectedCustomer?.phone || '',
-      customerAddress: selectedCustomer?.address || '',
+      customerName: finalCustomerName,
+      customerPhone: finalCustomerPhone,
+      customerAddress: finalCustomerAddress,
       orderType,
       status: orderStatus,
       items: [...cart],
@@ -661,9 +694,20 @@ export const PosPage: React.FC = () => {
                   <CustomerCombobox
                     customers={customers}
                     selectedCustomerId={selectedCustomerId}
-                    onSelectCustomer={cust => setSelectedCustomerId(cust.id)}
-                    onQuickAdd={query => {
-                      setQuickAddInitialName(query);
+                    onSelectCustomer={cust => {
+                      setSelectedCustomerId(cust.id);
+                      setDeliveryName(cust.name || '');
+                      setDeliveryPhone(cust.phone || '');
+                      setDeliveryAddress(cust.address || '');
+                    }}
+                    onQuickAdd={(query, fieldType) => {
+                      if (fieldType === 'phone') {
+                        setQuickAddInitialPhone(query);
+                        setQuickAddInitialName('');
+                      } else {
+                        setQuickAddInitialName(query);
+                        setQuickAddInitialPhone('');
+                      }
                       setIsQuickAddCustomerOpen(true);
                     }}
                   />
@@ -672,7 +716,7 @@ export const PosPage: React.FC = () => {
                       type="button"
                       onClick={() => setIsQuickEditCustomerOpen(true)}
                       className="p-1.5 rounded-xl border border-slate-200 hover:bg-amber-50 hover:border-amber-300 hover:text-amber-600 text-slate-500 transition shrink-0"
-                      title="Sửa nhanh thông tin khách hàng (SĐT, Địa chỉ)"
+                      title="Sửa thông tin gốc trong Danh bạ khách hàng"
                     >
                       <Edit2 className="w-3.5 h-3.5" />
                     </button>
@@ -732,10 +776,76 @@ export const PosPage: React.FC = () => {
                   </div>
                 </div>
 
-                {/* Delivery details if selected */}
+                {/* Delivery details if selected (ADR-0016: Order-Level Delivery Contact Snapshot) */}
                 {orderType === 'delivery' && (
                   <div className="p-2.5 bg-amber-50/60 rounded-xl border border-amber-200/80 space-y-2 text-xs">
-                    <div className="flex items-center justify-between gap-2">
+                    <div className="flex items-center justify-between">
+                      <span className="font-extrabold text-[11px] text-amber-900 flex items-center gap-1">
+                        <Truck className="w-3.5 h-3.5 text-amber-600" />
+                        <span>Thông tin nhận hàng (Đơn này)</span>
+                      </span>
+                      {selectedCustomer &&
+                        (deliveryName !== selectedCustomer.name ||
+                          deliveryPhone !== (selectedCustomer.phone || '') ||
+                          deliveryAddress !== (selectedCustomer.address || '')) && (
+                          <button
+                            type="button"
+                            onClick={() => {
+                              setDeliveryName(selectedCustomer.name || '');
+                              setDeliveryPhone(selectedCustomer.phone || '');
+                              setDeliveryAddress(selectedCustomer.address || '');
+                            }}
+                            className="text-[10px] text-amber-700 hover:text-amber-900 underline font-semibold"
+                            title="Khôi phục lại tên, SĐT, địa chỉ theo hồ sơ gốc của khách"
+                          >
+                            Khôi phục hồ sơ gốc
+                          </button>
+                        )}
+                    </div>
+
+                    <div className="space-y-1.5">
+                      <div className="grid grid-cols-2 gap-1.5">
+                        <div>
+                          <label className="text-[10px] font-bold text-slate-600 block mb-0.5">
+                            Tên người nhận
+                          </label>
+                          <input
+                            type="text"
+                            value={deliveryName}
+                            onChange={e => setDeliveryName(e.target.value)}
+                            placeholder="Tên người nhận hàng..."
+                            className="w-full bg-white border border-amber-200 rounded-lg px-2 py-1 text-xs text-slate-900 font-bold focus:outline-none focus:ring-1 focus:ring-amber-500"
+                          />
+                        </div>
+                        <div>
+                          <label className="text-[10px] font-bold text-slate-600 block mb-0.5">
+                            SĐT nhận hàng
+                          </label>
+                          <input
+                            type="tel"
+                            value={deliveryPhone}
+                            onChange={e => setDeliveryPhone(e.target.value)}
+                            placeholder="0988xxxxxx"
+                            className="w-full bg-white border border-amber-200 rounded-lg px-2 py-1 text-xs text-slate-900 font-mono font-bold focus:outline-none focus:ring-1 focus:ring-amber-500"
+                          />
+                        </div>
+                      </div>
+
+                      <div>
+                        <label className="text-[10px] font-bold text-slate-600 block mb-0.5">
+                          Địa chỉ giao hàng
+                        </label>
+                        <textarea
+                          rows={2}
+                          value={deliveryAddress}
+                          onChange={e => setDeliveryAddress(e.target.value)}
+                          placeholder="Số nhà, ngõ, tên đường, quận..."
+                          className="w-full bg-white border border-amber-200 rounded-lg px-2 py-1 text-xs text-slate-800 placeholder:text-slate-400 focus:outline-none focus:ring-1 focus:ring-amber-500 resize-none font-medium"
+                        />
+                      </div>
+                    </div>
+
+                    <div className="flex items-center justify-between gap-2 pt-1 border-t border-amber-200/60">
                       <span className="text-slate-700 font-bold">Phí ship (thu hộ):</span>
                       <input
                         type="number"
@@ -754,6 +864,9 @@ export const PosPage: React.FC = () => {
                       placeholder="Ghi chú ship (Ahamove, Grab, Shipper quen...)"
                       className="w-full bg-white border border-amber-200 rounded-lg px-2.5 py-1 text-xs text-slate-800 placeholder:text-slate-400 focus:outline-none"
                     />
+                    <p className="text-[9.5px] text-amber-700/80 italic">
+                      💡 Thông tin người nhận chỉ lưu theo đơn này, không ghi đè hồ sơ gốc trong Danh bạ.
+                    </p>
                   </div>
                 )}
               </div>
@@ -1105,11 +1218,18 @@ export const PosPage: React.FC = () => {
       <QuickAddCustomerModal
         isOpen={isQuickAddCustomerOpen}
         initialName={quickAddInitialName}
+        initialPhone={quickAddInitialPhone}
         onClose={() => {
           setIsQuickAddCustomerOpen(false);
           setQuickAddInitialName('');
+          setQuickAddInitialPhone('');
         }}
-        onCustomerAdded={newCust => setSelectedCustomerId(newCust.id)}
+        onCustomerAdded={newCust => {
+          setSelectedCustomerId(newCust.id);
+          setDeliveryName(newCust.name || '');
+          setDeliveryPhone(newCust.phone || '');
+          setDeliveryAddress(newCust.address || '');
+        }}
       />
 
       {/* Quick Edit Customer Modal */}

@@ -1,14 +1,16 @@
-import React, { useState } from 'react';
+import React, { useState, useEffect, useMemo, useRef } from 'react';
 import { useStore } from '../../context/StoreContext';
 import { Customer } from '../../types';
 import { normalizeVietnamesePhone } from '../../utils/excel';
-import { UserPlus, X } from 'lucide-react';
+import { findDuplicatePhoneCustomer } from '../../utils/customerSearch';
+import { UserPlus, X, AlertTriangle } from 'lucide-react';
 
 interface QuickAddCustomerModalProps {
   isOpen: boolean;
   onClose: () => void;
   onCustomerAdded: (customer: Customer) => void;
   initialName?: string;
+  initialPhone?: string;
 }
 
 export const QuickAddCustomerModal: React.FC<QuickAddCustomerModalProps> = ({
@@ -16,21 +18,40 @@ export const QuickAddCustomerModal: React.FC<QuickAddCustomerModalProps> = ({
   onClose,
   onCustomerAdded,
   initialName = '',
+  initialPhone = '',
 }) => {
-  const { addCustomer } = useStore();
+  const { customers, addCustomer } = useStore();
   const [name, setName] = useState(initialName);
-  const [phone, setPhone] = useState('');
+  const [phone, setPhone] = useState(initialPhone);
   const [address, setAddress] = useState('');
   const [error, setError] = useState('');
 
-  React.useEffect(() => {
+  const nameInputRef = useRef<HTMLInputElement>(null);
+  const phoneInputRef = useRef<HTMLInputElement>(null);
+
+  useEffect(() => {
     if (isOpen) {
       setName(initialName || '');
-      setPhone('');
+      setPhone(initialPhone || '');
       setAddress('');
       setError('');
+
+      setTimeout(() => {
+        if (initialPhone && !initialName) {
+          nameInputRef.current?.focus();
+        } else if (initialName && !initialPhone) {
+          phoneInputRef.current?.focus();
+        } else {
+          nameInputRef.current?.focus();
+        }
+      }, 50);
     }
-  }, [isOpen, initialName]);
+  }, [isOpen, initialName, initialPhone]);
+
+  // Live duplicate phone check
+  const duplicateCustomer = useMemo(() => {
+    return findDuplicatePhoneCustomer(customers, phone);
+  }, [customers, phone]);
 
   if (!isOpen) return null;
 
@@ -38,6 +59,13 @@ export const QuickAddCustomerModal: React.FC<QuickAddCustomerModalProps> = ({
     e.preventDefault();
     if (!name.trim()) {
       setError('Vui lòng nhập tên khách hàng');
+      return;
+    }
+
+    if (duplicateCustomer) {
+      setError(
+        `Số điện thoại này đã được đăng ký cho khách hàng "${duplicateCustomer.name}" (${duplicateCustomer.phone}). Vui lòng kiểm tra lại!`
+      );
       return;
     }
 
@@ -66,6 +94,7 @@ export const QuickAddCustomerModal: React.FC<QuickAddCustomerModalProps> = ({
             <h4 className="font-extrabold text-sm text-slate-900">Thêm nhanh khách hàng</h4>
           </div>
           <button
+            type="button"
             onClick={onClose}
             className="w-6 h-6 rounded-md hover:bg-slate-100 flex items-center justify-center text-slate-400 hover:text-slate-600"
           >
@@ -85,24 +114,43 @@ export const QuickAddCustomerModal: React.FC<QuickAddCustomerModalProps> = ({
               Tên khách hàng <span className="text-rose-500">*</span>
             </label>
             <input
+              ref={nameInputRef}
               type="text"
               value={name}
-              onChange={e => setName(e.target.value)}
+              onChange={e => {
+                setName(e.target.value);
+                if (error) setError('');
+              }}
               placeholder="Ví dụ: Chị Lan, Anh Tuấn..."
               className="w-full bg-slate-50 border border-slate-200 rounded-xl px-3 py-2 text-xs focus:outline-none focus:ring-1 focus:ring-amber-500 font-medium"
-              autoFocus
             />
           </div>
 
           <div>
             <label className="font-bold text-slate-700 block mb-1">Số điện thoại</label>
             <input
+              ref={phoneInputRef}
               type="tel"
               value={phone}
-              onChange={e => setPhone(e.target.value)}
+              onChange={e => {
+                setPhone(e.target.value);
+                if (error) setError('');
+              }}
               placeholder="0988xxxxxx"
-              className="w-full bg-slate-50 border border-slate-200 rounded-xl px-3 py-2 text-xs focus:outline-none focus:ring-1 focus:ring-amber-500 font-medium"
+              className={`w-full bg-slate-50 border rounded-xl px-3 py-2 text-xs focus:outline-none font-medium ${
+                duplicateCustomer
+                  ? 'border-rose-400 focus:ring-1 focus:ring-rose-500 bg-rose-50/30'
+                  : 'border-slate-200 focus:ring-1 focus:ring-amber-500'
+              }`}
             />
+            {duplicateCustomer && (
+              <div className="mt-1 p-1.5 bg-rose-50 border border-rose-200 rounded-lg text-[11px] text-rose-700 flex items-start gap-1">
+                <AlertTriangle className="w-3.5 h-3.5 shrink-0 mt-0.5 text-rose-600" />
+                <span>
+                  Trùng SĐT với <strong>{duplicateCustomer.name}</strong> ({duplicateCustomer.phone})
+                </span>
+              </div>
+            )}
           </div>
 
           <div>
@@ -126,7 +174,8 @@ export const QuickAddCustomerModal: React.FC<QuickAddCustomerModalProps> = ({
             </button>
             <button
               type="submit"
-              className="flex-1 py-2 rounded-xl text-xs font-bold bg-amber-500 hover:bg-amber-600 text-white shadow-sm shadow-amber-500/20 transition"
+              disabled={!!duplicateCustomer}
+              className="flex-1 py-2 rounded-xl text-xs font-bold bg-amber-500 hover:bg-amber-600 disabled:opacity-50 disabled:cursor-not-allowed text-white shadow-sm shadow-amber-500/20 transition"
             >
               Lưu khách hàng
             </button>

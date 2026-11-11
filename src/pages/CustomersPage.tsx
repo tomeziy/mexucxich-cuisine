@@ -3,6 +3,7 @@ import { useStore } from '../context/StoreContext';
 import { Customer, Order } from '../types';
 import { formatVND, formatDate, formatDisplayQty } from '../utils/format';
 import { matchesSearch, removeVietnameseTones } from '../utils/vietnamese';
+import { filterAndRankCustomers, findDuplicatePhoneCustomer } from '../utils/customerSearch';
 import { ReceiptModal } from '../components/pos/ReceiptModal';
 import { EditOrderModal } from '../components/pos/EditOrderModal';
 import {
@@ -319,62 +320,11 @@ export const CustomersPage: React.FC = () => {
     setCurrentPage(1);
   }, [searchQuery, filterOnlyDebt]);
 
-  // Filtered & Ranked customers (Multi-token AND matching + Whole-word prioritization)
+  // Filtered & Ranked customers (ADR-0016: Diacritic-Aware & Phone-First Ranking Engine)
   const filteredCustomers = useMemo(() => {
-    const raw = searchQuery.trim();
-    const matchesDebtFilter = (c: Customer) => (filterOnlyDebt ? c.debt > 0 : true);
-
-    if (!raw) {
-      return customers.filter(matchesDebtFilter);
-    }
-
-    const cleanQuery = removeVietnameseTones(raw);
-    const tokens = cleanQuery.split(/\s+/).filter(Boolean);
-    const numericQuery = raw.replace(/\D/g, '');
-
-    const scoredList: { customer: Customer; score: number }[] = [];
-
-    for (const c of customers) {
-      if (!matchesDebtFilter(c)) continue;
-
-      const nameClean = removeVietnameseTones(c.name);
-      const phone = c.phone || '';
-      const addressClean = c.address ? removeVietnameseTones(c.address) : '';
-      const combined = `${nameClean} ${phone} ${addressClean}`;
-
-      // All tokens must be present in customer info
-      const allTokensMatch = tokens.every(tok => combined.includes(tok));
-      if (!allTokensMatch) continue;
-
-      let score = 0;
-      const nameWords = nameClean.split(/\s+/).filter(Boolean);
-
-      const isExactMatch = nameClean === cleanQuery;
-      const isNamePrefix = nameClean.startsWith(cleanQuery);
-      const isWordBoundaryMatch = nameWords.some(w => w === cleanQuery || (cleanQuery.length >= 2 && w.startsWith(cleanQuery)));
-      const isPhonePrefix = numericQuery.length > 0 && phone.startsWith(numericQuery);
-      const isNameSubstring = nameClean.includes(cleanQuery);
-
-      if (isExactMatch) score = 150;
-      else if (isNamePrefix) score = 120;
-      else if (isWordBoundaryMatch) score = 110;
-      else if (isPhonePrefix) score = 100;
-      else if (tokens.length > 1 && tokens.every(t => nameClean.includes(t))) score = 90;
-      else if (isNameSubstring) score = 60;
-      else score = 40;
-
-      // Tiebreaker nợ trong cùng bậc khớp chữ
-      if (c.debt > 0) score += 2;
-
-      scoredList.push({ customer: c, score });
-    }
-
-    scoredList.sort((a, b) => {
-      if (b.score !== a.score) return b.score - a.score;
-      return a.customer.name.length - b.customer.name.length;
+    return filterAndRankCustomers(customers, searchQuery, {
+      filterOnlyDebt,
     });
-
-    return scoredList.map(s => s.customer);
   }, [customers, searchQuery, filterOnlyDebt]);
 
   const totalPages = Math.ceil(filteredCustomers.length / pageSize) || 1;
@@ -387,10 +337,26 @@ export const CustomersPage: React.FC = () => {
   const totalOutstandingDebt = customers.reduce((sum, c) => sum + (c.debt || 0), 0);
   const totalDebtorCount = customers.filter(c => c.debt > 0).length;
 
+  const duplicatePhoneAdd = useMemo(() => {
+    return findDuplicatePhoneCustomer(customers, formPhone);
+  }, [customers, formPhone]);
+
+  const duplicatePhoneEdit = useMemo(() => {
+    if (!editingCustomer) return null;
+    return findDuplicatePhoneCustomer(customers, editCustomerPhone, editingCustomer.id);
+  }, [customers, editCustomerPhone, editingCustomer]);
+
   const handleAddCustomer = (e: React.FormEvent) => {
     e.preventDefault();
     if (!formName.trim()) {
       alert('Vui lòng nhập tên khách hàng!');
+      return;
+    }
+    const duplicate = findDuplicatePhoneCustomer(customers, formPhone);
+    if (duplicate) {
+      alert(
+        `Số điện thoại này đã được đăng ký cho khách hàng "${duplicate.name}" (${duplicate.phone}). Vui lòng kiểm tra lại!`
+      );
       return;
     }
     addCustomer({
@@ -445,6 +411,13 @@ export const CustomersPage: React.FC = () => {
     if (!editingCustomer) return;
     if (!editCustomerName.trim()) {
       alert('Vui lòng nhập tên khách hàng!');
+      return;
+    }
+    const duplicate = findDuplicatePhoneCustomer(customers, editCustomerPhone, editingCustomer.id);
+    if (duplicate) {
+      alert(
+        `Số điện thoại này đã thuộc về khách hàng khác: "${duplicate.name}" (${duplicate.phone}). Không thể lưu trùng số!`
+      );
       return;
     }
     updateCustomer(editingCustomer.id, {
@@ -809,8 +782,20 @@ export const CustomersPage: React.FC = () => {
                   value={editCustomerPhone}
                   onChange={e => setEditCustomerPhone(e.target.value)}
                   placeholder="0904047976"
-                  className="w-full bg-slate-50 border border-slate-200 rounded-xl px-3 py-2 text-xs font-mono focus:outline-none focus:ring-2 focus:ring-amber-500/20 focus:border-amber-500"
+                  className={`w-full bg-slate-50 border rounded-xl px-3 py-2 text-xs font-mono focus:outline-none focus:ring-2 ${
+                    duplicatePhoneEdit
+                      ? 'border-rose-400 focus:ring-rose-500/20 focus:border-rose-500 bg-rose-50/30'
+                      : 'border-slate-200 focus:ring-amber-500/20 focus:border-amber-500'
+                  }`}
                 />
+                {duplicatePhoneEdit && (
+                  <div className="mt-1 p-1.5 bg-rose-50 border border-rose-200 rounded-lg text-[11px] text-rose-700 flex items-start gap-1">
+                    <AlertTriangle className="w-3.5 h-3.5 shrink-0 mt-0.5 text-rose-600" />
+                    <span>
+                      Trùng SĐT với khách: <strong>{duplicatePhoneEdit.name}</strong> ({duplicatePhoneEdit.phone})
+                    </span>
+                  </div>
+                )}
               </div>
 
               <div>
@@ -836,7 +821,8 @@ export const CustomersPage: React.FC = () => {
                 </button>
                 <button
                   type="submit"
-                  className="flex-1 py-2 rounded-xl text-xs font-bold bg-amber-500 hover:bg-amber-600 text-white shadow-sm shadow-amber-500/20"
+                  disabled={!!duplicatePhoneEdit}
+                  className="flex-1 py-2 rounded-xl text-xs font-bold bg-amber-500 hover:bg-amber-600 disabled:opacity-50 disabled:cursor-not-allowed text-white shadow-sm shadow-amber-500/20"
                 >
                   Lưu thay đổi
                 </button>
@@ -1150,8 +1136,20 @@ export const CustomersPage: React.FC = () => {
                   value={formPhone}
                   onChange={e => setFormPhone(e.target.value)}
                   placeholder="0988123456"
-                  className="w-full bg-slate-50 border border-slate-200 rounded-xl px-3 py-2 text-xs font-mono focus:outline-none focus:ring-2 focus:ring-amber-500/20 focus:border-amber-500"
+                  className={`w-full bg-slate-50 border rounded-xl px-3 py-2 text-xs font-mono focus:outline-none focus:ring-2 ${
+                    duplicatePhoneAdd
+                      ? 'border-rose-400 focus:ring-rose-500/20 focus:border-rose-500 bg-rose-50/30'
+                      : 'border-slate-200 focus:ring-amber-500/20 focus:border-amber-500'
+                  }`}
                 />
+                {duplicatePhoneAdd && (
+                  <div className="mt-1 p-1.5 bg-rose-50 border border-rose-200 rounded-lg text-[11px] text-rose-700 flex items-start gap-1">
+                    <AlertTriangle className="w-3.5 h-3.5 shrink-0 mt-0.5 text-rose-600" />
+                    <span>
+                      Trùng SĐT với khách: <strong>{duplicatePhoneAdd.name}</strong> ({duplicatePhoneAdd.phone})
+                    </span>
+                  </div>
+                )}
               </div>
 
               <div>
@@ -1177,7 +1175,8 @@ export const CustomersPage: React.FC = () => {
                 </button>
                 <button
                   type="submit"
-                  className="flex-1 py-2 rounded-xl text-xs font-bold bg-amber-500 hover:bg-amber-600 text-white shadow-sm shadow-amber-500/20"
+                  disabled={!!duplicatePhoneAdd}
+                  className="flex-1 py-2 rounded-xl text-xs font-bold bg-amber-500 hover:bg-amber-600 disabled:opacity-50 disabled:cursor-not-allowed text-white shadow-sm shadow-amber-500/20"
                 >
                   Lưu khách hàng
                 </button>
