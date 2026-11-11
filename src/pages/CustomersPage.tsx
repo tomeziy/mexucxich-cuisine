@@ -4,6 +4,8 @@ import { Customer, Order } from '../types';
 import { formatVND, formatDate, formatDisplayQty } from '../utils/format';
 import { matchesSearch, removeVietnameseTones } from '../utils/vietnamese';
 import { filterAndRankCustomers, findDuplicatePhoneCustomer } from '../utils/customerSearch';
+import { auditCustomerData } from '../utils/customerSentinel';
+import { CustomerSentinelModal } from '../components/customers/CustomerSentinelModal';
 import { ReceiptModal } from '../components/pos/ReceiptModal';
 import { EditOrderModal } from '../components/pos/EditOrderModal';
 import {
@@ -27,6 +29,8 @@ import {
   Download,
   Check,
   AlertTriangle,
+  ShieldAlert,
+  Sparkles,
 } from 'lucide-react';
 import {
   exportCustomersToExcel,
@@ -59,10 +63,26 @@ export const CustomersPage: React.FC = () => {
     updateCustomer,
     deleteOrder,
     payDebt,
+    repairCustomerData,
+    splitCustomerRecord,
+    mergeCustomerRecords,
   } = useStore();
 
   const [searchQuery, setSearchQuery] = useState('');
   const [filterOnlyDebt, setFilterOnlyDebt] = useState(false);
+
+  // ADR-0017: Customer Data Sentinel State & Audit
+  const [isSentinelModalOpen, setIsSentinelModalOpen] = useState(false);
+  const auditResult = useMemo(() => auditCustomerData(customers), [customers]);
+
+  const handleAutoHealSentinel = () => {
+    const res = repairCustomerData();
+    if (res.changesCount > 0) {
+      alert(`Đã tự động chuẩn hóa và sửa ${res.changesCount} điểm bất thường trong danh bạ:\n\n` + res.log.join('\n'));
+    } else {
+      alert('Tất cả các lỗi đã được sửa hoặc danh bạ không có bất thường cần tự động chuẩn hóa!');
+    }
+  };
 
   // Modals
   const [isAddCustomerOpen, setIsAddCustomerOpen] = useState(false);
@@ -535,6 +555,48 @@ export const CustomersPage: React.FC = () => {
           </p>
         </div>
       </div>
+
+      {/* ADR-0017: Customer Data Sentinel Alert Banner */}
+      {auditResult.totalAnomalies > 0 && (
+        <div className="bg-amber-50 border-2 border-amber-300 rounded-2xl p-4 shadow-sm flex flex-col sm:flex-row items-start sm:items-center justify-between gap-3 animate-fadeIn">
+          <div className="flex items-start gap-3">
+            <div className="p-2 bg-amber-100 text-amber-700 rounded-xl shrink-0 mt-0.5">
+              <ShieldAlert className="w-5 h-5" />
+            </div>
+            <div>
+              <div className="font-bold text-amber-900 text-sm flex items-center gap-2">
+                <span>🛡️ Customer Sentinel: Phát hiện {auditResult.totalAnomalies} bất thường trong danh bạ</span>
+                <span className="px-2 py-0.5 bg-amber-200 text-amber-800 rounded-full text-[10px] font-black">
+                  CẦN XỬ LÝ
+                </span>
+              </div>
+              <p className="text-xs text-amber-700 mt-0.5">
+                {auditResult.toneTwins.length > 0 && `${auditResult.toneTwins.length} cặp trùng tên khác dấu • `}
+                {auditResult.multiPhoneAnomalies.length > 0 && `${auditResult.multiPhoneAnomalies.length} khách gộp nhiều SĐT • `}
+                {auditResult.multiAddressAnomalies.length > 0 && `${auditResult.multiAddressAnomalies.length} khách gộp nhiều Đ/c • `}
+                {auditResult.duplicatePhoneGroups.length > 0 && `${auditResult.duplicatePhoneGroups.length} nhóm trùng SĐT`}
+              </p>
+            </div>
+          </div>
+          <div className="flex items-center gap-2 shrink-0 w-full sm:w-auto">
+            <button
+              onClick={() => setIsSentinelModalOpen(true)}
+              className="flex-1 sm:flex-none px-3.5 py-2 bg-amber-600 hover:bg-amber-700 text-white rounded-xl text-xs font-bold shadow-xs transition flex items-center justify-center gap-1.5"
+            >
+              <AlertTriangle className="w-4 h-4" />
+              <span>Kiểm tra & Xử lý bất thường ({auditResult.totalAnomalies})</span>
+            </button>
+            <button
+              onClick={handleAutoHealSentinel}
+              className="px-3 py-2 bg-white hover:bg-amber-100 text-amber-800 border border-amber-300 rounded-xl text-xs font-bold shadow-2xs transition flex items-center gap-1"
+              title="Tự động chuẩn hóa và khôi phục dữ liệu đã biết"
+            >
+              <Sparkles className="w-4 h-4 text-amber-600" />
+              <span>Sửa nhanh</span>
+            </button>
+          </div>
+        </div>
+      )}
 
       {/* Search Bar */}
       <div className="bg-white p-3.5 rounded-2xl border border-slate-200 shadow-xs">
@@ -1518,6 +1580,24 @@ export const CustomersPage: React.FC = () => {
           }}
         />
       )}
+
+      {/* MODAL: CUSTOMER DATA SENTINEL (ADR-0017) */}
+      <CustomerSentinelModal
+        isOpen={isSentinelModalOpen}
+        onClose={() => setIsSentinelModalOpen(false)}
+        auditResult={auditResult}
+        customers={customers}
+        orders={orders}
+        onRepairAll={() => repairCustomerData()}
+        onSplitCustomer={(customerId, type) => splitCustomerRecord(customerId, type)}
+        onMergeCustomers={(primaryId, duplicateId) => mergeCustomerRecords(primaryId, duplicateId)}
+        onEditCustomer={cust => {
+          setEditingCustomer(cust);
+          setEditCustomerName(cust.name);
+          setEditCustomerPhone(cust.phone || '');
+          setEditCustomerAddress(cust.address || '');
+        }}
+      />
     </div>
   );
 };

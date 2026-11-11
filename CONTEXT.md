@@ -152,6 +152,19 @@ Giải quyết triệt để 5 lỗi định danh khách hàng theo phản ánh 
 (5) **Chặn trùng lặp số điện thoại:** Kiểm tra xác thực chống trùng SĐT trên toàn bộ các biểu mẫu thêm/sửa khách hàng (`QuickAddCustomerModal`, `QuickEditCustomerModal`, `CustomersPage`), cảnh báo trực quan tên khách hàng đang sở hữu SĐT đó và ngăn chặn lưu trùng.
 _Avoid_: Nhầm lẫn giữa khách có dấu và không dấu ("Thanh Hang" vs "Thanh Hằng"), tìm SĐT bị tên đè lên trước, tìm SĐT có dấu gạch ngang bị trượt, sửa địa chỉ đơn hàng làm mất địa chỉ gốc của khách, tạo trùng khách cùng SĐT.
 
+**Bộ lọc Giám sát Danh bạ Sentinel & Cảnh báo Trùng tên tại POS (Customer Data Sentinel & POS Collision Alert - ADR-0017)**:
+Bảo vệ toàn vẹn danh bạ và ngăn chặn sai sót nhầm lẫn khách hàng xuyên suốt vòng đời vận hành:
+(1) **Khôi phục & Tách bạch sạch sẽ dữ liệu lịch sử:** Tách rời hoàn toàn các bản ghi từng bị gộp/hỏng trước đây giữa "Thanh Hang" (SĐT `0988111222`, Đ/c `12 Hoàn Kiếm, Hà Nội`) và "Thanh Hằng" (SĐT `0988333444`, Đ/c `45 Đội Cấn, Ba Đình, Hà Nội`) trong `INITIAL_CUSTOMERS`, localStorage và Supabase Cloud; tự động liên kết lại các đơn hàng cũ về đúng khách tương ứng theo SĐT/Địa chỉ giao thực tế trên hóa đơn.
+(2) **Cảnh báo va chạm trực tiếp tại quầy POS (`PosPage.tsx`):** Khi nhân viên chọn một khách hàng, hệ thống tự động kiểm tra xem có khách hàng nào khác cùng chia sẻ tên không dấu (`removeVietnameseTones`). Nếu phát hiện khách trùng tên khác dấu (Tone Twins: "Thanh Hang" vs "Thanh Hằng", "Hương" vs "Hường", "Tuấn" vs "Tuân"), lập tức hiện khung cảnh báo màu cam nổi bật ngay dưới ô chọn khách: `⚠️ Chú ý: Có khách hàng tên tương tự là "[Tên]" (SĐT: [SĐT] - Đ/c: [Địa chỉ]). Vui lòng kiểm tra kỹ SĐT trước khi tạo đơn/giao hàng!` kèm nút bấm "Chuyển sang khách này" 1 click để đổi ngay tức thì nếu chọn nhầm.
+(3) **Trung tâm Kiểm soát & Sửa bất thường Danh bạ (`CustomersPage.tsx` & `CustomerSentinelModal.tsx`):** Banner cảnh báo tự động đếm tổng số bất thường trong danh bạ; popup chuyên dụng hỗ trợ chủ quán:
+  - Xem đối chiếu song song các cặp khách trùng tên khác dấu kèm lịch sử đơn hàng gần nhất để biết ai từng dùng SĐT/Địa chỉ nào.
+  - Tách khách gộp nhiều SĐT (chuẩn hóa số 20 chữ số hoặc số có dấu `/`) thành 2 khách hàng độc lập chỉ bằng 1 click.
+  - Tách khách gộp nhiều địa chỉ theo từng địa chỉ giao hàng.
+  - Gộp các hồ sơ bị tạo trùng số điện thoại làm một, tự động cộng dồn công nợ và chuyển toàn bộ đơn hàng.
+  - Nút "Tự động sửa toàn bộ" để khôi phục nhanh mọi lỗi danh bạ đã nhận diện.
+_Avoid_: Nhầm khách khi lên đơn giao hàng, khách bị dính chùm 2 SĐT hoặc 2 địa chỉ, mất dấu vết đơn hàng cũ, trùng SĐT nhiều tài khoản.
+
+
 
 
 

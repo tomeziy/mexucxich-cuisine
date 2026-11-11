@@ -16,6 +16,7 @@ import { QuickAddCustomerModal } from '../components/pos/QuickAddCustomerModal';
 import { QuickEditCustomerModal } from '../components/pos/QuickEditCustomerModal';
 import { EditOrderModal } from '../components/pos/EditOrderModal';
 import { QuantityInput } from '../components/pos/QuantityInput';
+import { findToneTwinCustomers } from '../utils/customerSentinel';
 import {
   Search,
   Plus,
@@ -110,6 +111,11 @@ export const PosPage: React.FC = () => {
   });
 
   const selectedCustomer = customers.find(c => c.id === selectedCustomerId) || customers[0];
+
+  // ADR-0017: Proactive Tone Twin / Name Collision Detection at POS
+  const toneTwins = React.useMemo(() => {
+    return findToneTwinCustomers(selectedCustomer, customers);
+  }, [selectedCustomer, customers]);
 
   // Sync delivery contact with selected customer
   React.useEffect(() => {
@@ -733,6 +739,50 @@ export const PosPage: React.FC = () => {
                         📍 {selectedCustomer.address}
                       </span>
                     )}
+                  </div>
+                )}
+
+                {/* ADR-0017: POS Live Collision Alert for Tone Twins */}
+                {toneTwins.length > 0 && (
+                  <div className="bg-amber-50 border-2 border-amber-300 rounded-xl p-2.5 text-xs text-amber-900 shadow-xs space-y-1.5 animate-fadeIn">
+                    <div className="flex items-start gap-1.5 font-bold text-amber-800 text-[11px] leading-tight">
+                      <AlertTriangle className="w-3.5 h-3.5 text-amber-600 shrink-0 mt-0.5" />
+                      <span>
+                        ⚠️ Chú ý: Có khách hàng tên tương tự là {toneTwins.map(t => `"${t.name}"`).join(', ')}. Vui lòng kiểm tra kỹ SĐT trước khi tạo đơn/giao hàng!
+                      </span>
+                    </div>
+                    <div className="space-y-1 pt-0.5">
+                      {toneTwins.map(twin => (
+                        <div
+                          key={twin.id}
+                          className="bg-white/95 p-1.5 rounded-lg border border-amber-200/90 flex items-center justify-between gap-1.5"
+                        >
+                          <div className="text-[11px] leading-tight truncate">
+                            <span className="font-bold text-slate-800">{twin.name}</span>
+                            {twin.phone && (
+                              <span className="text-slate-600 ml-1 font-medium">(SĐT: {twin.phone})</span>
+                            )}
+                            {twin.address && (
+                              <span className="text-slate-500 ml-1 truncate" title={twin.address}>
+                                - Đ/c: {twin.address}
+                              </span>
+                            )}
+                          </div>
+                          <button
+                            type="button"
+                            onClick={() => {
+                              setSelectedCustomerId(twin.id);
+                              setDeliveryName(twin.name || '');
+                              setDeliveryPhone(twin.phone || '');
+                              setDeliveryAddress(twin.address || '');
+                            }}
+                            className="shrink-0 px-2 py-1 bg-amber-600 hover:bg-amber-700 active:scale-95 text-white font-bold rounded-md text-[10px] transition shadow-2xs"
+                          >
+                            Chuyển sang khách này
+                          </button>
+                        </div>
+                      ))}
+                    </div>
                   </div>
                 )}
 

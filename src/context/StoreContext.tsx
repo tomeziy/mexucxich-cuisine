@@ -2,6 +2,13 @@ import React, { createContext, useContext, useState, useEffect, useCallback, use
 import { Product, Customer, Order, DebtPayment, ReceiptSettings, OrderStatus, CloudConfig } from '../types';
 import { INITIAL_PRODUCTS, INITIAL_CUSTOMERS, DEFAULT_RECEIPT_SETTINGS } from '../data/initialData';
 import {
+  repairAndMigrateCustomers,
+  splitCustomerByPhones,
+  splitCustomerByAddresses,
+  mergeDuplicateCustomers,
+  MigrationRepairResult,
+} from '../utils/customerSentinel';
+import {
   getSupabaseConfig,
   saveSupabaseConfig,
   cloudSyncProduct,
@@ -50,6 +57,9 @@ interface StoreContextType {
   updateCloudConfig: (config: CloudConfig) => void;
   syncLocalToCloud: () => Promise<{ success: boolean; message: string }>;
   syncCloudToLocal: () => Promise<{ success: boolean; message: string }>;
+  repairCustomerData: () => MigrationRepairResult;
+  splitCustomerRecord: (customerId: string, type: 'phone' | 'address') => void;
+  mergeCustomerRecords: (primaryId: string, duplicateId: string) => void;
   resetToMockData: () => void;
   importAllData: (jsonData: any) => boolean;
   exportAllData: () => any;
@@ -83,7 +93,9 @@ export const StoreProvider: React.FC<{ children: React.ReactNode }> = ({ childre
   const [customers, setCustomers] = useState<Customer[]>(() => {
     const saved = localStorage.getItem(STORAGE_KEYS.CUSTOMERS);
     const initial: Customer[] = saved ? JSON.parse(saved) : INITIAL_CUSTOMERS;
-    return initial.map(c => ({
+    // Auto-repair and decouple fused/corrupted records (ADR-0017 Sentinel)
+    const { repairedCustomers } = repairAndMigrateCustomers(initial);
+    return repairedCustomers.map(c => ({
       ...c,
       updatedAt: c.updatedAt || c.createdAt || '2026-09-01T08:00:00Z',
     }));
@@ -174,13 +186,17 @@ export const StoreProvider: React.FC<{ children: React.ReactNode }> = ({ childre
         pullAllDataFromCloud(localData).then(cloudData => {
           if (cloudData && (cloudData.products.length > 0 || cloudData.orders.length > 0)) {
             setProducts(cloudData.products);
-            setCustomers(cloudData.customers);
-            setOrders(cloudData.orders);
+            const { repairedCustomers, repairedOrders } = repairAndMigrateCustomers(
+              cloudData.customers,
+              cloudData.orders
+            );
+            setCustomers(repairedCustomers);
+            setOrders(repairedOrders);
             setDebtPayments(cloudData.debtPayments);
             if (cloudData.settings) {
               setReceiptSettings(prev => ({ ...prev, ...cloudData.settings }));
             }
-            console.log('✅ Đã đồng bộ dữ liệu mới nhất từ Supabase Cloud kèm giải quyết xung đột!');
+            console.log('✅ Đã đồng bộ dữ liệu mới nhất từ Supabase Cloud kèm giải quyết xung đột & chuẩn hóa Sentinel!');
           }
         }).catch(err => {
           console.warn('Không thể tự động đồng bộ từ Cloud:', err);
@@ -235,10 +251,15 @@ export const StoreProvider: React.FC<{ children: React.ReactNode }> = ({ childre
       return { success: false, message: 'Không thể kết nối hoặc tải dữ liệu từ Supabase Cloud!' };
     }
 
+    const { repairedCustomers, repairedOrders } = repairAndMigrateCustomers(
+      pullRes.customers,
+      pullRes.orders
+    );
+
     // 1. Đồng bộ tức thời vào localStorage tránh Race Condition khi trang reload (ADR-0008)
     localStorage.setItem(STORAGE_KEYS.PRODUCTS, JSON.stringify(pullRes.products));
-    localStorage.setItem(STORAGE_KEYS.CUSTOMERS, JSON.stringify(pullRes.customers));
-    localStorage.setItem(STORAGE_KEYS.ORDERS, JSON.stringify(pullRes.orders));
+    localStorage.setItem(STORAGE_KEYS.CUSTOMERS, JSON.stringify(repairedCustomers));
+    localStorage.setItem(STORAGE_KEYS.ORDERS, JSON.stringify(repairedOrders));
     localStorage.setItem(STORAGE_KEYS.DEBT_PAYMENTS, JSON.stringify(pullRes.debtPayments));
     if (pullRes.settings) {
       localStorage.setItem(STORAGE_KEYS.SETTINGS, JSON.stringify(pullRes.settings));
@@ -246,8 +267,8 @@ export const StoreProvider: React.FC<{ children: React.ReactNode }> = ({ childre
 
     // 2. Cập nhật React state
     setProducts(pullRes.products);
-    setCustomers(pullRes.customers);
-    setOrders(pullRes.orders);
+    setCustomers(repairedCustomers);
+    setOrders(repairedOrders);
     setDebtPayments(pullRes.debtPayments);
     if (pullRes.settings) {
       setReceiptSettings(pullRes.settings);
@@ -364,6 +385,86 @@ export const StoreProvider: React.FC<{ children: React.ReactNode }> = ({ childre
   const deleteCustomer = (id: string) => {
     setCustomers(prev => prev.filter(c => c.id !== id));
     cloudDeleteCustomer(id);
+  };
+
+  // Sentinel Customer Repair & Decoupling actions (ADR-0017)
+  const repairCustomerData = (): MigrationRepairResult => {
+    const result = repairAndMigrateCustomers(customers, orders);
+    if (result.changesCount > 0) {
+      setCustomers(result.repairedCustomers);
+      setOrders(result.repairedOrders);
+      cloudSyncCustomersBatch(result.repairedCustomers);
+      for (const ord of result.repairedOrders) {
+        cloudSyncOrder(ord);
+      }
+    }
+    return result;
+  };
+
+  const splitCustomerRecord = (customerId: string, type: 'phone' | 'address') => {
+    const target = customers.find(c => c.id === customerId);
+    if (!target) return;
+
+    if (type === 'phone') {
+      const { customerA, customerB, ordersToUpdate } = splitCustomerByPhones(target, orders);
+      setCustomers(prev => prev.map(c => (c.id === customerId ? customerA : c)).concat(customerB));
+      cloudSyncCustomer(customerA);
+      cloudSyncCustomer(customerB);
+
+      if (ordersToUpdate.length > 0) {
+        setOrders(prev =>
+          prev.map(o => {
+            const up = ordersToUpdate.find(u => u.id === o.id);
+            return up ? up : o;
+          })
+        );
+        for (const ord of ordersToUpdate) {
+          cloudSyncOrder(ord);
+        }
+      }
+    } else {
+      const { customerA, customerB, ordersToUpdate } = splitCustomerByAddresses(target, orders);
+      setCustomers(prev => prev.map(c => (c.id === customerId ? customerA : c)).concat(customerB));
+      cloudSyncCustomer(customerA);
+      cloudSyncCustomer(customerB);
+
+      if (ordersToUpdate.length > 0) {
+        setOrders(prev =>
+          prev.map(o => {
+            const up = ordersToUpdate.find(u => u.id === o.id);
+            return up ? up : o;
+          })
+        );
+        for (const ord of ordersToUpdate) {
+          cloudSyncOrder(ord);
+        }
+      }
+    }
+  };
+
+  const mergeCustomerRecords = (primaryId: string, duplicateId: string) => {
+    const primary = customers.find(c => c.id === primaryId);
+    const duplicate = customers.find(c => c.id === duplicateId);
+    if (!primary || !duplicate) return;
+
+    const { mergedCustomer, ordersToUpdate } = mergeDuplicateCustomers(primary, duplicate, orders);
+    setCustomers(prev =>
+      prev.filter(c => c.id !== duplicateId).map(c => (c.id === primaryId ? mergedCustomer : c))
+    );
+    cloudSyncCustomer(mergedCustomer);
+    cloudDeleteCustomer(duplicateId);
+
+    if (ordersToUpdate.length > 0) {
+      setOrders(prev =>
+        prev.map(o => {
+          const up = ordersToUpdate.find(u => u.id === o.id);
+          return up ? up : o;
+        })
+      );
+      for (const ord of ordersToUpdate) {
+        cloudSyncOrder(ord);
+      }
+    }
   };
 
   // Order actions
@@ -891,6 +992,9 @@ export const StoreProvider: React.FC<{ children: React.ReactNode }> = ({ childre
         updateCloudConfig,
         syncLocalToCloud,
         syncCloudToLocal,
+        repairCustomerData,
+        splitCustomerRecord,
+        mergeCustomerRecords,
         resetToMockData,
         importAllData,
         exportAllData,

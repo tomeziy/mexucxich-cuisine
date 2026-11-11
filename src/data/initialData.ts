@@ -144,6 +144,28 @@ export const INITIAL_CUSTOMERS: Customer[] = [
     createdAt: '2026-09-01T08:00:00Z',
     updatedAt: '2026-09-01T08:00:00Z',
   },
+  {
+    id: 'KH05',
+    name: 'Thanh Hang',
+    phone: '0988111222',
+    address: '12 Hoàn Kiếm, Hà Nội',
+    debt: 0,
+    totalSpent: 0,
+    orderCount: 0,
+    createdAt: '2026-09-01T08:00:00Z',
+    updatedAt: '2026-09-01T08:00:00Z',
+  },
+  {
+    id: 'KH06',
+    name: 'Thanh Hằng',
+    phone: '0988333444',
+    address: '45 Đội Cấn, Ba Đình, Hà Nội',
+    debt: 0,
+    totalSpent: 0,
+    orderCount: 0,
+    createdAt: '2026-09-01T08:00:00Z',
+    updatedAt: '2026-09-01T08:00:00Z',
+  },
 ];
 
 export const DEFAULT_RECEIPT_SETTINGS: ReceiptSettings = {
