@@ -192,12 +192,23 @@ export const EditOrderModal: React.FC<EditOrderModalProps> = ({ order, isOpen, o
       return;
     }
 
+    const isSameCustomer = customerId === order.customerId;
+    const finalCustomerName = isSameCustomer
+      ? (order.customerName || selectedCustomer?.name || 'Khách lẻ tại quầy')
+      : (selectedCustomer?.name || 'Khách lẻ tại quầy');
+    const finalCustomerPhone = isSameCustomer
+      ? (order.customerPhone ?? selectedCustomer?.phone ?? '')
+      : (selectedCustomer?.phone ?? '');
+    const finalCustomerAddress = isSameCustomer
+      ? (order.customerAddress ?? selectedCustomer?.address ?? '')
+      : (selectedCustomer?.address ?? '');
+
     const updatedOrder: Order = {
       ...order,
       customerId,
-      customerName: selectedCustomer ? selectedCustomer.name : order.customerName,
-      customerPhone: selectedCustomer ? selectedCustomer.phone : order.customerPhone,
-      customerAddress: selectedCustomer ? selectedCustomer.address : order.customerAddress,
+      customerName: finalCustomerName,
+      customerPhone: finalCustomerPhone,
+      customerAddress: finalCustomerAddress,
       orderType,
       status,
       items,

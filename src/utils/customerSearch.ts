@@ -39,18 +39,20 @@ export function scoreCustomer(
   const rawTrimmed = rawQuery.trim();
   if (!rawTrimmed) return 0;
 
-  const rawLower = rawTrimmed.toLowerCase();
-  const cleanQuery = removeVietnameseTones(rawTrimmed);
+  // NFC Unicode Normalization for exact diacritic consistency across IMEs / operating systems
+  const rawNFC = rawTrimmed.normalize('NFC');
+  const rawLower = rawNFC.toLowerCase();
+  const cleanQuery = removeVietnameseTones(rawNFC);
   const tokens = cleanQuery.split(/\s+/).filter(Boolean);
   const numericQuery = rawTrimmed.replace(/\D/g, '');
 
-  const nameRaw = (customer.name || '').trim();
+  const nameRaw = (customer.name || '').trim().normalize('NFC');
   const nameRawLower = nameRaw.toLowerCase();
   const nameClean = removeVietnameseTones(nameRaw);
 
   const phoneRaw = customer.phone || '';
-  const customerPhones = phoneRaw
-    .split(/[\/,;\n\r|]|\s+-\s+/)
+  const normPhones = normalizeVietnamesePhone(phoneRaw);
+  const customerPhones = (normPhones ? normPhones.split(' / ') : phoneRaw.split(/[\/,;\n\r|]|\s+-\s+/))
     .map(p => p.trim())
     .filter(Boolean);
   const customerPhoneDigitsList = customerPhones
@@ -58,48 +60,53 @@ export function scoreCustomer(
     .filter(Boolean);
   const customerAllDigits = phoneRaw.replace(/\D/g, '');
 
-  const addressClean = customer.address ? removeVietnameseTones(customer.address) : '';
+  const addressClean = customer.address ? removeVietnameseTones(customer.address.normalize('NFC')) : '';
   const combined = `${nameClean} ${phoneRaw} ${customerAllDigits} ${addressClean}`;
 
-  // Multi-phone / phone search support:
-  // A customer qualifies if:
-  // 1) numericQuery has at least 3 digits and matches customer phone digits (including +84 / 0 normalization), OR
-  // 2) All tokens match customer text (supporting phone digits without punctuation).
-  const isPhoneSearch = numericQuery.length >= 3;
+  // Check if search query consists solely of phone number digits / phone punctuation (no alphabetical letters)
+  const isPurePhoneQuery = /^[\d\s+\-()./]+$/.test(rawTrimmed) && numericQuery.length >= 3;
+
   const normNumericQuery = normalizeSinglePhone(numericQuery);
   const queryPhoneCandidates = [numericQuery, normNumericQuery].filter(Boolean);
 
   const phoneHasDigits =
-    isPhoneSearch &&
+    numericQuery.length >= 3 &&
     queryPhoneCandidates.some(
       q =>
         customerPhoneDigitsList.some(p => p.includes(q)) ||
         customerAllDigits.includes(q)
     );
 
+  // Every token must match in combined fields (or phone digits)
   const allTokensMatch =
     tokens.length > 0 &&
     tokens.every(tok => {
       if (combined.includes(tok)) return true;
       const tokDigits = tok.replace(/\D/g, '');
       if (tokDigits.length >= 3 && customerAllDigits.includes(tokDigits)) return true;
-      // International / country prefix token tolerance
       if (tok === '+84' || tok === '84') return true;
       return false;
     });
 
-  if (!phoneHasDigits && !allTokensMatch) {
-    return 0;
+  if (isPurePhoneQuery) {
+    // In pure phone search, customer must match phone digits OR match token in code/address/name
+    if (!phoneHasDigits && !allTokensMatch) {
+      return 0;
+    }
+  } else {
+    // In text or mixed search (contains letters), ALL tokens MUST strictly match
+    if (!allTokensMatch) {
+      return 0;
+    }
   }
 
-  // Check phone matches
+  // Check phone matches (applicable when query is purely phone)
   let isExactPhone = false;
   let isPhonePrefix = false;
   let isPhoneSubstring = false;
 
-  if (numericQuery.length > 0) {
+  if (isPurePhoneQuery && numericQuery.length > 0) {
     const normQuery = normalizeSinglePhone(numericQuery);
-    // Exact phone match: matches raw digits of any phone, or normalized single phone
     isExactPhone = customerPhoneDigitsList.some(p => {
       if (p === numericQuery) return true;
       if (normQuery && (p === normQuery || normalizeSinglePhone(p) === normQuery)) return true;
@@ -140,6 +147,7 @@ export function scoreCustomer(
     w => w === cleanQuery || (cleanQuery.length >= 2 && w.startsWith(cleanQuery))
   );
 
+  const isNameDiacriticSubstring = nameRawLower.includes(rawLower);
   const isNameSubstring = nameClean.includes(cleanQuery);
   const isAddrSubstring = addressClean.includes(cleanQuery);
 
@@ -159,8 +167,12 @@ export function scoreCustomer(
     score = 130; // Tier 6: Exact Diacritic Word/Prefix Match
   } else if (isNamePrefixToneClean || isWordMatchToneClean) {
     score = 100; // Tier 7: Tone-Clean Word/Prefix Match
+  } else if (isNameDiacriticSubstring) {
+    score = 95; // Tier 8a: Multi-word Exact Diacritic phrase match in name
   } else if (tokens.length > 1 && tokens.every(t => nameClean.includes(t))) {
     score = 90; // Tier 8: Multi-token Name Match
+  } else if (tokens.length > 1 && tokens.every(t => combined.includes(t))) {
+    score = 85; // Tier 8b: Multi-token Combined Match (e.g. Name + Phone, Name + Address)
   } else if (isNameSubstring) {
     score = 60; // Tier 9: Substring Name Match
   } else if (isAddrSubstring) {

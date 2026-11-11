@@ -91,7 +91,33 @@ assert.strictEqual(scoreWordHangDiacritic2, 130, 'Exact diacritic word match "H�
 assert.strictEqual(scoreWordHangDiacritic1, 100, 'Tone-clean word match "Hằng" scores 100');
 assert.ok(scoreWordHangDiacritic2 > scoreWordHangDiacritic1, 'Word "Hằng" prioritizes "Thanh Hằng" over "Thanh Hang"');
 
-console.log('✓ Diacritic-Aware Name Ranking completely verified ("Thanh Hang" vs "Thanh Hằng").');
+// 1.4 Testing NFD (decomposed) vs NFC Unicode diacritic input
+const queryNFD = 'Thanh Hằng'.normalize('NFD');
+const scoreNFC_from_NFD = scoreCustomer(custThanhHangDiacritic, queryNFD);
+const scoreNoDiacritic_from_NFD = scoreCustomer(custThanhHang, queryNFD);
+assert.strictEqual(scoreNFC_from_NFD, 200, 'Decomposed Unicode NFD query must match NFC customer name as Tier 4 (200)');
+assert.strictEqual(scoreNoDiacritic_from_NFD, 150, 'NFD diacritic query on unaccented customer must receive Tier 5 fallback (150)');
+assert.ok(scoreNFC_from_NFD > scoreNoDiacritic_from_NFD, 'NFD query must strictly rank "Thanh Hằng" over "Thanh Hang"');
+
+// 1.5 Testing query with text and numbers ("Quán Ăn 123" vs customer with 123 in phone)
+const custStore123 = { id: 'c_store', name: 'Quán Ăn 123', phone: '0901111111', debt: 0 };
+const custStrangerPhone123 = { id: 'c_stranger', name: 'Lê Văn B', phone: '0988123456', debt: 0 };
+const scoreStore123 = scoreCustomer(custStore123, 'Quán Ăn 123');
+const scoreStrangerPhone123 = scoreCustomer(custStrangerPhone123, 'Quán Ăn 123');
+assert.strictEqual(scoreStore123, 200, '"Quán Ăn 123" must match exact name as Tier 4 (200)');
+assert.strictEqual(scoreStrangerPhone123, 0, 'Unrelated customer lacking "Quán" and "Ăn" must score 0 and be filtered out');
+const rankedStore = filterAndRankCustomers([custStrangerPhone123, custStore123], 'Quán Ăn 123');
+assert.strictEqual(rankedStore[0].id, custStore123.id);
+assert.strictEqual(rankedStore.length, 1, 'Only customer matching all text tokens should be returned');
+
+// 1.6 Testing mixed text and phone query ("Thanh Hằng 0988")
+const custStranger0988 = { id: 'c_stranger_phone', name: 'Nguyễn Văn X', phone: '0988999999', debt: 0 };
+const scoreHangMixed = scoreCustomer(custThanhHangDiacritic, 'Thanh Hằng 0988');
+const scoreStrangerMixed = scoreCustomer(custStranger0988, 'Thanh Hằng 0988');
+assert.ok(scoreHangMixed > 0, '"Thanh Hằng 0988" matches name and phone of Thanh Hằng');
+assert.strictEqual(scoreStrangerMixed, 0, 'Stranger lacking name tokens must score 0 despite matching phone prefix');
+
+console.log('✓ Diacritic-Aware Name Ranking completely verified ("Thanh Hang" vs "Thanh Hằng", NFC/NFD, Text+Digits).');
 
 // ----------------------------------------------------------------------------
 // Test Suite 2: Phone-First Ranking Hierarchy (Phone Tiers vs Name Tiers)
@@ -164,6 +190,10 @@ assert.strictEqual(scoreDot, 300, 'Dot-punctuated phone search "0988.333.444" mu
 const scoreIntl = scoreCustomer(custWithStandardPhone, '+84 988 333 444');
 assert.strictEqual(scoreIntl, 300, 'International formatted phone "+84 988 333 444" must match 0988333444 as Tier 1 (300)');
 
+// Searching with space delimiters: "0988 333 444"
+const scoreSpace = scoreCustomer(custWithStandardPhone, '0988 333 444');
+assert.strictEqual(scoreSpace, 300, 'Space-separated phone search "0988 333 444" must match 0988333444 as Tier 1 (300)');
+
 // Multi-phone matching
 const scoreMulti1 = scoreCustomer(custWithMultiPhone, '0869-229-160');
 const scoreMulti2 = scoreCustomer(custWithMultiPhone, '0986.476.328');
@@ -212,6 +242,11 @@ assert.strictEqual(dup1.name, 'Nguyễn Văn An');
 const dup2 = findDuplicatePhoneCustomer(existingCustomers, '0988-333-444');
 assert.ok(dup2, 'Punctuated duplicate phone must match normalized CRM phone');
 assert.strictEqual(dup2.id, 'c1');
+
+// Space-separated duplicate match
+const dupSpace = findDuplicatePhoneCustomer(existingCustomers, '0988 333 444');
+assert.ok(dupSpace, 'Space-separated phone must match normalized CRM phone');
+assert.strictEqual(dupSpace.id, 'c1');
 
 // Match against second phone in multi-phone customer
 const dup3 = findDuplicatePhoneCustomer(existingCustomers, '0986476328');
@@ -270,6 +305,25 @@ assert.strictEqual(orderSnapshot.customerAddress, '193C Bà Triệu, Hai Bà Tr�
 assert.strictEqual(masterCustomer.name, 'Thanh Hằng');
 assert.strictEqual(masterCustomer.phone, '0988111222');
 assert.strictEqual(masterCustomer.address, 'Hà Nội');
+
+// 6.2 Invariant: Editing an existing order in EditOrderModal must preserve delivery details when customerId is unchanged
+const originalOrder = {
+  id: 'ORD_TEST_002',
+  customerId: masterCustomer.id,
+  customerName: 'Người Nhận Riêng',
+  customerPhone: '0988777888',
+  customerAddress: 'Số 99 Hàng Đào',
+  orderType: 'delivery',
+};
+
+const isSameCustomer = originalOrder.customerId === masterCustomer.id;
+const preservedName = isSameCustomer ? (originalOrder.customerName || masterCustomer.name) : masterCustomer.name;
+const preservedPhone = isSameCustomer ? (originalOrder.customerPhone ?? masterCustomer.phone) : masterCustomer.phone;
+const preservedAddress = isSameCustomer ? (originalOrder.customerAddress ?? masterCustomer.address) : masterCustomer.address;
+
+assert.strictEqual(preservedName, 'Người Nhận Riêng', 'Order recipient name must not be overwritten by master customer name on edit');
+assert.strictEqual(preservedPhone, '0988777888', 'Order recipient phone must not be overwritten by master customer phone on edit');
+assert.strictEqual(preservedAddress, 'Số 99 Hàng Đào', 'Order recipient address must not be overwritten by master customer address on edit');
 
 console.log('✓ Order-Level Delivery Contact Snapshot Invariant verified.');
 

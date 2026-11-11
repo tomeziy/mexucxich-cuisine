@@ -1237,6 +1237,11 @@ export const PosPage: React.FC = () => {
         isOpen={isQuickEditCustomerOpen}
         onClose={() => setIsQuickEditCustomerOpen(false)}
         customer={selectedCustomer || null}
+        onCustomerUpdated={updatedCust => {
+          setDeliveryName(updatedCust.name || '');
+          setDeliveryPhone(updatedCust.phone || '');
+          setDeliveryAddress(updatedCust.address || '');
+        }}
       />
 
       {/* Thermal Receipt Preview Modal */}

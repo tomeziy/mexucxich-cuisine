@@ -34,25 +34,28 @@ We established a deterministic 11-tier scoring hierarchy in `src/utils/customerS
 - **Tier 1 (300 pts): Exact Phone Match:** Numeric digit match across all registered customer phones (single and multi-phone formatted strings, including international `+84` prefix normalization).
 - **Tier 2 (250 pts): Phone Prefix Match:** Numeric digits ($\ge 3$ digits) matching the prefix of any customer phone.
 - **Tier 3 (220 pts): Phone Substring Match:** Numeric digits ($\ge 3$ digits) matching any portion of customer phones.
-- **Tier 4 (200 pts): Exact Case-Insensitive Full Name Match WITH DIACRITICS:** `c.name.trim().toLowerCase() === rawQuery.trim().toLowerCase()`.
+- **Tier 4 (200 pts): Exact Case-Insensitive Full Name Match WITH DIACRITICS:** `c.name.trim().toLowerCase() === rawQuery.trim().toLowerCase()` with Unicode NFC normalization (`.normalize('NFC')`) ensuring parity across decomposed (NFD) and precomposed (NFC) Vietnamese input methods.
 - **Tier 5 (150 pts): Tone-Clean Full Name Match:** Fallback when tones differ or are omitted.
 - **Tier 6 (130 pts): Exact Diacritic Word/Prefix Match:** Diacritic-preserving word boundary or prefix match.
 - **Tier 7 (100 pts): Tone-Clean Word/Prefix Match:** Unaccented word boundary or prefix match.
+- **Tier 8a (95 pts): Multi-Word Exact Diacritic Phrase Match in Name.**
 - **Tier 8 (90 pts): Multi-Token Match in Name.**
+- **Tier 8b (85 pts): Multi-Token Combined Match across Name, Phone, and Address.**
 - **Tier 9 (60 pts): Substring Match in Name.**
 - **Tier 10 (40 pts): Substring Match in Address.**
 - **Tier 11 (30 pts): General Token Match.**
 - **Tiebreakers:** Outstanding debt (`+2` pts) and active POS selection (`+1` pt); secondary sort by name length ascending.
-- **Punctuation Independence:** Delimiters (`-`, `.`, `()`, `/`) are stripped during phone digit matching, enabling instant resolution for queries like `0988-333-444`.
+- **Punctuation & Conjunction Safety:** Delimiters (`-`, `.`, `()`, `/`) are stripped during phone digit matching. For text and mixed queries, strict multi-token conjunction ensures queries with words and numbers (e.g. "Quán Ăn 123", "Thanh Hằng 0988") require all tokens to match, preventing unrelated customer phone digits from hijacking text searches.
 
 ### 2. Combobox UX Overhaul (`CustomerCombobox.tsx`)
 - **Pinned Always-Visible Quick Add:** An action bar is pinned at the bottom of the combobox dropdown, visible at all times regardless of match count.
 - **Smart Query Classification (`isPhoneNumberQuery`):** If the search query contains 8–12 digits with standard phone separators, it is classified as a phone query. The action dynamically reads `+ Thêm khách với SĐT "0988..."` and pre-fills the `phone` field in `QuickAddCustomerModal`, focusing the cursor on the `name` field. For text queries, it pre-fills `name` and focuses `phone`.
 - **Full Keyboard Navigation:** Cashiers can navigate through results down to the pinned button with arrow keys and press `Enter` to trigger quick addition.
 
-### 3. Order-Level Delivery Contact Snapshot (`PosPage.tsx`)
+### 3. Order-Level Delivery Contact Snapshot (`PosPage.tsx` & `EditOrderModal.tsx`)
 - **Isolated Order Delivery Snapshot:** In POS delivery mode (`orderType === 'delivery'`), dedicated inputs are provided for Delivery Recipient Name (`deliveryName`), Recipient Phone (`deliveryPhone`), and Delivery Address (`deliveryAddress`).
 - **CRM Immutability:** Changing recipient details for an order affects only that order's snapshot (`Order.customerName`, `Order.customerPhone`, `Order.customerAddress`). Master customer records in CRM remain completely untouched.
+- **Order Modification Safety:** When editing existing orders in `EditOrderModal`, order delivery contact snapshots are preserved when the customer ID is unchanged.
 - **Reset Utility:** A "Khôi phục hồ sơ gốc" toggle allows restoring recipient fields to master customer defaults in one click.
 
 ### 4. Duplicate Phone Prevention Engine (`findDuplicatePhoneCustomer`)

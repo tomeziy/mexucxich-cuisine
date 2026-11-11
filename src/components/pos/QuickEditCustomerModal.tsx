@@ -9,12 +9,14 @@ interface QuickEditCustomerModalProps {
   isOpen: boolean;
   onClose: () => void;
   customer: Customer | null;
+  onCustomerUpdated?: (customer: Customer) => void;
 }
 
 export const QuickEditCustomerModal: React.FC<QuickEditCustomerModalProps> = ({
   isOpen,
   onClose,
   customer,
+  onCustomerUpdated,
 }) => {
   const { customers, updateCustomer } = useStore();
   const [name, setName] = useState('');
@@ -53,11 +55,22 @@ export const QuickEditCustomerModal: React.FC<QuickEditCustomerModalProps> = ({
       return;
     }
 
-    updateCustomer(customer.id, {
+    const updatedCustomer: Customer = {
+      ...customer,
       name: name.trim(),
       phone: normalizeVietnamesePhone(phone.trim()) || phone.trim(),
       address: address.trim(),
+    };
+
+    updateCustomer(customer.id, {
+      name: updatedCustomer.name,
+      phone: updatedCustomer.phone,
+      address: updatedCustomer.address,
     });
+
+    if (onCustomerUpdated) {
+      onCustomerUpdated(updatedCustomer);
+    }
 
     onClose();
   };

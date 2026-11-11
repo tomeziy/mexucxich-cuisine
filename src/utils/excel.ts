@@ -199,8 +199,11 @@ export function normalizeVietnamesePhone(phone: any): string {
  */
 export function isPhoneMatching(phoneA: string, phoneB: string): boolean {
   if (!phoneA || !phoneB) return false;
-  const listA = phoneA.split(/[\/,;\s]+/).map(p => normalizeSinglePhone(p)).filter(Boolean);
-  const listB = phoneB.split(/[\/,;\s]+/).map(p => normalizeSinglePhone(p)).filter(Boolean);
+  const normA = normalizeVietnamesePhone(phoneA);
+  const normB = normalizeVietnamesePhone(phoneB);
+  if (!normA || !normB) return false;
+  const listA = normA.split(' / ').map(p => p.trim()).filter(Boolean);
+  const listB = normB.split(' / ').map(p => p.trim()).filter(Boolean);
   return listA.some(pa => listB.includes(pa));
 }
 
