@@ -748,7 +748,7 @@ export const PosPage: React.FC = () => {
                     <div className="flex items-start gap-1.5 font-bold text-amber-800 text-[11px] leading-tight">
                       <AlertTriangle className="w-3.5 h-3.5 text-amber-600 shrink-0 mt-0.5" />
                       <span>
-                        ⚠️ Chú ý: Có khách hàng tên tương tự là {toneTwins.map(t => `"${t.name}"`).join(', ')}. Vui lòng kiểm tra kỹ SĐT trước khi tạo đơn/giao hàng!
+                        ⚠️ Chú ý: Có khách hàng tên tương tự là {toneTwins.map(t => `"${t.name}" (SĐT: ${t.phone || 'Chưa có'} - Đ/c: ${t.address || 'Chưa có'})`).join(', ')}. Vui lòng kiểm tra kỹ SĐT trước khi tạo đơn/giao hàng!
                       </span>
                     </div>
                     <div className="space-y-1 pt-0.5">

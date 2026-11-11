@@ -584,7 +584,7 @@ export const CustomersPage: React.FC = () => {
               className="flex-1 sm:flex-none px-3.5 py-2 bg-amber-600 hover:bg-amber-700 text-white rounded-xl text-xs font-bold shadow-xs transition flex items-center justify-center gap-1.5"
             >
               <AlertTriangle className="w-4 h-4" />
-              <span>Kiểm tra & Xử lý bất thường ({auditResult.totalAnomalies})</span>
+              <span>Kiểm tra & Xử lý bất thường ({auditResult.totalAnomalies} cảnh báo)</span>
             </button>
             <button
               onClick={handleAutoHealSentinel}
@@ -806,7 +806,7 @@ export const CustomersPage: React.FC = () => {
 
       {/* MODAL: EDIT CUSTOMER */}
       {editingCustomer && (
-        <div className="fixed inset-0 bg-black/50 backdrop-blur-2xs z-50 flex items-center justify-center p-3">
+        <div className="fixed inset-0 bg-black/50 backdrop-blur-2xs z-[60] flex items-center justify-center p-3">
           <div className="bg-white rounded-2xl max-w-md w-full p-5 shadow-2xl animate-in fade-in zoom-in duration-150">
             <div className="flex items-center justify-between pb-3 border-b border-slate-100">
               <h3 className="font-extrabold text-sm text-slate-900 flex items-center gap-2">

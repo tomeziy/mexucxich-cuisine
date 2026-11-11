@@ -238,8 +238,9 @@ export const HISTORICAL_RECOVERIES = {
  * Automatically repair and migrate customer records and reassign affected orders:
  * 1. Historical recovery & separation for "Thanh Hang" and "Thanh Hằng".
  * 2. Formatting legacy 20-digit concatenated phones into clean delimited strings.
- * 3. Cleaning fused slashed names.
- * 4. Re-linking order snapshots to decoupled customer IDs based on order phone/address.
+ * 3. Cleaning fused slashed names (with or without spaces).
+ * 4. Re-linking order snapshots to decoupled customer IDs based on phone, address, and diacritics.
+ * 5. Re-linking orphaned historical orders referencing legacy fused IDs.
  */
 export function repairAndMigrateCustomers(
   customers: Customer[],
@@ -253,23 +254,25 @@ export function repairAndMigrateCustomers(
   // --------------------------------------------------------------------------
   // Step 1: Historical Data Recovery for "Thanh Hang" and "Thanh Hằng"
   // --------------------------------------------------------------------------
-  const hangPhoneNoDiacritic = '0988111222';
-  const hangPhoneDiacritic = '0988333444';
+  const hangPhoneNoDiacritic = HISTORICAL_RECOVERIES.THANH_HANG.phone;
+  const hangPhoneDiacritic = HISTORICAL_RECOVERIES.THANH_HANG_DIACRITIC.phone;
 
-  // Check if any customer contains both phones, or has both addresses, or fused name
-  const fusedHangIndex = list.findIndex(c => {
-    const cleanName = removeVietnameseTones(c.name);
+  // Check if any customer contains both phones, both addresses, or fused name
+  const isHangFused = (c: Customer) => {
+    const rawName = (c.name || '').normalize('NFC');
+    const cleanName = removeVietnameseTones(rawName);
     const isHang = cleanName === 'thanh hang' || cleanName.includes('thanh hang');
     const hasBothPhones =
-      c.phone && isPhoneMatching(c.phone, hangPhoneNoDiacritic) && isPhoneMatching(c.phone, hangPhoneDiacritic);
+      Boolean(c.phone && isPhoneMatching(c.phone, hangPhoneNoDiacritic) && isPhoneMatching(c.phone, hangPhoneDiacritic));
     const hasBothAddresses =
-      c.address && c.address.includes('Hoàn Kiếm') && c.address.includes('Đội Cấn');
+      Boolean(c.address && c.address.includes('Hoàn Kiếm') && c.address.includes('Đội Cấn'));
     const hasFusedName =
-      c.name.includes('/') && cleanName.includes('thanh hang');
+      Boolean(rawName.includes('/') && cleanName.includes('thanh hang'));
     return isHang && (hasBothPhones || hasBothAddresses || hasFusedName);
-  });
+  };
 
-  if (fusedHangIndex !== -1) {
+  let fusedHangIndex = -1;
+  while ((fusedHangIndex = list.findIndex(isHangFused)) !== -1) {
     const fused = list[fusedHangIndex];
     // Decouple into Thanh Hang (KH05) and Thanh Hằng (KH06)
     const custThanhHang: Customer = {
@@ -305,15 +308,14 @@ export function repairAndMigrateCustomers(
     // Reassign orders that belonged to the fused ID
     for (const ord of ordersList) {
       if (ord.customerId === fused.id) {
+        const orderPhone = ord.customerPhone || '';
+        const orderAddr = ord.customerAddress || '';
+        const orderName = (ord.customerName || '').normalize('NFC');
+
         if (
-          ord.customerPhone &&
-          isPhoneMatching(ord.customerPhone, hangPhoneDiacritic)
-        ) {
-          ord.customerId = custThanhHangDiacritic.id;
-          ord.customerName = custThanhHangDiacritic.name;
-        } else if (
-          ord.customerAddress &&
-          ord.customerAddress.includes('Đội Cấn')
+          isPhoneMatching(orderPhone, hangPhoneDiacritic) ||
+          orderAddr.includes('Đội Cấn') ||
+          (orderName.includes('Hằng') && !orderName.includes('Hang'))
         ) {
           ord.customerId = custThanhHangDiacritic.id;
           ord.customerName = custThanhHangDiacritic.name;
@@ -326,8 +328,47 @@ export function repairAndMigrateCustomers(
   }
 
   // Ensure both Thanh Hang and Thanh Hằng have pristine contact information if present
-  let foundNoDiacritic = list.find(c => c.name === 'Thanh Hang');
-  let foundDiacritic = list.find(c => c.name === 'Thanh Hằng');
+  let foundNoDiacritic = list.find(
+    c => (c.name || '').normalize('NFC').trim() === HISTORICAL_RECOVERIES.THANH_HANG.name
+  );
+  let foundDiacritic = list.find(
+    c => (c.name || '').normalize('NFC').trim() === HISTORICAL_RECOVERIES.THANH_HANG_DIACRITIC.name
+  );
+
+  // If one of them is missing but referenced in orders, restore the missing record
+  if (!foundDiacritic && ordersList.some(o => isPhoneMatching(o.customerPhone || '', hangPhoneDiacritic) || (o.customerName || '').normalize('NFC').includes('Hằng'))) {
+    foundDiacritic = {
+      id: 'KH06',
+      name: HISTORICAL_RECOVERIES.THANH_HANG_DIACRITIC.name,
+      phone: HISTORICAL_RECOVERIES.THANH_HANG_DIACRITIC.phone,
+      address: HISTORICAL_RECOVERIES.THANH_HANG_DIACRITIC.address,
+      debt: 0,
+      totalSpent: 0,
+      orderCount: 0,
+      createdAt: '2026-09-01T08:00:00Z',
+      updatedAt: new Date().toISOString(),
+    };
+    list.push(foundDiacritic);
+    changesCount++;
+    log.push('Restored missing historical profile for "Thanh Hằng" (KH06)');
+  }
+
+  if (!foundNoDiacritic && ordersList.some(o => isPhoneMatching(o.customerPhone || '', hangPhoneNoDiacritic) || (o.customerName || '').normalize('NFC') === 'Thanh Hang')) {
+    foundNoDiacritic = {
+      id: 'KH05',
+      name: HISTORICAL_RECOVERIES.THANH_HANG.name,
+      phone: HISTORICAL_RECOVERIES.THANH_HANG.phone,
+      address: HISTORICAL_RECOVERIES.THANH_HANG.address,
+      debt: 0,
+      totalSpent: 0,
+      orderCount: 0,
+      createdAt: '2026-09-01T08:00:00Z',
+      updatedAt: new Date().toISOString(),
+    };
+    list.push(foundNoDiacritic);
+    changesCount++;
+    log.push('Restored missing historical profile for "Thanh Hang" (KH05)');
+  }
 
   if (foundNoDiacritic) {
     if (
@@ -355,6 +396,38 @@ export function repairAndMigrateCustomers(
     }
   }
 
+  // Re-link any orphaned historical orders whose customerId no longer exists in list
+  if (foundNoDiacritic && foundDiacritic) {
+    for (const ord of ordersList) {
+      if (!list.some(c => c.id === ord.customerId)) {
+        const cleanOrdName = removeVietnameseTones(ord.customerName || '');
+        const orderPhone = ord.customerPhone || '';
+        const orderAddr = ord.customerAddress || '';
+        const orderName = (ord.customerName || '').normalize('NFC');
+
+        if (
+          cleanOrdName === 'thanh hang' ||
+          isPhoneMatching(orderPhone, hangPhoneNoDiacritic) ||
+          isPhoneMatching(orderPhone, hangPhoneDiacritic)
+        ) {
+          if (
+            isPhoneMatching(orderPhone, hangPhoneDiacritic) ||
+            orderAddr.includes('Đội Cấn') ||
+            (orderName.includes('Hằng') && !orderName.includes('Hang'))
+          ) {
+            ord.customerId = foundDiacritic.id;
+            ord.customerName = foundDiacritic.name;
+          } else {
+            ord.customerId = foundNoDiacritic.id;
+            ord.customerName = foundNoDiacritic.name;
+          }
+          changesCount++;
+          log.push(`Re-linked orphaned order #${ord.id} to "${ord.customerName}" (${ord.customerId})`);
+        }
+      }
+    }
+  }
+
   // --------------------------------------------------------------------------
   // Step 2: Format concatenated 20-digit phones & normalize phone numbers
   // --------------------------------------------------------------------------
@@ -371,11 +444,11 @@ export function repairAndMigrateCustomers(
   }
 
   // --------------------------------------------------------------------------
-  // Step 3: Clean up multi-name slash artifacts (e.g. "Lan / Huong")
+  // Step 3: Clean up multi-name slash artifacts (e.g. "Lan / Huong" or "Lan/Huong")
   // --------------------------------------------------------------------------
   for (const c of list) {
-    if (c.name && c.name.includes(' / ') && !isGenericCustomerName(c.name)) {
-      const nameParts = c.name.split(' / ').map(n => n.trim()).filter(Boolean);
+    if (c.name && c.name.includes('/') && !isGenericCustomerName(c.name)) {
+      const nameParts = c.name.split(/\s*\/\s*/).map(n => n.trim()).filter(Boolean);
       if (nameParts.length > 1) {
         // Keep primary name for this customer
         c.name = nameParts[0];
@@ -392,8 +465,12 @@ export function repairAndMigrateCustomers(
   if (ordersList.length > 0) {
     for (const c of list) {
       const custOrders = ordersList.filter(o => o.customerId === c.id && o.status !== 'cancelled');
-      c.orderCount = custOrders.length;
-      c.totalSpent = custOrders.reduce((sum, o) => sum + (o.total || 0), 0);
+      const newCount = custOrders.length;
+      const newTotal = custOrders.reduce((sum, o) => sum + (o.total || 0), 0);
+      if (c.orderCount !== newCount || c.totalSpent !== newTotal) {
+        c.orderCount = newCount;
+        c.totalSpent = newTotal;
+      }
     }
   }
 
@@ -420,13 +497,7 @@ export function splitCustomerByPhones(
   const phone1 = phones[0] || customer.phone;
   const phone2 = phones[1] || '';
 
-  const customerA: Customer = {
-    ...customer,
-    phone: phone1,
-    updatedAt: new Date().toISOString(),
-  };
-
-  const newId = `KH${Date.now().toString().slice(-6)}`;
+  const newId = `KH_${Date.now()}_${Math.floor(1000 + Math.random() * 9000)}`;
   const customerB: Customer = {
     id: newId,
     name: `${customer.name} (Phụ)`,
@@ -454,6 +525,33 @@ export function splitCustomerByPhones(
     }
   }
 
+  // Accurately compute orderCount and totalSpent for both customers
+  if (orders.length > 0) {
+    const ordersA = orders.filter(
+      o => o.customerId === customer.id && !ordersToUpdate.some(u => u.id === o.id) && o.status !== 'cancelled'
+    );
+    const ordersB = ordersToUpdate.filter(o => o.status !== 'cancelled');
+
+    const customerA: Customer = {
+      ...customer,
+      phone: phone1,
+      orderCount: ordersA.length,
+      totalSpent: ordersA.reduce((sum, o) => sum + (o.total || 0), 0),
+      updatedAt: new Date().toISOString(),
+    };
+
+    customerB.orderCount = ordersB.length;
+    customerB.totalSpent = ordersB.reduce((sum, o) => sum + (o.total || 0), 0);
+
+    return { customerA, customerB, ordersToUpdate };
+  }
+
+  const customerA: Customer = {
+    ...customer,
+    phone: phone1,
+    updatedAt: new Date().toISOString(),
+  };
+
   return { customerA, customerB, ordersToUpdate };
 }
 
@@ -472,13 +570,7 @@ export function splitCustomerByAddresses(
   const addr1 = addresses[0] || customer.address;
   const addr2 = addresses[1] || '';
 
-  const customerA: Customer = {
-    ...customer,
-    address: addr1,
-    updatedAt: new Date().toISOString(),
-  };
-
-  const newId = `KH${Date.now().toString().slice(-6)}`;
+  const newId = `KH_${Date.now()}_${Math.floor(1000 + Math.random() * 9000)}`;
   const customerB: Customer = {
     id: newId,
     name: `${customer.name} (${addr2.slice(0, 15)}...)`,
@@ -505,6 +597,32 @@ export function splitCustomerByAddresses(
       }
     }
   }
+
+  if (orders.length > 0) {
+    const ordersA = orders.filter(
+      o => o.customerId === customer.id && !ordersToUpdate.some(u => u.id === o.id) && o.status !== 'cancelled'
+    );
+    const ordersB = ordersToUpdate.filter(o => o.status !== 'cancelled');
+
+    const customerA: Customer = {
+      ...customer,
+      address: addr1,
+      orderCount: ordersA.length,
+      totalSpent: ordersA.reduce((sum, o) => sum + (o.total || 0), 0),
+      updatedAt: new Date().toISOString(),
+    };
+
+    customerB.orderCount = ordersB.length;
+    customerB.totalSpent = ordersB.reduce((sum, o) => sum + (o.total || 0), 0);
+
+    return { customerA, customerB, ordersToUpdate };
+  }
+
+  const customerA: Customer = {
+    ...customer,
+    address: addr1,
+    updatedAt: new Date().toISOString(),
+  };
 
   return { customerA, customerB, ordersToUpdate };
 }

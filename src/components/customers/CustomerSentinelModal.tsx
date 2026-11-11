@@ -363,7 +363,11 @@ export const CustomerSentinelModal: React.FC<CustomerSentinelModalProps> = ({
                       <div className="flex items-center gap-2 shrink-0">
                         {phones.length >= 2 && (
                           <button
-                            onClick={() => onSplitCustomer(customer.id, 'phone')}
+                            onClick={() => {
+                              if (window.confirm(`Tách khách hàng "${customer.name}" thành 2 hồ sơ độc lập theo 2 số điện thoại?`)) {
+                                onSplitCustomer(customer.id, 'phone');
+                              }
+                            }}
                             className="px-3 py-1.5 bg-amber-600 hover:bg-amber-700 text-white rounded-xl text-xs font-bold transition shadow-xs flex items-center gap-1.5"
                           >
                             <GitFork className="w-3.5 h-3.5" />
@@ -437,7 +441,11 @@ export const CustomerSentinelModal: React.FC<CustomerSentinelModalProps> = ({
                       <div className="flex items-center gap-2 shrink-0">
                         {addresses.length >= 2 && (
                           <button
-                            onClick={() => onSplitCustomer(customer.id, 'address')}
+                            onClick={() => {
+                              if (window.confirm(`Tách khách hàng "${customer.name}" thành 2 hồ sơ độc lập theo 2 địa chỉ giao hàng?`)) {
+                                onSplitCustomer(customer.id, 'address');
+                              }
+                            }}
                             className="px-3 py-1.5 bg-amber-600 hover:bg-amber-700 text-white rounded-xl text-xs font-bold transition shadow-xs flex items-center gap-1.5"
                           >
                             <GitFork className="w-3.5 h-3.5" />
@@ -507,7 +515,11 @@ export const CustomerSentinelModal: React.FC<CustomerSentinelModalProps> = ({
                         </div>
                         {duplicates.length > 0 && (
                           <button
-                            onClick={() => onMergeCustomers(primary.id, duplicates[0].id)}
+                            onClick={() => {
+                              if (window.confirm(`Gộp khách hàng "${duplicates[0].name}" vào hồ sơ chính "${primary.name}"? Dư nợ và lịch sử đơn hàng sẽ được tự động cộng dồn.`)) {
+                                onMergeCustomers(primary.id, duplicates[0].id);
+                              }
+                            }}
                             className="px-3 py-1 bg-amber-600 hover:bg-amber-700 text-white rounded-lg text-xs font-bold transition flex items-center gap-1.5 shadow-2xs"
                           >
                             <Merge className="w-3.5 h-3.5" />

@@ -172,6 +172,17 @@ export const StoreProvider: React.FC<{ children: React.ReactNode }> = ({ childre
     localStorage.setItem(STORAGE_KEYS.SETTINGS, JSON.stringify(receiptSettings));
   }, [receiptSettings]);
 
+  // One-time Sentinel local data integrity audit and repair on boot (ADR-0017)
+  useEffect(() => {
+    const result = repairAndMigrateCustomers(stateRef.current.customers, stateRef.current.orders);
+    if (result.changesCount > 0) {
+      setCustomers(result.repairedCustomers);
+      setOrders(result.repairedOrders);
+      localStorage.setItem(STORAGE_KEYS.CUSTOMERS, JSON.stringify(result.repairedCustomers));
+      localStorage.setItem(STORAGE_KEYS.ORDERS, JSON.stringify(result.repairedOrders));
+    }
+  }, []);
+
   // Initial pull and auto-refresh on tab focus/visibility change from Supabase
   useEffect(() => {
     const refreshCloud = () => {

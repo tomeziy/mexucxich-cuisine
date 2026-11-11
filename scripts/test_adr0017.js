@@ -12,6 +12,7 @@ import {
   isGenericCustomerName,
   HISTORICAL_RECOVERIES,
 } from '../src/utils/customerSentinel.ts';
+import { removeVietnameseTones } from '../src/utils/vietnamese.ts';
 import { INITIAL_CUSTOMERS } from '../src/data/initialData.ts';
 
 console.log('--- RUNNING ADR-0017 CUSTOMER DATA SENTINEL & HISTORICAL RECOVERY TESTS ---');
@@ -64,6 +65,16 @@ const mockOrdersWithFused = [
     total: 350000,
     status: 'completed',
   },
+  // Order with diacritics but no phone or address (counter order)
+  {
+    id: 'HD003_DIACRITIC_ONLY',
+    customerId: 'c_fused_hang',
+    customerName: 'Thanh Hằng',
+    customerPhone: '',
+    customerAddress: '',
+    total: 120000,
+    status: 'completed',
+  },
 ];
 
 const migrationResult = repairAndMigrateCustomers([fusedCustomer], mockOrdersWithFused);
@@ -84,8 +95,53 @@ assert.strictEqual(repairedDiacritic.address, '45 Đội Cấn, Ba Đình, Hà N
 // Verify orders were cleanly re-linked to their corresponding customer
 const order1 = migrationResult.repairedOrders.find(o => o.id === 'HD001');
 const order2 = migrationResult.repairedOrders.find(o => o.id === 'HD002');
+const order3 = migrationResult.repairedOrders.find(o => o.id === 'HD003_DIACRITIC_ONLY');
 assert.strictEqual(order1.customerId, repairedNoDiacritic.id, 'Order 1 with 0988111222 must link to Thanh Hang');
 assert.strictEqual(order2.customerId, repairedDiacritic.id, 'Order 2 with 0988333444 must link to Thanh Hằng');
+assert.strictEqual(order3.customerId, repairedDiacritic.id, 'Order 3 with diacritic "Thanh Hằng" must link to Thanh Hằng');
+
+// 1.3 Test orphaned order re-linking when customers are already separate on boot
+const existingSeparatedCustomers = [
+  { id: 'KH05', name: 'Thanh Hang', phone: '0988111222', address: '12 Hoàn Kiếm, Hà Nội' },
+  { id: 'KH06', name: 'Thanh Hằng', phone: '0988333444', address: '45 Đội Cấn, Ba Đình, Hà Nội' },
+];
+const orphanOrders = [
+  {
+    id: 'HD_ORPHAN_HANG',
+    customerId: 'c_lost_hang_profile',
+    customerName: 'Thanh Hang',
+    customerPhone: '0988111222',
+    total: 300000,
+    status: 'completed',
+  },
+  {
+    id: 'HD_ORPHAN_HANG_DIACRITIC',
+    customerId: 'c_lost_hang_profile',
+    customerName: 'Thanh Hằng',
+    customerPhone: '0988333444',
+    total: 450000,
+    status: 'completed',
+  },
+];
+const orphanRepairRes = repairAndMigrateCustomers(existingSeparatedCustomers, orphanOrders);
+const orphan1 = orphanRepairRes.repairedOrders.find(o => o.id === 'HD_ORPHAN_HANG');
+const orphan2 = orphanRepairRes.repairedOrders.find(o => o.id === 'HD_ORPHAN_HANG_DIACRITIC');
+assert.strictEqual(orphan1.customerId, 'KH05', 'Orphaned order for Thanh Hang must be re-linked to KH05');
+assert.strictEqual(orphan2.customerId, 'KH06', 'Orphaned order for Thanh Hằng must be re-linked to KH06');
+
+// 1.4 Test Unicode NFC and NFD diacritic invariance
+const nfdCustomer = {
+  id: 'c_nfd',
+  name: 'Thanh Hă\u0300ng', // NFD decomposed
+  phone: '0988000000',
+  address: 'Hà Nội',
+};
+const nfdRepairRes = repairAndMigrateCustomers([nfdCustomer]);
+assert.strictEqual(
+  nfdRepairRes.repairedCustomers[0].name.normalize('NFC'),
+  'Thanh Hằng',
+  'Customer name with NFD diacritics must match canonical NFC form'
+);
 
 console.log('✓ Historical Data Recovery & Separation verified.');
 
@@ -103,9 +159,16 @@ const corruptedCustomerList = [
     debt: 0,
   },
   {
-    id: 'c_corrupt_name',
+    id: 'c_corrupt_name_space',
     name: 'Chị Lan / Hương Quán',
     phone: '0912345678',
+    address: 'Hà Nội',
+    debt: 0,
+  },
+  {
+    id: 'c_corrupt_name_no_space',
+    name: 'Cô Mai/Tuấn Phố Cổ',
+    phone: '0918765432',
     address: 'Hà Nội',
     debt: 0,
   },
@@ -113,7 +176,8 @@ const corruptedCustomerList = [
 
 const cleanedResult = repairAndMigrateCustomers(corruptedCustomerList);
 const custPhoneRepaired = cleanedResult.repairedCustomers.find(c => c.id === 'c_corrupt_phone');
-const custNameRepaired = cleanedResult.repairedCustomers.find(c => c.id === 'c_corrupt_name');
+const custNameSpaceRepaired = cleanedResult.repairedCustomers.find(c => c.id === 'c_corrupt_name_space');
+const custNameNoSpaceRepaired = cleanedResult.repairedCustomers.find(c => c.id === 'c_corrupt_name_no_space');
 
 assert.strictEqual(
   custPhoneRepaired.phone,
@@ -121,9 +185,14 @@ assert.strictEqual(
   '20-digit phone must be automatically formatted into clean slash delimited string'
 );
 assert.strictEqual(
-  custNameRepaired.name,
+  custNameSpaceRepaired.name,
   'Chị Lan',
-  'Slashed name must be cleaned to preserve primary customer name'
+  'Slashed name with spaces must be cleaned to preserve primary customer name'
+);
+assert.strictEqual(
+  custNameNoSpaceRepaired.name,
+  'Cô Mai',
+  'Slashed name without spaces must also be cleaned to preserve primary customer name'
 );
 
 console.log('✓ 20-digit phone normalization & name cleansing verified.');
@@ -239,23 +308,40 @@ assert.strictEqual(auditRes.duplicatePhoneGroups.length, 1, 'Must detect 1 dupli
 console.log('✓ Comprehensive Customer Data Sentinel Audit passed.');
 
 // ============================================================================
-// Test Suite 5: 1-Click Split and Merge Operations
+// Test Suite 5: 1-Click Split and Merge Operations & Metric Invariants
 // ============================================================================
-console.log('5. Testing 1-Click Split and Merge Operations...');
+console.log('5. Testing 1-Click Split and Merge Operations & Metric Invariants...');
 
-// 5.1 Split by Phone
+// 5.1 Split by Phone with Order Metrics Accuracy
 const custToSplitPhone = {
   id: 'c_split_p',
   name: 'Bác Ba',
   phone: '0988111333 / 0988222444',
   address: 'Hà Nội',
+  orderCount: 3,
+  totalSpent: 600000,
 };
 const mockOrdersForSplit = [
   {
     id: 'HD_SPLIT_1',
     customerId: 'c_split_p',
+    customerPhone: '0988111333',
+    total: 200000,
+    status: 'completed',
+  },
+  {
+    id: 'HD_SPLIT_2',
+    customerId: 'c_split_p',
+    customerPhone: '0988111333',
+    total: 150000,
+    status: 'completed',
+  },
+  {
+    id: 'HD_SPLIT_3',
+    customerId: 'c_split_p',
     customerPhone: '0988222444',
-    total: 100000,
+    total: 250000,
+    status: 'completed',
   },
 ];
 
@@ -265,16 +351,45 @@ assert.strictEqual(splitPhoneRes.customerB.phone, '0988222444');
 assert.strictEqual(splitPhoneRes.ordersToUpdate.length, 1);
 assert.strictEqual(splitPhoneRes.ordersToUpdate[0].customerId, splitPhoneRes.customerB.id);
 
-// 5.2 Split by Address
+// Verify metrics were accurately separated and not left inflated or 0
+assert.strictEqual(splitPhoneRes.customerA.orderCount, 2, 'Customer A must retain 2 orders');
+assert.strictEqual(splitPhoneRes.customerA.totalSpent, 350000, 'Customer A total spent must be 350,000');
+assert.strictEqual(splitPhoneRes.customerB.orderCount, 1, 'Customer B must receive 1 order');
+assert.strictEqual(splitPhoneRes.customerB.totalSpent, 250000, 'Customer B total spent must be 250,000');
+
+// 5.2 Split by Address with Order Metrics Accuracy
 const custToSplitAddr = {
   id: 'c_split_a',
   name: 'Chú Tư',
   phone: '0912999888',
   address: '15 Lý Thường Kiệt / 88 Hai Bà Trưng',
+  orderCount: 2,
+  totalSpent: 400000,
 };
-const splitAddrRes = splitCustomerByAddresses(custToSplitAddr);
+const mockOrdersForSplitAddr = [
+  {
+    id: 'HD_ADDR_1',
+    customerId: 'c_split_a',
+    customerAddress: '15 Lý Thường Kiệt, Hoàn Kiếm',
+    total: 180000,
+    status: 'completed',
+  },
+  {
+    id: 'HD_ADDR_2',
+    customerId: 'c_split_a',
+    customerAddress: '88 Hai Bà Trưng, Cửa Nam',
+    total: 220000,
+    status: 'completed',
+  },
+];
+const splitAddrRes = splitCustomerByAddresses(custToSplitAddr, mockOrdersForSplitAddr);
 assert.strictEqual(splitAddrRes.customerA.address, '15 Lý Thường Kiệt');
 assert.strictEqual(splitAddrRes.customerB.address, '88 Hai Bà Trưng');
+assert.strictEqual(splitAddrRes.ordersToUpdate.length, 1);
+assert.strictEqual(splitAddrRes.customerA.orderCount, 1);
+assert.strictEqual(splitAddrRes.customerA.totalSpent, 180000);
+assert.strictEqual(splitAddrRes.customerB.orderCount, 1);
+assert.strictEqual(splitAddrRes.customerB.totalSpent, 220000);
 
 // 5.3 Merge Duplicate Customers
 const primaryCust = { id: 'c_p', name: 'Nguyễn Văn A', phone: '0988000111', debt: 100000, totalSpent: 500000, orderCount: 2 };
@@ -289,20 +404,25 @@ assert.strictEqual(mergeRes.mergedCustomer.orderCount, 3, 'Order count must accu
 assert.strictEqual(mergeRes.ordersToUpdate.length, 1);
 assert.strictEqual(mergeRes.ordersToUpdate[0].customerId, 'c_p', 'Duplicate customer order must point to primary customer');
 
-console.log('✓ 1-Click Split and Merge Operations verified.');
+console.log('✓ 1-Click Split and Merge Operations & Metric Invariants verified.');
 
 // ============================================================================
-// Test Suite 6: POS Live Collision Alert Simulation
+// Test Suite 6: POS Live Collision Alert & Combobox Tone Twin Simulation
 // ============================================================================
-console.log('6. Testing POS Live Collision Alert Trigger Simulation...');
+console.log('6. Testing POS Live Collision Alert & Banner String Formatting...');
 
 function simulatePosCustomerSelection(selectedId, customersList) {
   const selected = customersList.find(c => c.id === selectedId);
   const twins = findToneTwinCustomers(selected, customersList);
+  const bannerText = twins.length > 0
+    ? `⚠️ Chú ý: Có khách hàng tên tương tự là ${twins.map(t => `"${t.name}" (SĐT: ${t.phone || 'Chưa có'} - Đ/c: ${t.address || 'Chưa có'})`).join(', ')}. Vui lòng kiểm tra kỹ SĐT trước khi tạo đơn/giao hàng!`
+    : '';
+
   return {
     selectedCustomer: selected,
     shouldShowWarning: twins.length > 0,
     collisionTwins: twins,
+    bannerText,
   };
 }
 
@@ -312,6 +432,10 @@ assert.strictEqual(sim1.shouldShowWarning, true, 'Warning banner must trigger fo
 assert.strictEqual(sim1.collisionTwins.length, 1);
 assert.strictEqual(sim1.collisionTwins[0].name, 'Thanh Hằng');
 assert.strictEqual(sim1.collisionTwins[0].phone, '0988333444');
+assert.strictEqual(
+  sim1.bannerText,
+  '⚠️ Chú ý: Có khách hàng tên tương tự là "Thanh Hằng" (SĐT: 0988333444 - Đ/c: 45 Đội Cấn, Ba Đình, Hà Nội). Vui lòng kiểm tra kỹ SĐT trước khi tạo đơn/giao hàng!'
+);
 
 // Case B: Cashier switches to Thanh Hằng (KH06)
 const sim2 = simulatePosCustomerSelection('KH06', INITIAL_CUSTOMERS);
@@ -319,6 +443,10 @@ assert.strictEqual(sim2.shouldShowWarning, true, 'Warning banner must trigger fo
 assert.strictEqual(sim2.collisionTwins.length, 1);
 assert.strictEqual(sim2.collisionTwins[0].name, 'Thanh Hang');
 assert.strictEqual(sim2.collisionTwins[0].phone, '0988111222');
+assert.strictEqual(
+  sim2.bannerText,
+  '⚠️ Chú ý: Có khách hàng tên tương tự là "Thanh Hang" (SĐT: 0988111222 - Đ/c: 12 Hoàn Kiếm, Hà Nội). Vui lòng kiểm tra kỹ SĐT trước khi tạo đơn/giao hàng!'
+);
 
 // Case C: Cashier selects Chị Lan (KH02) with no tone twins
 const sim3 = simulatePosCustomerSelection('KH02', INITIAL_CUSTOMERS);
@@ -329,7 +457,23 @@ assert.strictEqual(sim3.collisionTwins.length, 0);
 const sim4 = simulatePosCustomerSelection('KH01', INITIAL_CUSTOMERS);
 assert.strictEqual(sim4.shouldShowWarning, false, 'Generic counter customer must never trigger warning banner');
 
-console.log('✓ POS Live Collision Alert Trigger Simulation verified.');
+// Case E: CustomerCombobox Tone Twin Indicator Recognition
+const toneCounts = new Map();
+for (const c of INITIAL_CUSTOMERS) {
+  if (!isGenericCustomerName(c.name)) {
+    const clean = removeVietnameseTones(c.name).trim();
+    if (clean) toneCounts.set(clean, (toneCounts.get(clean) || 0) + 1);
+  }
+}
+const toneTwinSet = new Set();
+for (const [name, count] of toneCounts.entries()) {
+  if (count > 1) toneTwinSet.add(name);
+}
+
+assert.ok(toneTwinSet.has('thanh hang'), 'Combobox must flag "thanh hang" as a tone twin group');
+assert.ok(!toneTwinSet.has('chi lan (zalo doi can)'), 'Chi Lan is unique and must not be flagged');
+
+console.log('✓ POS Live Collision Alert & Banner String Formatting verified.');
 
 console.log('================================================================');
 console.log('🎉 ALL ADR-0017 SENTINEL & RECOVERY TESTS PASSED SUCCESSFULLY');

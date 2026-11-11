@@ -35,13 +35,16 @@ Field operational feedback and user reports identified persistent risks in custo
   - Decouples them into two clean records with canonical phone numbers and addresses.
   - Re-links past orders referencing the fused ID: orders delivered to Đội Cấn or recipient phone `0988333444` are linked to `Thanh Hằng`, while orders delivered to Hoàn Kiếm or recipient phone `0988111222` are linked to `Thanh Hang`.
 
-### 2. POS Live Collision Alert (`src/pages/PosPage.tsx`)
+### 2. POS Live Collision Alert & Combobox Tone Twin Awareness (`src/pages/PosPage.tsx` & `CustomerCombobox.tsx`)
 - Integrated real-time collision detection via `findToneTwinCustomers`:
   - When a cashier selects a customer at POS, the system checks whether any other active customer shares the unaccented name (`removeVietnameseTones(c.name) === removeVietnameseTones(selectedCustomer.name)` with different IDs).
   - Generic customer placeholders (e.g. "Khách lẻ tại quầy") are strictly excluded.
 - If tone twins exist, an eye-catching amber alert banner renders immediately below the customer selection box:
   `⚠️ Chú ý: Có khách hàng tên tương tự là "[Tên]" (SĐT: [SĐT] - Đ/c: [Địa chỉ]). Vui lòng kiểm tra kỹ SĐT trước khi tạo đơn/giao hàng!`
 - Includes a 1-click **"Chuyển sang khách này"** (Switch to this customer) button that instantly changes the active customer and updates the delivery recipient snapshot without leaving the POS screen.
+- Enhanced `CustomerCombobox.tsx`:
+  - Automatically identifies customers belonging to tone-twin collision groups and displays a distinctive amber `⚠️ Tên tương tự` badge on closed trigger button and within search dropdown items.
+  - Cashiers are alerted to potential name ambiguity before finalizing customer selection.
 
 ### 3. Customer Data Sentinel Hub (`CustomersPage.tsx` & `CustomerSentinelModal.tsx`)
 - Added an automated audit panel and alert banner in `CustomersPage.tsx` running `auditCustomerData`:

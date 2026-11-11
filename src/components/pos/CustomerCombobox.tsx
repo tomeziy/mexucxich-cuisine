@@ -2,7 +2,9 @@ import React, { useState, useRef, useEffect, useMemo } from 'react';
 import { Customer } from '../../types';
 import { formatVND } from '../../utils/format';
 import { filterAndRankCustomers, isPhoneNumberQuery } from '../../utils/customerSearch';
-import { Search, X, Check, UserPlus, Phone, MapPin, ChevronDown } from 'lucide-react';
+import { removeVietnameseTones } from '../../utils/vietnamese';
+import { isGenericCustomerName } from '../../utils/customerSentinel';
+import { Search, X, Check, UserPlus, Phone, MapPin, ChevronDown, AlertTriangle } from 'lucide-react';
 
 export interface CustomerComboboxProps {
   customers: Customer[];
@@ -54,6 +56,24 @@ export const CustomerCombobox: React.FC<CustomerComboboxProps> = ({
   const isPhoneQuery = useMemo(() => {
     return isPhoneNumberQuery(query);
   }, [query]);
+
+  // Tone-twin detection for combobox badge warnings (ADR-0017)
+  const toneTwinNames = useMemo(() => {
+    const counts = new Map<string, number>();
+    for (const c of customers) {
+      if (!isGenericCustomerName(c.name)) {
+        const clean = removeVietnameseTones(c.name).trim();
+        if (clean) {
+          counts.set(clean, (counts.get(clean) || 0) + 1);
+        }
+      }
+    }
+    const set = new Set<string>();
+    for (const [name, count] of counts.entries()) {
+      if (count > 1) set.add(name);
+    }
+    return set;
+  }, [customers]);
 
   // Total navigable items: filtered customers + pinned quick-add button (if enabled)
   const maxNavIndex = onQuickAdd ? filteredCustomers.length : Math.max(0, filteredCustomers.length - 1);
@@ -154,6 +174,17 @@ export const CustomerCombobox: React.FC<CustomerComboboxProps> = ({
                 Nợ: {formatVND(selectedCustomer.debt)}
               </span>
             )}
+            {selectedCustomer &&
+              !isGenericCustomerName(selectedCustomer.name) &&
+              toneTwinNames.has(removeVietnameseTones(selectedCustomer.name).trim()) && (
+                <span
+                  className="text-[10px] font-bold text-amber-800 bg-amber-100 border border-amber-300 px-1.5 py-0.2 rounded shrink-0 flex items-center gap-0.5"
+                  title="Có khách hàng khác mang tên tương tự (Tone Twin)"
+                >
+                  <AlertTriangle className="w-2.5 h-2.5 text-amber-600 shrink-0" />
+                  <span>Tên tương tự</span>
+                </span>
+              )}
           </div>
           <ChevronDown className="w-3.5 h-3.5 text-slate-400 shrink-0" />
         </button>
@@ -243,6 +274,16 @@ export const CustomerCombobox: React.FC<CustomerComboboxProps> = ({
                               Nợ: {formatVND(c.debt)}
                             </span>
                           )}
+                          {!isGenericCustomerName(c.name) &&
+                            toneTwinNames.has(removeVietnameseTones(c.name).trim()) && (
+                              <span
+                                className="text-[9px] font-bold text-amber-800 bg-amber-100 border border-amber-300 px-1.5 py-0.2 rounded shrink-0 flex items-center gap-0.5"
+                                title="Có khách hàng khác có tên tương tự (Tone Twin)"
+                              >
+                                <AlertTriangle className="w-2.5 h-2.5 text-amber-600 shrink-0" />
+                                <span>Tên tương tự</span>
+                              </span>
+                            )}
                         </div>
                         {c.address && (
                           <p className="text-[10px] text-slate-400 truncate flex items-center gap-1">
