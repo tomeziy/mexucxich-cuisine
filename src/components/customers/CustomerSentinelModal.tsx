@@ -34,6 +34,8 @@ interface CustomerSentinelModalProps {
   onSplitCustomer: (customerId: string, type: 'phone' | 'address') => void;
   onMergeCustomers: (primaryId: string, duplicateId: string) => void;
   onEditCustomer: (customer: Customer) => void;
+  onRestoreFromOrder?: (customerId: string, orderId: string) => void;
+  onSplitByHistoricalOrder?: (customerId: string, targetPhone: string) => void;
 }
 
 export const CustomerSentinelModal: React.FC<CustomerSentinelModalProps> = ({
@@ -46,8 +48,10 @@ export const CustomerSentinelModal: React.FC<CustomerSentinelModalProps> = ({
   onSplitCustomer,
   onMergeCustomers,
   onEditCustomer,
+  onRestoreFromOrder,
+  onSplitByHistoricalOrder,
 }) => {
-  const [activeTab, setActiveTab] = useState<'all' | 'tone' | 'phone' | 'address' | 'duplicate'>('all');
+  const [activeTab, setActiveTab] = useState<'all' | 'tone' | 'phone' | 'address' | 'duplicate' | 'discrepancy'>('all');
   const [repairSuccessLog, setRepairSuccessLog] = useState<string[] | null>(null);
   const [acknowledgedToneTwins, setAcknowledgedToneTwins] = useState<Set<string>>(new Set());
 
@@ -191,6 +195,16 @@ export const CustomerSentinelModal: React.FC<CustomerSentinelModalProps> = ({
             }`}
           >
             Trùng số điện thoại ({auditResult.duplicatePhoneGroups.length})
+          </button>
+          <button
+            onClick={() => setActiveTab('discrepancy')}
+            className={`px-3 py-1.5 rounded-xl transition shrink-0 ${
+              activeTab === 'discrepancy'
+                ? 'bg-amber-600 text-white shadow-xs'
+                : 'text-slate-600 hover:bg-slate-200'
+            }`}
+          >
+            Lệch với đơn cũ ({auditResult.orderDiscrepancies?.length || 0})
           </button>
         </div>
 
@@ -567,6 +581,131 @@ export const CustomerSentinelModal: React.FC<CustomerSentinelModalProps> = ({
               </div>
             </div>
           )}
+
+          {/* 5. HISTORICAL ORDER DISCREPANCY SECTION (ADR-0018) */}
+          {(activeTab === 'all' || activeTab === 'discrepancy') &&
+            auditResult.orderDiscrepancies &&
+            auditResult.orderDiscrepancies.length > 0 && (
+              <div className="space-y-3">
+                <div className="flex items-center justify-between">
+                  <div className="flex items-center gap-2">
+                    <History className="w-4 h-4 text-amber-600" />
+                    <h3 className="font-bold text-slate-800 text-sm">
+                      Bất thường lịch sử: Hồ sơ bị đè lệch so với đơn hàng cũ ({auditResult.orderDiscrepancies.length})
+                    </h3>
+                  </div>
+                  <span className="text-[11px] text-slate-500">
+                    SĐT hoặc địa chỉ trong hồ sơ hiện tại khác với snapshot khi tạo đơn
+                  </span>
+                </div>
+
+                <div className="space-y-2.5">
+                  {auditResult.orderDiscrepancies.map(disc => (
+                    <div
+                      key={disc.customer.id}
+                      className="p-3.5 bg-white rounded-2xl border border-slate-200 shadow-2xs space-y-3"
+                    >
+                      <div className="flex items-start justify-between gap-3">
+                        <div>
+                          <div className="flex items-center gap-2">
+                            <span className="font-extrabold text-slate-900 text-sm">{disc.customer.name}</span>
+                            <span className="text-[10px] font-mono text-slate-400 bg-slate-100 px-1.5 py-0.5 rounded">
+                              {disc.customer.id}
+                            </span>
+                          </div>
+                          <div className="text-xs text-slate-600 flex flex-wrap items-center gap-3 mt-1">
+                            <span>SĐT hiện tại: <strong className="text-slate-800">{disc.customer.phone || 'Chưa có'}</strong></span>
+                            <span>•</span>
+                            <span>Đ/C hiện tại: <strong className="text-slate-800">{disc.customer.address || 'Chưa có'}</strong></span>
+                          </div>
+                        </div>
+                      </div>
+
+                      {/* Differing historical orders */}
+                      <div className="space-y-1.5 pt-1">
+                        <div className="text-[11px] font-bold text-amber-800">Các đơn hàng có thông tin khác:</div>
+                        {disc.historicalOrders
+                          .filter(
+                            o =>
+                              (o.customerPhone && disc.differingPhones.includes(o.customerPhone.trim())) ||
+                              (o.customerAddress && disc.differingAddresses.includes(o.customerAddress.trim())) ||
+                              (o.customerName && disc.differingNames.includes(o.customerName.trim()))
+                          )
+                          .slice(0, 5)
+                          .map(ord => (
+                            <div
+                              key={ord.id}
+                              className="p-2.5 bg-amber-50/50 rounded-xl border border-amber-200/80 flex flex-col sm:flex-row sm:items-center justify-between gap-2 text-xs"
+                            >
+                              <div className="space-y-0.5">
+                                <div className="flex items-center gap-2">
+                                  <span className="font-bold text-slate-800">#{ord.id}</span>
+                                  <span className="text-[10px] text-slate-400">({formatDate(ord.createdAt)})</span>
+                                  {ord.customerName && ord.customerName !== disc.customer.name && (
+                                    <span className="text-[11px] font-bold text-blue-700 bg-blue-50 px-1.5 py-0.5 rounded border border-blue-200">
+                                      Tên đơn: {ord.customerName}
+                                    </span>
+                                  )}
+                                </div>
+                                <div className="text-[11px] text-slate-600 flex flex-wrap gap-2">
+                                  {ord.customerPhone && (
+                                    <span>SĐT đơn: <strong className="text-amber-900">{ord.customerPhone}</strong></span>
+                                  )}
+                                  {ord.customerAddress && (
+                                    <span>• ĐC đơn: <strong className="text-amber-900">{ord.customerAddress}</strong></span>
+                                  )}
+                                </div>
+                              </div>
+
+                              <div className="flex items-center gap-1.5 shrink-0">
+                                {onRestoreFromOrder && (
+                                  <button
+                                    type="button"
+                                    onClick={() => {
+                                      if (
+                                        window.confirm(
+                                          `Khôi phục thông tin khách "${disc.customer.name}" theo đơn #${ord.id}?\n\n- Tên: ${ord.customerName || disc.customer.name}\n- SĐT: ${ord.customerPhone || disc.customer.phone}\n- ĐC: ${ord.customerAddress || disc.customer.address}`
+                                        )
+                                      ) {
+                                        onRestoreFromOrder(disc.customer.id, ord.id);
+                                      }
+                                    }}
+                                    className="px-2.5 py-1 bg-amber-600 hover:bg-amber-700 text-white rounded-lg text-[11px] font-bold transition flex items-center gap-1 shadow-2xs"
+                                    title="Khôi phục thông tin khách về đúng thông tin trên đơn hàng này"
+                                  >
+                                    <Sparkles className="w-3 h-3" />
+                                    <span>Khôi phục theo đơn này</span>
+                                  </button>
+                                )}
+
+                                {onSplitByHistoricalOrder && ord.customerPhone && ord.customerPhone !== disc.customer.phone && (
+                                  <button
+                                    type="button"
+                                    onClick={() => {
+                                      if (
+                                        window.confirm(
+                                          `Tách SĐT "${ord.customerPhone}" thành một khách hàng riêng biệt?\nCác đơn hàng dùng số này sẽ được tự động chuyển sang khách mới.`
+                                        )
+                                      ) {
+                                        onSplitByHistoricalOrder(disc.customer.id, ord.customerPhone!);
+                                      }
+                                    }}
+                                    className="px-2.5 py-1 bg-slate-100 hover:bg-slate-200 text-slate-700 rounded-lg text-[11px] font-bold transition flex items-center gap-1 border border-slate-300"
+                                    title="Tách số điện thoại này thành khách hàng mới độc lập"
+                                  >
+                                    <GitFork className="w-3 h-3 text-slate-500" />
+                                    <span>Tách thành 2 khách</span>
+                                  </button>
+                                )}
+                              </div>
+                            </div>
+                          ))}
+                      </div>
+                    </div>
+                  ))}
+                </div>
+              </div>
+            )}
         </div>
 
         {/* Modal Footer */}

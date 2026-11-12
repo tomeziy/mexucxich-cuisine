@@ -126,6 +126,31 @@ export function mergeProductsWithConflictResolution(
   return { merged, localPreserved, cloudAccepted };
 }
 
+/**
+ * Catalog Anti-Shrink Guard (ADR-0018):
+ * If an incoming product array (from Cloud pull or external sync) contains fewer items
+ * than current local catalog, block overwriting and guarantee all local items remain preserved.
+ */
+export function applyCatalogAntiShrinkGuard(
+  currentLocalProducts: Product[],
+  incomingProducts: Product[]
+): { products: Product[]; shrinkBlocked: boolean } {
+  if (incomingProducts.length < currentLocalProducts.length) {
+    console.warn(
+      `[Anti-Shrink Guard] Incoming catalog (${incomingProducts.length} items) has fewer items than local in-memory catalog (${currentLocalProducts.length} items). Blocking shrink and preserving local catalog.`
+    );
+    const { merged } = mergeProductsWithConflictResolution(currentLocalProducts, incomingProducts);
+    return {
+      products: merged.length >= currentLocalProducts.length ? merged : currentLocalProducts,
+      shrinkBlocked: true,
+    };
+  }
+  return {
+    products: incomingProducts,
+    shrinkBlocked: false,
+  };
+}
+
 export interface MergeCustomersResult {
   merged: Customer[];
   localPreserved: Customer[];

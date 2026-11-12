@@ -1,5 +1,5 @@
 import { createClient, SupabaseClient } from '@supabase/supabase-js';
-import { Product, Customer, Order, DebtPayment, ReceiptSettings, CloudConfig } from '../types';
+import type { Product, Customer, Order, DebtPayment, ReceiptSettings, CloudConfig } from '../types/index.ts';
 import {
   calculateStockDelta,
   getEntityTimestamp,
@@ -9,7 +9,8 @@ import {
   mergeCustomersWithConflictResolution,
   mergeOrders,
   mergeDebtPayments,
-} from './syncConflict';
+  applyCatalogAntiShrinkGuard,
+} from './syncConflict.ts';
 
 export {
   calculateStockDelta,
@@ -20,6 +21,7 @@ export {
   mergeCustomersWithConflictResolution,
   mergeOrders,
   mergeDebtPayments,
+  applyCatalogAntiShrinkGuard,
 };
 
 const CLOUD_CONFIG_KEY = 'mexucxich_cloud_config';
@@ -234,13 +236,70 @@ export const transformDebtPaymentFromDb = (row: any): DebtPayment => ({
 });
 
 /**
+ * Strip 'updated_at' field recursively or from single/array objects.
+ * Used as defensive fallback when production Supabase lacks 'updated_at' column (PGRST204).
+ */
+export function stripUpdatedAt<T>(data: T): T {
+  if (data === null || data === undefined) return data;
+  if (Array.isArray(data)) {
+    return data.map(item => stripUpdatedAt(item)) as unknown as T;
+  }
+  if (typeof data === 'object') {
+    const copy: any = { ...data };
+    delete copy.updated_at;
+    return copy as T;
+  }
+  return data;
+}
+
+/**
+ * Checks if an error returned by Supabase / PostgREST indicates a missing column (e.g. PGRST204)
+ */
+export function isMissingColumnError(error: any, column = 'updated_at'): boolean {
+  if (!error) return false;
+  if (error.code === 'PGRST204' || error.code === '42703') return true;
+  const msg = `${error.message || ''} ${error.details || ''} ${error.hint || ''}`.toLowerCase();
+  return msg.includes(column.toLowerCase()) || msg.includes('pgrst204') || msg.includes('does not exist');
+}
+
+/**
+ * Executes a defensive upsert to Supabase.
+ * If PostgREST rejects with PGRST204 (missing 'updated_at'), it immediately retries without 'updated_at'.
+ */
+export async function safeUpsert(
+  client: SupabaseClient,
+  table: string,
+  rows: any | any[],
+  onConflict = 'id'
+): Promise<{ data: any; error: any; stripped?: boolean }> {
+  const initialRes = await client.from(table).upsert(rows, { onConflict });
+
+  if (initialRes.error && isMissingColumnError(initialRes.error, 'updated_at')) {
+    console.warn(
+      `[Defensive Supabase] Table '${table}' lacks 'updated_at' column (PGRST204). Retrying without 'updated_at'...`
+    );
+    const sanitized = stripUpdatedAt(rows);
+    const retryRes = await client.from(table).upsert(sanitized, { onConflict });
+    if (retryRes.error) {
+      console.error(`[Defensive Supabase] Retry failed for table '${table}':`, retryRes.error);
+    } else {
+      console.info(`[Defensive Supabase] Retry succeeded without 'updated_at' for table '${table}'!`);
+    }
+    return { data: retryRes.data, error: retryRes.error, stripped: true };
+  }
+
+  return { data: initialRes.data, error: initialRes.error, stripped: false };
+}
+
+/**
  * Chia nhỏ dữ liệu thành các mẩu (chunks) để đẩy lên Supabase an toàn,
  * chống lỗi vượt quá kích thước payload khi có hàng nghìn dòng.
+ * Sử dụng safeUpsert để tự động xử lý trường hợp Supabase thiếu updated_at (PGRST204).
  */
 async function upsertInChunks(client: SupabaseClient, table: string, rows: any[], chunkSize = 500): Promise<void> {
   for (let i = 0; i < rows.length; i += chunkSize) {
     const chunk = rows.slice(i, i + chunkSize);
-    const { error } = await client.from(table).upsert(chunk, { onConflict: 'id' });
+    const { error } = await safeUpsert(client, table, chunk, 'id');
     if (error) {
       throw new Error(`Lỗi đồng bộ ${table} (dòng ${i + 1}-${i + chunk.length}): ${error.message}`);
     }
@@ -335,11 +394,11 @@ export const pushAllDataToCloud = async (data: {
     }
 
     // 5. Store Settings
-    const { error: sErr } = await client.from('store_settings').upsert({
+    const { error: sErr } = await safeUpsert(client, 'store_settings', {
       id: 'default_settings',
       data: data.settings,
       updated_at: new Date().toISOString(),
-    }, { onConflict: 'id' });
+    }, 'id');
     if (sErr) throw new Error(`Lỗi đồng bộ cài đặt: ${sErr.message}`);
 
     const now = new Date().toISOString();
@@ -398,7 +457,8 @@ export const pullAllDataFromCloud = async (localData?: {
     if (localData) {
       if (localData.products && localData.products.length > 0) {
         const pMerge = mergeProductsWithConflictResolution(localData.products, cloudProducts);
-        finalProducts = pMerge.merged;
+        // Anti-shrink guard: never return a product catalog smaller than local in-memory catalog
+        finalProducts = pMerge.merged.length >= localData.products.length ? pMerge.merged : localData.products;
         localPreservedCount += pMerge.localPreserved.length;
       }
       if (localData.customers && localData.customers.length > 0) {
@@ -477,10 +537,18 @@ export const cloudAdjustProductStock = async (
       const updatedStock = calculateStockDelta(currentStock, delta);
       const now = new Date().toISOString();
 
-      const { error: updateErr } = await client
+      let { error: updateErr } = await client
         .from('products')
         .update({ stock: updatedStock, updated_at: now })
         .eq('id', productId);
+
+      if (updateErr && isMissingColumnError(updateErr, 'updated_at')) {
+        const retryRes = await client
+          .from('products')
+          .update({ stock: updatedStock })
+          .eq('id', productId);
+        updateErr = retryRes.error;
+      }
 
       if (!updateErr) {
         return { success: true, newStock: updatedStock, method: 'fallback' };
@@ -518,7 +586,8 @@ export const cloudSyncProduct = async (p: Product) => {
   const client = getSupabaseClient();
   if (!client) return;
   try {
-    await client.from('products').upsert(transformProductToDb(p), { onConflict: 'id' });
+    const { error } = await safeUpsert(client, 'products', transformProductToDb(p));
+    if (error) console.error('cloudSyncProduct error:', error);
   } catch (e) {
     console.error('cloudSyncProduct error:', e);
   }
@@ -538,7 +607,8 @@ export const cloudSyncCustomer = async (c: Customer) => {
   const client = getSupabaseClient();
   if (!client) return;
   try {
-    await client.from('customers').upsert(transformCustomerToDb(c), { onConflict: 'id' });
+    const { error } = await safeUpsert(client, 'customers', transformCustomerToDb(c));
+    if (error) console.error('cloudSyncCustomer error:', error);
   } catch (e) {
     console.error('cloudSyncCustomer error:', e);
   }
@@ -581,7 +651,8 @@ export const cloudSyncOrder = async (o: Order) => {
   const client = getSupabaseClient();
   if (!client) return;
   try {
-    await client.from('orders').upsert(transformOrderToDb(o), { onConflict: 'id' });
+    const { error } = await safeUpsert(client, 'orders', transformOrderToDb(o));
+    if (error) console.error('cloudSyncOrder error:', error);
   } catch (e) {
     console.error('cloudSyncOrder error:', e);
   }
@@ -601,7 +672,8 @@ export const cloudSyncDebtPayment = async (dp: DebtPayment) => {
   const client = getSupabaseClient();
   if (!client) return;
   try {
-    await client.from('debt_payments').upsert(transformDebtPaymentToDb(dp), { onConflict: 'id' });
+    const { error } = await safeUpsert(client, 'debt_payments', transformDebtPaymentToDb(dp));
+    if (error) console.error('cloudSyncDebtPayment error:', error);
   } catch (e) {
     console.error('cloudSyncDebtPayment error:', e);
   }
@@ -611,11 +683,12 @@ export const cloudSyncSettings = async (s: ReceiptSettings) => {
   const client = getSupabaseClient();
   if (!client) return;
   try {
-    await client.from('store_settings').upsert({
+    const { error } = await safeUpsert(client, 'store_settings', {
       id: 'default_settings',
       data: s,
       updated_at: new Date().toISOString(),
-    }, { onConflict: 'id' });
+    });
+    if (error) console.error('cloudSyncSettings error:', error);
   } catch (e) {
     console.error('cloudSyncSettings error:', e);
   }

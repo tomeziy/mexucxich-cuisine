@@ -2,12 +2,24 @@ import React, { createContext, useContext, useState, useEffect, useCallback, use
 import { Product, Customer, Order, DebtPayment, ReceiptSettings, OrderStatus, CloudConfig } from '../types';
 import { INITIAL_PRODUCTS, INITIAL_CUSTOMERS, DEFAULT_RECEIPT_SETTINGS } from '../data/initialData';
 import {
+  isGenericCustomerName,
   repairAndMigrateCustomers,
   splitCustomerByPhones,
   splitCustomerByAddresses,
   mergeDuplicateCustomers,
+  restoreCustomerFromOrderSnapshot,
+  splitCustomerByHistoricalOrder,
   MigrationRepairResult,
 } from '../utils/customerSentinel';
+import { extractMissingProductsFromOrders } from '../utils/excel';
+import { removeVietnameseTones } from '../utils/vietnamese';
+import {
+  VaultSnapshot,
+  BackupMetadata,
+  saveVaultSnapshot,
+  loadVaultSnapshot,
+  listVaultBackups,
+} from '../utils/vault';
 import {
   getSupabaseConfig,
   saveSupabaseConfig,
@@ -30,7 +42,10 @@ import {
   mergeOrders,
   mergeDebtPayments,
   calculateStockDelta,
+  applyCatalogAntiShrinkGuard,
 } from '../services/supabase';
+
+export { applyCatalogAntiShrinkGuard };
 
 interface StoreContextType {
   products: Product[];
@@ -60,6 +75,11 @@ interface StoreContextType {
   repairCustomerData: () => MigrationRepairResult;
   splitCustomerRecord: (customerId: string, type: 'phone' | 'address') => void;
   mergeCustomerRecords: (primaryId: string, duplicateId: string) => void;
+  restoreCustomerFromOrder: (customerId: string, orderId: string) => { success: boolean; message: string };
+  splitCustomerByHistoricalOrderRecord: (customerId: string, targetPhone: string) => void;
+  restoreFromExcelOrders: (orders: Order[]) => { restoredOrdersCount: number; restoredProductsCount: number };
+  restoreFromVault: (key?: string) => { success: boolean; message: string; restoredProducts: number; restoredOrders: number };
+  getAvailableBackups: () => BackupMetadata[];
   resetToMockData: () => void;
   importAllData: (jsonData: any) => boolean;
   exportAllData: () => any;
@@ -172,6 +192,24 @@ export const StoreProvider: React.FC<{ children: React.ReactNode }> = ({ childre
     localStorage.setItem(STORAGE_KEYS.SETTINGS, JSON.stringify(receiptSettings));
   }, [receiptSettings]);
 
+  // ADR-0018: Rolling daily backups and emergency vault snapshots
+  useEffect(() => {
+    if (products.length > 0 || orders.length > 0 || customers.length > 0) {
+      const timer = setTimeout(() => {
+        saveVaultSnapshot({
+          timestamp: new Date().toISOString(),
+          reason: 'auto_rolling',
+          products,
+          customers,
+          orders,
+          debtPayments,
+          receiptSettings,
+        }, false);
+      }, 1000);
+      return () => clearTimeout(timer);
+    }
+  }, [products, customers, orders, debtPayments, receiptSettings]);
+
   // One-time Sentinel local data integrity audit and repair on boot (ADR-0017)
   useEffect(() => {
     const result = repairAndMigrateCustomers(stateRef.current.customers, stateRef.current.orders);
@@ -196,7 +234,9 @@ export const StoreProvider: React.FC<{ children: React.ReactNode }> = ({ childre
 
         pullAllDataFromCloud(localData).then(cloudData => {
           if (cloudData && (cloudData.products.length > 0 || cloudData.orders.length > 0)) {
-            setProducts(cloudData.products);
+            // ADR-0018: Catalog Anti-Shrink Guard
+            const guarded = applyCatalogAntiShrinkGuard(stateRef.current.products, cloudData.products);
+            setProducts(guarded.products);
             const { repairedCustomers, repairedOrders } = repairAndMigrateCustomers(
               cloudData.customers,
               cloudData.orders
@@ -261,6 +301,9 @@ export const StoreProvider: React.FC<{ children: React.ReactNode }> = ({ childre
     if (!pullRes) {
       return { success: false, message: 'Không thể kết nối hoặc tải dữ liệu từ Supabase Cloud!' };
     }
+
+    const guarded = applyCatalogAntiShrinkGuard(stateRef.current.products, pullRes.products);
+    pullRes.products = guarded.products;
 
     const { repairedCustomers, repairedOrders } = repairAndMigrateCustomers(
       pullRes.customers,
@@ -939,14 +982,253 @@ export const StoreProvider: React.FC<{ children: React.ReactNode }> = ({ childre
     });
   };
 
-  // Reset data to mock
+  // Reset data to mock (ADR-0018: Pre-reset emergency vault preservation)
   const resetToMockData = () => {
+    saveVaultSnapshot(
+      {
+        timestamp: new Date().toISOString(),
+        reason: 'pre_reset_wipe',
+        products,
+        customers,
+        orders,
+        debtPayments,
+        receiptSettings,
+      },
+      true
+    );
+
     setProducts(INITIAL_PRODUCTS);
     setCustomers(INITIAL_CUSTOMERS);
     setOrders([]);
     setDebtPayments([]);
     setReceiptSettings(DEFAULT_RECEIPT_SETTINGS);
     localStorage.clear();
+  };
+
+  // ADR-0018: 1-Click Vault Recovery
+  const restoreFromVault = (
+    targetKey = 'mxc_emergency_vault'
+  ): {
+    success: boolean;
+    message: string;
+    restoredProducts: number;
+    restoredOrders: number;
+  } => {
+    try {
+      const snapshot = loadVaultSnapshot(targetKey);
+      if (!snapshot) {
+        return {
+          success: false,
+          message: 'Không tìm thấy dữ liệu sao lưu trong Hầm Cứu Hộ!',
+          restoredProducts: 0,
+          restoredOrders: 0,
+        };
+      }
+
+      let pCount = 0;
+      let oCount = 0;
+
+      if (Array.isArray(snapshot.products) && snapshot.products.length > 0) {
+        const merged = mergeProductsWithConflictResolution(snapshot.products, stateRef.current.products);
+        setProducts(merged.merged);
+        pCount = merged.merged.length;
+        cloudSyncProductsBatch(merged.merged);
+      }
+      if (Array.isArray(snapshot.customers) && snapshot.customers.length > 0) {
+        const mergedC = mergeCustomersWithConflictResolution(snapshot.customers, stateRef.current.customers);
+        setCustomers(mergedC.merged);
+        cloudSyncCustomersBatch(mergedC.merged);
+      }
+      if (Array.isArray(snapshot.orders) && snapshot.orders.length > 0) {
+        const mergedO = mergeOrders(snapshot.orders, stateRef.current.orders);
+        setOrders(mergedO);
+        oCount = mergedO.length;
+      }
+      if (Array.isArray(snapshot.debtPayments)) {
+        const mergedD = mergeDebtPayments(snapshot.debtPayments, stateRef.current.debtPayments);
+        setDebtPayments(mergedD);
+      }
+      if (snapshot.receiptSettings) {
+        setReceiptSettings(prev => ({ ...prev, ...snapshot.receiptSettings }));
+      }
+
+      return {
+        success: true,
+        message: `Đã khôi phục thành công ${pCount} món ăn và ${oCount} đơn hàng từ Hầm Cứu Hộ!`,
+        restoredProducts: pCount,
+        restoredOrders: oCount,
+      };
+    } catch (e: any) {
+      return {
+        success: false,
+        message: `Lỗi khôi phục: ${e?.message || e}`,
+        restoredProducts: 0,
+        restoredOrders: 0,
+      };
+    }
+  };
+
+  const getAvailableBackups = (): BackupMetadata[] => {
+    return listVaultBackups();
+  };
+
+  // ADR-0018: Native Excel Orders & Products Importer
+  const restoreFromExcelOrders = (
+    importedOrders: Order[]
+  ): {
+    restoredOrdersCount: number;
+    restoredProductsCount: number;
+  } => {
+    if (!importedOrders || importedOrders.length === 0) {
+      return { restoredOrdersCount: 0, restoredProductsCount: 0 };
+    }
+
+    const currentProds = stateRef.current.products;
+    const missingDefs = extractMissingProductsFromOrders(importedOrders, currentProds);
+
+    // 1. Create missing products
+    const timestamp = Date.now();
+    const createdProducts: Product[] = missingDefs.map((def, idx) => ({
+      ...def,
+      id: `SP_${timestamp}_${idx}_${Math.random().toString(36).substring(2, 6)}`,
+    }));
+
+    const nextProducts = createdProducts.length > 0 ? [...createdProducts, ...currentProds] : currentProds;
+    if (createdProducts.length > 0) {
+      setProducts(nextProducts);
+      cloudSyncProductsBatch(createdProducts);
+    }
+
+    // 2. Re-link order items to product IDs where matching
+    const prodNameToId = new Map<string, Product>();
+    for (const p of nextProducts) {
+      prodNameToId.set(removeVietnameseTones(p.name.toLowerCase()).trim(), p);
+    }
+
+    const linkedOrders: Order[] = importedOrders.map(ord => ({
+      ...ord,
+      items: (ord.items || []).map(it => {
+        const match = prodNameToId.get(removeVietnameseTones(it.name.toLowerCase()).trim());
+        if (match) {
+          return {
+            ...it,
+            productId: match.id,
+            cost: match.cost,
+            unit: it.unit || match.unit,
+            image: match.image,
+          };
+        }
+        return it;
+      }),
+    }));
+
+    // 3. Merge orders
+    const existingOrderIds = new Set(stateRef.current.orders.map(o => o.id));
+    const newOrders = linkedOrders.filter(o => !existingOrderIds.has(o.id));
+    const nextOrders = [...newOrders, ...stateRef.current.orders];
+    setOrders(nextOrders);
+
+    for (const no of newOrders) {
+      cloudSyncOrder(no);
+    }
+
+    // 4. Auto-restore customers from order contacts
+    const existingCustomerMap = new Map<string, Customer>();
+    for (const c of stateRef.current.customers) {
+      if (c.phone) existingCustomerMap.set(c.phone.replace(/\D/g, ''), c);
+      existingCustomerMap.set(removeVietnameseTones(c.name.toLowerCase()).trim(), c);
+    }
+
+    const newCustomersToAdd: Customer[] = [];
+    for (const ord of importedOrders) {
+      const rawName = ord.customerName?.trim();
+      const rawPhone = ord.customerPhone?.trim();
+      if (!rawName || isGenericCustomerName(rawName)) continue;
+      const cleanPhone = rawPhone ? rawPhone.replace(/\D/g, '') : '';
+      const cleanName = removeVietnameseTones(rawName.toLowerCase()).trim();
+
+      if ((!cleanPhone || !existingCustomerMap.has(cleanPhone)) && !existingCustomerMap.has(cleanName)) {
+        const newCust: Customer = {
+          id: `KH_${Date.now()}_${Math.floor(1000 + Math.random() * 9000)}`,
+          name: rawName,
+          phone: rawPhone || '',
+          address: ord.customerAddress || '',
+          debt: ord.debtAmount || 0,
+          totalSpent: ord.total || 0,
+          orderCount: 1,
+          createdAt: ord.createdAt || new Date().toISOString(),
+          updatedAt: new Date().toISOString(),
+        };
+        newCustomersToAdd.push(newCust);
+        if (cleanPhone) existingCustomerMap.set(cleanPhone, newCust);
+        existingCustomerMap.set(cleanName, newCust);
+      }
+    }
+
+    let nextCustomers = stateRef.current.customers;
+    if (newCustomersToAdd.length > 0) {
+      nextCustomers = [...newCustomersToAdd, ...stateRef.current.customers];
+      setCustomers(nextCustomers);
+      cloudSyncCustomersBatch(newCustomersToAdd);
+    }
+
+    // 5. Update Emergency Vault Snapshot
+    saveVaultSnapshot(
+      {
+        timestamp: new Date().toISOString(),
+        reason: 'excel_order_restore',
+        products: nextProducts,
+        customers: nextCustomers,
+        orders: nextOrders,
+        debtPayments: stateRef.current.debtPayments,
+        receiptSettings: stateRef.current.receiptSettings,
+      },
+      true
+    );
+
+    return {
+      restoredOrdersCount: newOrders.length,
+      restoredProductsCount: createdProducts.length,
+    };
+  };
+
+  // ADR-0018: Customer Sentinel Snapshot Tools
+  const restoreCustomerFromOrder = (
+    customerId: string,
+    orderId: string
+  ): { success: boolean; message: string } => {
+    const cust = customers.find(c => c.id === customerId);
+    const ord = orders.find(o => o.id === orderId);
+    if (!cust || !ord) {
+      return { success: false, message: 'Không tìm thấy khách hàng hoặc đơn hàng!' };
+    }
+
+    const { updatedCustomer, log } = restoreCustomerFromOrderSnapshot(cust, ord);
+    setCustomers(prev => prev.map(c => (c.id === customerId ? updatedCustomer : c)));
+    cloudSyncCustomer(updatedCustomer);
+    return { success: true, message: log };
+  };
+
+  const splitCustomerByHistoricalOrderRecord = (customerId: string, targetPhone: string) => {
+    const cust = customers.find(c => c.id === customerId);
+    if (!cust) return;
+
+    const { customerA, customerB, ordersToUpdate } = splitCustomerByHistoricalOrder(
+      cust,
+      targetPhone,
+      orders
+    );
+    setCustomers(prev => [...prev.filter(c => c.id !== customerId), customerA, customerB]);
+    cloudSyncCustomer(customerA);
+    cloudSyncCustomer(customerB);
+
+    if (ordersToUpdate.length > 0) {
+      const updateMap = new Map(ordersToUpdate.map(u => [u.id, u]));
+      setOrders(prev => prev.map(o => updateMap.get(o.id) || o));
+      for (const uo of ordersToUpdate) {
+        cloudSyncOrder(uo);
+      }
+    }
   };
 
   // Import / Export all
@@ -1006,6 +1288,11 @@ export const StoreProvider: React.FC<{ children: React.ReactNode }> = ({ childre
         repairCustomerData,
         splitCustomerRecord,
         mergeCustomerRecords,
+        restoreCustomerFromOrder,
+        splitCustomerByHistoricalOrderRecord,
+        restoreFromExcelOrders,
+        restoreFromVault,
+        getAvailableBackups,
         resetToMockData,
         importAllData,
         exportAllData,

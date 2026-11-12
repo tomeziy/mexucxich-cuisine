@@ -20,18 +20,44 @@ import {
   DollarSign,
   Package,
   FileSpreadsheet,
+  Upload,
   Search,
   X,
 } from 'lucide-react';
-import { exportOrdersToExcel } from '../utils/excel';
+import { exportOrdersToExcel, parseOrdersExcel } from '../utils/excel';
 
 export const ReportsPage: React.FC = () => {
-  const { orders, receiptSettings, deleteOrder } = useStore();
+  const { orders, receiptSettings, deleteOrder, restoreFromExcelOrders } = useStore();
 
   const [dateFilter, setDateFilter] = useState<'today' | '7days' | 'month' | 'all'>('today');
   const [statusFilter, setStatusFilter] = useState<string>('all');
   const [typeFilter, setTypeFilter] = useState<string>('all');
   const [searchQuery, setSearchQuery] = useState('');
+  const [isImporting, setIsImporting] = useState(false);
+
+  const handleImportExcel = async (e: React.ChangeEvent<HTMLInputElement>) => {
+    const file = e.target.files?.[0];
+    if (!file) return;
+
+    setIsImporting(true);
+    try {
+      const parsedOrders = await parseOrdersExcel(file);
+      if (!parsedOrders || parsedOrders.length === 0) {
+        alert('Không tìm thấy dữ liệu đơn hàng hợp lệ trong tệp Excel!');
+        return;
+      }
+
+      const res = restoreFromExcelOrders(parsedOrders);
+      alert(
+        `Khôi phục thành công!\n- Đã nạp: ${parsedOrders.length} đơn hàng (${res.restoredOrdersCount} đơn mới).\n- Thực đơn: đã khôi phục ${res.restoredProductsCount} món ăn vào danh mục.`
+      );
+    } catch (err: any) {
+      alert(`Lỗi khi đọc tệp báo cáo Excel: ${err?.message || err}`);
+    } finally {
+      setIsImporting(false);
+      if (e.target) e.target.value = '';
+    }
+  };
 
   // Modal for reprint
   const [selectedOrder, setSelectedOrder] = useState<Order | null>(null);
@@ -175,14 +201,31 @@ export const ReportsPage: React.FC = () => {
           </button>
         </div>
 
-        <button
-          onClick={() => exportOrdersToExcel(filteredOrders)}
-          className="px-3.5 py-2 rounded-xl border border-slate-200 bg-white hover:bg-slate-50 text-slate-700 text-xs font-bold transition flex items-center gap-1.5 shrink-0"
-          title="Xuất báo cáo danh sách đơn ra Excel (.xlsx)"
-        >
-          <FileSpreadsheet className="w-4 h-4 text-emerald-600" />
-          <span>Xuất báo cáo Excel</span>
-        </button>
+        <div className="flex items-center gap-2 shrink-0">
+          <label
+            className="px-3.5 py-2 rounded-xl border border-slate-200 bg-white hover:bg-slate-50 text-slate-700 text-xs font-bold transition flex items-center gap-1.5 shrink-0 cursor-pointer shadow-xs"
+            title="Nhập báo cáo đơn hàng hàng ngày từ Excel để tự động khôi phục đơn và thực đơn món ăn"
+          >
+            <Upload className="w-4 h-4 text-blue-600" />
+            <span>{isImporting ? 'Đang nạp...' : 'Nhập báo cáo Excel'}</span>
+            <input
+              type="file"
+              accept=".xlsx, .xls"
+              onChange={handleImportExcel}
+              disabled={isImporting}
+              className="hidden"
+            />
+          </label>
+
+          <button
+            onClick={() => exportOrdersToExcel(filteredOrders)}
+            className="px-3.5 py-2 rounded-xl border border-slate-200 bg-white hover:bg-slate-50 text-slate-700 text-xs font-bold transition flex items-center gap-1.5 shrink-0 shadow-xs"
+            title="Xuất báo cáo danh sách đơn ra Excel (.xlsx)"
+          >
+            <FileSpreadsheet className="w-4 h-4 text-emerald-600" />
+            <span>Xuất báo cáo Excel</span>
+          </button>
+        </div>
       </div>
 
       {/* 3 Metric Cards */}

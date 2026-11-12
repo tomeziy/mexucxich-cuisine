@@ -66,14 +66,16 @@ export const CustomersPage: React.FC = () => {
     repairCustomerData,
     splitCustomerRecord,
     mergeCustomerRecords,
+    restoreCustomerFromOrder,
+    splitCustomerByHistoricalOrderRecord,
   } = useStore();
 
   const [searchQuery, setSearchQuery] = useState('');
   const [filterOnlyDebt, setFilterOnlyDebt] = useState(false);
 
-  // ADR-0017: Customer Data Sentinel State & Audit
+  // ADR-0017 & ADR-0018: Customer Data Sentinel State & Historical Audit
   const [isSentinelModalOpen, setIsSentinelModalOpen] = useState(false);
-  const auditResult = useMemo(() => auditCustomerData(customers), [customers]);
+  const auditResult = useMemo(() => auditCustomerData(customers, orders), [customers, orders]);
 
   const handleAutoHealSentinel = () => {
     const res = repairCustomerData();
@@ -1581,7 +1583,7 @@ export const CustomersPage: React.FC = () => {
         />
       )}
 
-      {/* MODAL: CUSTOMER DATA SENTINEL (ADR-0017) */}
+      {/* MODAL: CUSTOMER DATA SENTINEL (ADR-0017 & ADR-0018) */}
       <CustomerSentinelModal
         isOpen={isSentinelModalOpen}
         onClose={() => setIsSentinelModalOpen(false)}
@@ -1591,6 +1593,14 @@ export const CustomersPage: React.FC = () => {
         onRepairAll={() => repairCustomerData()}
         onSplitCustomer={(customerId, type) => splitCustomerRecord(customerId, type)}
         onMergeCustomers={(primaryId, duplicateId) => mergeCustomerRecords(primaryId, duplicateId)}
+        onRestoreFromOrder={(customerId, orderId) => {
+          const res = restoreCustomerFromOrder(customerId, orderId);
+          alert(res.message);
+        }}
+        onSplitByHistoricalOrder={(customerId, targetPhone) => {
+          splitCustomerByHistoricalOrderRecord(customerId, targetPhone);
+          alert(`Đã tách thành công khách hàng mới với số điện thoại ${targetPhone}!`);
+        }}
         onEditCustomer={cust => {
           setEditingCustomer(cust);
           setEditCustomerName(cust.name);

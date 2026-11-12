@@ -164,6 +164,17 @@ Bảo vệ toàn vẹn danh bạ và ngăn chặn sai sót nhầm lẫn khách h
   - Nút "Tự động sửa toàn bộ" để khôi phục nhanh mọi lỗi danh bạ đã nhận diện.
 _Avoid_: Nhầm khách khi lên đơn giao hàng, khách bị dính chùm 2 SĐT hoặc 2 địa chỉ, mất dấu vết đơn hàng cũ, trùng SĐT nhiều tài khoản.
 
+**Chống teo thực đơn, Đồng bộ Cloud phòng vệ, Hầm cứu hộ & Khôi phục đơn từ Excel (Catalog Anti-Shrink Guard, Defensive Cloud Sync, Emergency Vault & Excel Recovery - ADR-0018)**:
+Bảo vệ toàn vẹn tuyệt đối dữ liệu bán hàng và danh mục thực đơn:
+(1) **Khử nút Reset nguy hiểm ở thanh điều hướng (`Navbar.tsx`):** Xóa bỏ hoàn toàn nút "Dữ liệu mẫu" (`RotateCcw`) khỏi thanh điều hướng chung; chuyển thao tác đặt lại dữ liệu vào sâu trong trang Cài đặt và bắt buộc nhập đúng chữ xác nhận ("XAC NHAN" hoặc "RESET") trước khi thực thi; tự động lưu một bản sao lưu khẩn cấp vào Hầm Cứu Hộ trước khi xóa.
+(2) **Bộ lọc chống teo thực đơn (`applyCatalogAntiShrinkGuard`):** Khi đồng bộ từ Cloud về máy (khi mở trang, chuyển tab hoặc bấm nút đồng bộ), nếu dữ liệu tải về có số lượng món ít hơn thực đơn cục bộ hiện tại (ví dụ: Cloud có 20 món nhưng máy có 83 món), hệ thống tự động chặn hành vi ghi đè teo nhỏ và thực hiện hợp nhất bảo toàn trọn vẹn 100% món ăn cục bộ.
+(3) **Bộ khử lỗi Cloud phòng vệ (`safeUpsert` & `PGRST204` Fallback):** Tự động phát hiện lỗi thiếu cột `updated_at` trên Supabase (mã `PGRST204`), ngay lập tức tự động loại bỏ trường `updated_at` và gửi lại yêu cầu upsert thành công mà không báo lỗi giả hay dừng đồng bộ; đảm bảo việc lưu dữ liệu lên Cloud luôn thông suốt kể cả khi cơ sở dữ liệu trên máy chủ chưa kịp cập nhật SQL.
+(4) **Hầm Cứu Hộ Khẩn Cấp & Bản sao lưu cuốn chiếu (`vault.ts`):** Tự động duy trì bản sao lưu cuốn chiếu hàng ngày (`mxc_backup_daily_YYYY-MM-DD`, tự động dọn dẹp sau 7 ngày) và Hầm Cứu Hộ (`mxc_emergency_vault`). Hầm Cứu Hộ được bảo vệ nghiêm ngặt chống ghi đè bởi các tập dữ liệu nhỏ hơn. Cung cấp nút bấm 1 click trong Cài đặt để khôi phục tức thời toàn bộ 83+ món và đơn hàng.
+(5) **Bộ nhập Báo cáo Excel phục hồi đơn & thực đơn (`excel.ts` & `ReportsPage.tsx`):** Tích hợp nút "Nhập báo cáo Excel" ngay cạnh "Xuất báo cáo Excel". Khi chủ quán tải lên bất kỳ tệp báo cáo hàng ngày nào (`mexucxich_bao_cao_*.xlsx`), hệ thống tự động phân tích chi tiết chuỗi "Món Đã Mua" (hỗ trợ số lượng lẻ `0.59kg`, định dạng tiền tệ `145.000đ` và tên món có đóng mở ngoặc), tái tạo lại toàn bộ đơn hàng và tự động trích xuất các món ăn bị thiếu để khôi phục ngay vào danh mục thực đơn tiệm.
+(6) **Bộ quét & Phục hồi lệch thông tin khách so với đơn cũ (`customerSentinel.ts`):** Đối soát thông tin khách hàng trong danh bạ CRM với lịch sử đơn hàng thực tế; phát hiện các hồ sơ bị ghi đè lệch SĐT/Địa chỉ/Tên; cung cấp công cụ 1 click "Khôi phục theo đơn này" và "Tách thành 2 khách hàng" ngay trong Trung tâm Sentinel.
+_Avoid_: Thực đơn bị tụt từ 83 món xuống 28 món, bấm nhầm nút reset mất dữ liệu, Cloud thiếu cột làm hỏng lưu trữ, tải về đè mất dữ liệu trên máy, mất đơn hàng mà không có cách khôi phục nhanh.
+
+
 
 
 

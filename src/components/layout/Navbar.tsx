@@ -1,19 +1,13 @@
 import React from 'react';
 import { useStore } from '../../context/StoreContext';
-import { RotateCcw, UtensilsCrossed, Clock } from 'lucide-react';
+import { UtensilsCrossed, Clock } from 'lucide-react';
 
 export const Navbar: React.FC = () => {
-  const { orders, resetToMockData, receiptSettings } = useStore();
+  const { orders, receiptSettings } = useStore();
 
   const activeOrdersCount = orders.filter(
     o => o.status === 'preparing' || o.status === 'delivering'
   ).length;
-
-  const handleReset = () => {
-    if (window.confirm('Khôi phục toàn bộ dữ liệu mẫu ban đầu (8 món, 4 khách hàng)? Dữ liệu hiện tại sẽ được làm mới.')) {
-      resetToMockData();
-    }
-  };
 
   return (
     <header className="bg-white border-b border-slate-200 sticky top-0 z-30 shadow-xs">
@@ -46,15 +40,6 @@ export const Navbar: React.FC = () => {
               <span>{activeOrdersCount} đơn đang giao</span>
             </div>
           )}
-
-          <button
-            onClick={handleReset}
-            title="Làm mới dữ liệu về mặc định"
-            className="flex items-center gap-1.5 text-xs text-slate-500 hover:text-slate-800 px-2.5 py-1.5 rounded-lg border border-slate-200 hover:bg-slate-50 transition"
-          >
-            <RotateCcw className="w-3.5 h-3.5" />
-            <span className="hidden sm:inline">Dữ liệu mẫu</span>
-          </button>
         </div>
       </div>
     </header>

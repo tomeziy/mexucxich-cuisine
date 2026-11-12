@@ -61,6 +61,27 @@ export const CUSTOMER_HEADER_ALIASES = {
 };
 
 /**
+ * Header alias dictionary for Orders (ADR-0018)
+ */
+export const ORDER_HEADER_ALIASES = {
+  stt: ['stt', 'sothutu', 'sohang'],
+  id: ['madonhang', 'madon', 'mahd', 'id', 'orderid', 'code'],
+  createdAt: ['thoigian', 'ngaytao', 'ngay', 'thoigiangiaodich', 'createdat', 'time', 'date'],
+  customerName: ['khachhang', 'tenkhachhang', 'tenkhach', 'nguoimua', 'customer', 'customername'],
+  customerPhone: ['sodienthoai', 'sdt', 'dienthoai', 'phone', 'tel', 'customerphone'],
+  orderType: ['hinhthuc', 'loaidon', 'loaihinh', 'ordertype', 'type'],
+  status: ['trangthai', 'tinhtrang', 'status'],
+  items: ['mondamua', 'sanpham', 'chitiet', 'danhsachmon', 'items', 'mon', 'hanghoa'],
+  subtotal: ['tienhang', 'tongtienhang', 'tientruocgiam', 'subtotal'],
+  discountAmount: ['giamgia', 'chietkhau', 'tiengiam', 'discount'],
+  shippingFee: ['phiship', 'phivanchuyen', 'tienship', 'shippingfee', 'ship'],
+  total: ['khachphaitra', 'tongcong', 'tongtien', 'thanhtien', 'total'],
+  paymentMethod: ['phuongthuc', 'phuongthucthanhtoan', 'hinhthucthanhtoan', 'paymentmethod'],
+  paidAmount: ['tiendathu', 'dathanhtoan', 'khachtra', 'tiendatra', 'paidamount'],
+  debtAmount: ['ghino', 'tienno', 'conno', 'nohang', 'debtamount'],
+};
+
+/**
  * Parse Vietnamese currency and number strings accurately
  * Handles dots/commas as thousand separators: '130.000' -> 130000, '130,000' -> 130000,
  * strips 'đ', 'VNĐ', 'vnd', spaces, and respects decimals and 'k' suffix.
@@ -555,4 +576,335 @@ export function exportCustomersToExcel(customers: Customer[]): void {
 
   const dateStr = new Date().toISOString().slice(0, 10);
   XLSX.writeFile(workbook, `mexucxich_cong_no_${dateStr}.xlsx`);
+}
+
+/**
+ * Infer item emoji based on dish name keywords
+ */
+export function inferEmojiFromName(name: string): string {
+  const lower = removeVietnameseTones(name.toLowerCase());
+  if (lower.includes('pate')) return '🥣';
+  if (lower.includes('xuc xich') || lower.includes('sausage')) return '🌭';
+  if (lower.includes('bo') || lower.includes('beef') || lower.includes('steak') || lower.includes('aukobe')) return '🥩';
+  if (lower.includes('ga') || lower.includes('chicken')) return '🍗';
+  if (lower.includes('heo') || lower.includes('lon') || lower.includes('pork') || lower.includes('sui cao')) return '🥟';
+  if (lower.includes('muc') || lower.includes('squid')) return '🦑';
+  if (lower.includes('tom') || lower.includes('shrimp')) return '🦐';
+  if (lower.includes('ca') || lower.includes('fish')) return '🐟';
+  if (lower.includes('lau') || lower.includes('hotpot') || lower.includes('soup')) return '🍲';
+  if (lower.includes('banh') || lower.includes('bread')) return '🥖';
+  return '🌭';
+}
+
+/**
+ * Infer unit string based on dish name keywords
+ */
+export function inferUnitFromName(name: string): string {
+  const lower = name.toLowerCase();
+  if (lower.includes('500g')) return 'Gói 500g';
+  if (lower.includes('250g')) return 'Hũ 250g';
+  if (lower.includes('200g')) return 'Hũ 200g';
+  if (lower.includes('1kg')) return 'Gói 1kg';
+  if (lower.includes('kg') || lower.includes('ký') || lower.includes('ky') || lower.includes('can ky')) return 'kg';
+  if (lower.includes('hu') || lower.includes('hũ')) return 'Hũ';
+  if (lower.includes('khay')) return 'Khay';
+  if (lower.includes('hop') || lower.includes('hộp')) return 'Hộp';
+  if (lower.includes('chai')) return 'Chai';
+  if (lower.includes('set')) return 'Set';
+  return 'Gói';
+}
+
+/**
+ * Parses a combined "Món Đã Mua" string into individual order items with name, qty, price.
+ * Handles formats like:
+ * "Xúc xích Heo Thảo Mộc (x1 - 145.000đ), Lõi vai bò vân tuyết Aukobe (Cân ký lẻ) (x0.59 - 380.000đ)"
+ */
+export function parseOrderItemsString(
+  itemsStr: string
+): Array<{ name: string; qty: number; price: number }> {
+  if (!itemsStr || typeof itemsStr !== 'string') return [];
+  const trimmed = itemsStr.trim();
+  if (!trimmed) return [];
+
+  // Split on item boundaries: typically "), "
+  const rawParts = trimmed.split(/\)\s*,\s*/);
+  const items: Array<{ name: string; qty: number; price: number }> = [];
+
+  for (let idx = 0; idx < rawParts.length; idx++) {
+    let part = rawParts[idx].trim();
+    if (!part) continue;
+    // Re-attach closing paren if not the last or if stripped by split
+    if (!part.endsWith(')')) {
+      part += ')';
+    }
+
+    // Match "Name (xQty - Price)"
+    const matchWithPrice = part.match(/^(.*?)\s*\(\s*x\s*([\d.,]+)\s*-\s*([^)]+)\)$/i);
+    if (matchWithPrice) {
+      const name = matchWithPrice[1].trim();
+      const qty = parseFloat(matchWithPrice[2].replace(',', '.')) || 1;
+      const price = parseVietnameseNumber(matchWithPrice[3]);
+      if (name) {
+        items.push({ name, qty, price });
+        continue;
+      }
+    }
+
+    // Match "Name (xQty)"
+    const matchQtyOnly = part.match(/^(.*?)\s*\(\s*x\s*([\d.,]+)\s*\)$/i);
+    if (matchQtyOnly) {
+      const name = matchQtyOnly[1].trim();
+      const qty = parseFloat(matchQtyOnly[2].replace(',', '.')) || 1;
+      if (name) {
+        items.push({ name, qty, price: 0 });
+        continue;
+      }
+    }
+
+    // Fallback: whole part as name
+    const cleanedName = part.replace(/\)$/, '').trim();
+    if (cleanedName) {
+      items.push({ name: cleanedName, qty: 1, price: 0 });
+    }
+  }
+
+  return items;
+}
+
+/**
+ * Parse an uploaded daily Excel report file (e.g. mexucxich_bao_cao_*.xlsx)
+ * Reconstructs Order[] with full items, customer information, and financial details.
+ */
+export async function parseOrdersExcel(
+  file: File | ArrayBuffer | Uint8Array
+): Promise<Order[]> {
+  return new Promise((resolve, reject) => {
+    const processWorkbook = (wb: XLSX.WorkBook) => {
+      try {
+        const allOrders: Order[] = [];
+
+        // Scan sheets: prefer sheets with "don hang" or "bao cao", otherwise all sheets
+        const targetSheetNames = wb.SheetNames.filter(n => {
+          const clean = removeVietnameseTones(n.toLowerCase());
+          return clean.includes('don hang') || clean.includes('bao cao') || clean.includes('lich su');
+        });
+
+        const sheetNamesToScan = targetSheetNames.length > 0 ? targetSheetNames : wb.SheetNames;
+
+        for (const sheetName of sheetNamesToScan) {
+          const worksheet = wb.Sheets[sheetName];
+          if (!worksheet) continue;
+
+          const rawRows: any[][] = XLSX.utils.sheet_to_json(worksheet, { header: 1, defval: '' });
+          if (!rawRows || rawRows.length === 0) continue;
+
+          const scan = findHeaderRowInSheet(rawRows, ORDER_HEADER_ALIASES, 'items');
+          if (!scan) continue;
+
+          const dataRows = rawRows.slice(scan.headerRowIndex + 1);
+          for (let rIdx = 0; rIdx < dataRows.length; rIdx++) {
+            const row = dataRows[rIdx];
+            if (!Array.isArray(row) || row.length === 0) continue;
+
+            let id = '';
+            let createdAt = '';
+            let customerName = 'Khách lẻ';
+            let customerPhone = '';
+            let orderType: 'direct' | 'delivery' = 'direct';
+            let status: any = 'completed';
+            let itemsRaw = '';
+            let subtotal = 0;
+            let discountAmount = 0;
+            let shippingFee = 0;
+            let total = 0;
+            let paymentMethod: 'cash' | 'transfer' | 'debt' = 'cash';
+            let paidAmount = 0;
+            let debtAmount = 0;
+
+            scan.columnMap.forEach((field, colIdx) => {
+              const val = row[colIdx];
+              if (field === 'id') {
+                const rawId = String(val || '').trim();
+                if (rawId && !isNaN(Number(rawId)) && Number(rawId) < 1000) {
+                  // STT number like 1, 2, 3...
+                  id = `HD_${Date.now()}_${rIdx}`;
+                } else if (rawId) {
+                  id = rawId;
+                }
+              } else if (field === 'createdAt') {
+                if (typeof val === 'number') {
+                  // Excel date serial number
+                  try {
+                    const dateObj = new Date(Math.round((val - 25569) * 86400 * 1000));
+                    createdAt = !isNaN(dateObj.getTime()) ? dateObj.toISOString() : new Date().toISOString();
+                  } catch {
+                    createdAt = new Date().toISOString();
+                  }
+                } else if (val) {
+                  const d = new Date(String(val).trim());
+                  createdAt = !isNaN(d.getTime()) ? d.toISOString() : new Date().toISOString();
+                }
+              } else if (field === 'customerName') {
+                const name = String(val || '').trim();
+                if (name) customerName = name;
+              } else if (field === 'customerPhone') {
+                customerPhone = normalizeSinglePhone(val);
+              } else if (field === 'orderType') {
+                const typeStr = removeVietnameseTones(String(val || '').toLowerCase());
+                if (typeStr.includes('giao') || typeStr.includes('ship') || typeStr.includes('delivery')) {
+                  orderType = 'delivery';
+                } else {
+                  orderType = 'direct';
+                }
+              } else if (field === 'status') {
+                const st = removeVietnameseTones(String(val || '').toLowerCase());
+                if (st.includes('huy') || st.includes('cancel')) status = 'cancelled';
+                else if (st.includes('dang giao') || st.includes('delivering')) status = 'delivering';
+                else if (st.includes('chuan bi') || st.includes('preparing')) status = 'preparing';
+                else status = 'completed';
+              } else if (field === 'items') {
+                itemsRaw = String(val || '').trim();
+              } else if (field === 'subtotal') {
+                subtotal = parseVietnameseNumber(val);
+              } else if (field === 'discountAmount') {
+                discountAmount = parseVietnameseNumber(val);
+              } else if (field === 'shippingFee') {
+                shippingFee = parseVietnameseNumber(val);
+              } else if (field === 'total') {
+                total = parseVietnameseNumber(val);
+              } else if (field === 'paymentMethod') {
+                const pm = removeVietnameseTones(String(val || '').toLowerCase());
+                if (pm.includes('no') || pm.includes('debt')) paymentMethod = 'debt';
+                else if (pm.includes('chuyen') || pm.includes('ck') || pm.includes('transfer')) paymentMethod = 'transfer';
+                else paymentMethod = 'cash';
+              } else if (field === 'paidAmount') {
+                paidAmount = parseVietnameseNumber(val);
+              } else if (field === 'debtAmount') {
+                debtAmount = parseVietnameseNumber(val);
+              }
+            });
+
+            if (!itemsRaw && total === 0) continue;
+
+            const parsedItems = parseOrderItemsString(itemsRaw);
+            if (parsedItems.length === 0 && !itemsRaw) continue;
+
+            if (!id) {
+              id = `HD_${Date.now()}_${rIdx}_${Math.floor(100 + Math.random() * 900)}`;
+            }
+            if (!createdAt) {
+              createdAt = new Date().toISOString();
+            }
+            if (!subtotal) {
+              subtotal = parsedItems.reduce((s, it) => s + it.price * it.qty, 0);
+            }
+            if (!total) {
+              total = Math.max(0, subtotal - discountAmount + shippingFee);
+            }
+            if (debtAmount > 0 && paymentMethod === 'cash') {
+              paymentMethod = 'debt';
+            }
+
+            const orderItems = parsedItems.map((pi, pIdx) => ({
+              productId: `SP_REC_${Date.now()}_${pIdx}`,
+              name: pi.name,
+              unit: inferUnitFromName(pi.name),
+              price: pi.price,
+              cost: Math.round(pi.price * 0.65),
+              qty: pi.qty,
+              image: inferEmojiFromName(pi.name),
+            }));
+
+            allOrders.push({
+              id,
+              createdAt,
+              updatedAt: createdAt,
+              customerId: customerPhone ? `KH_${customerPhone}` : 'KH_RETAIL',
+              customerName,
+              customerPhone,
+              customerAddress: '',
+              orderType,
+              status,
+              items: orderItems,
+              subtotal,
+              discountType: 'cash',
+              discountValue: discountAmount,
+              discountAmount,
+              shippingFee,
+              total,
+              paymentMethod,
+              paidAmount,
+              debtAmount,
+            });
+          }
+        }
+
+        resolve(allOrders);
+      } catch (err) {
+        reject(err);
+      }
+    };
+
+    if (file instanceof Uint8Array) {
+      const wb = XLSX.read(file, { type: 'array' });
+      processWorkbook(wb);
+    } else if (file instanceof ArrayBuffer) {
+      const wb = XLSX.read(new Uint8Array(file), { type: 'array' });
+      processWorkbook(wb);
+    } else if (typeof File !== 'undefined' && file instanceof File) {
+      const reader = new FileReader();
+      reader.onload = (e) => {
+        try {
+          const data = new Uint8Array(e.target?.result as ArrayBuffer);
+          const wb = XLSX.read(data, { type: 'array' });
+          processWorkbook(wb);
+        } catch (err) {
+          reject(err);
+        }
+      };
+      reader.onerror = reject;
+      reader.readAsArrayBuffer(file);
+    } else {
+      reject(new Error('Invalid file or buffer provided to parseOrdersExcel'));
+    }
+  });
+}
+
+/**
+ * Extracts any dishes/products mentioned in imported orders that are not present
+ * in the existing product catalog, ready to be restored into the store menu.
+ */
+export function extractMissingProductsFromOrders(
+  orders: Order[],
+  existingProducts: Product[] = []
+): Array<Omit<Product, 'id'>> {
+  const existingNames = new Set(
+    existingProducts.map(p => removeVietnameseTones((p.name || '').toLowerCase()).trim())
+  );
+
+  const missingMap = new Map<string, Omit<Product, 'id'>>();
+
+  for (const o of orders) {
+    for (const item of o.items || []) {
+      if (!item || !item.name) continue;
+      const normalized = removeVietnameseTones(item.name.toLowerCase()).trim();
+      if (!normalized) continue;
+
+      if (!existingNames.has(normalized) && !missingMap.has(normalized)) {
+        missingMap.set(normalized, {
+          name: item.name.trim(),
+          category: 'Đặc sản tuyển chọn',
+          unit: item.unit || inferUnitFromName(item.name),
+          price: item.price || 0,
+          cost: item.cost || Math.round((item.price || 0) * 0.65),
+          stock: 20,
+          image: item.image || inferEmojiFromName(item.name),
+          createdAt: o.createdAt || new Date().toISOString(),
+          updatedAt: new Date().toISOString(),
+        });
+      }
+    }
+  }
+
+  return Array.from(missingMap.values());
 }

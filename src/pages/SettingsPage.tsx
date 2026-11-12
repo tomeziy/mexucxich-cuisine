@@ -25,6 +25,7 @@ import {
   ExternalLink,
   HelpCircle,
   CheckCircle2,
+  ShieldAlert,
 } from 'lucide-react';
 import {
   testSupabaseConnection,
@@ -113,6 +114,7 @@ export const SettingsPage: React.FC = () => {
     exportAllData,
     importAllData,
     resetToMockData,
+    restoreFromVault,
   } = useStore();
 
   const [settings, setSettings] = useState<ReceiptSettings>(receiptSettings);
@@ -263,10 +265,31 @@ export const SettingsPage: React.FC = () => {
   };
 
   const handleResetData = () => {
-    if (window.confirm('CẢNH BÁO: Hành động này sẽ đặt lại toàn bộ sản phẩm, khách hàng và xóa lịch sử đơn hàng về dữ liệu mẫu ban đầu. Bạn có chắc chắn?')) {
+    const input = window.prompt(
+      'CẢNH BÁO NGUY HIỂM: Hành động này sẽ đặt lại toàn bộ sản phẩm, khách hàng và xóa lịch sử đơn hàng về dữ liệu mẫu ban đầu!\n\nNếu bạn chắc chắn muốn xóa, hãy nhập đúng chữ: "XAC NHAN" hoặc "RESET":'
+    );
+    if (!input) return;
+    const clean = input.trim().toUpperCase();
+    if (clean === 'XAC NHAN' || clean === 'XÁC NHẬN' || clean === 'RESET') {
       resetToMockData();
-      alert('Đã khôi phục dữ liệu về mặc định ban đầu!');
+      alert('Đã khôi phục dữ liệu về mặc định ban đầu! (Bản sao lưu trước khi xóa đã được cất an toàn trong Hầm Cứu Hộ)');
       window.location.reload();
+    } else {
+      alert('Đã hủy thao tác. Bạn đã không nhập đúng từ xác nhận.');
+    }
+  };
+
+  const handleRestoreVault = () => {
+    if (
+      window.confirm(
+        'Khôi phục toàn bộ danh mục sản phẩm và lịch sử đơn hàng từ Hầm Cứu Hộ Khẩn Cấp (Emergency Vault)?\nDữ liệu sẽ được hợp nhất bảo toàn nguyên vẹn.'
+      )
+    ) {
+      const res = restoreFromVault();
+      alert(res.message);
+      if (res.success) {
+        window.location.reload();
+      }
     }
   };
 
@@ -955,19 +978,29 @@ export const SettingsPage: React.FC = () => {
               Xuất toàn bộ danh mục sản phẩm, khách hàng, dư nợ và đơn hàng thành file JSON an toàn. Không phụ thuộc máy chủ, không lo mất mạng.
             </p>
 
-            <div className="grid grid-cols-1 sm:grid-cols-2 gap-2.5 pt-1 text-xs font-bold">
+            <div className="grid grid-cols-1 sm:grid-cols-3 gap-2.5 pt-1 text-xs font-bold">
+              <button
+                type="button"
+                onClick={handleRestoreVault}
+                className="py-2.5 px-3 rounded-xl border border-amber-300 bg-amber-50 hover:bg-amber-100 text-amber-900 transition flex items-center justify-center gap-2"
+                title="Khôi phục toàn bộ danh mục 83+ món và đơn hàng từ Hầm Cứu Hộ Khẩn Cấp (Emergency Vault)"
+              >
+                <ShieldAlert className="w-4 h-4 text-amber-600" />
+                <span>Khôi phục Hầm Cứu Hộ</span>
+              </button>
+
               <button
                 type="button"
                 onClick={handleBackup}
                 className="py-2.5 px-3 rounded-xl border border-slate-200 bg-slate-50 hover:bg-slate-100 text-slate-700 transition flex items-center justify-center gap-2"
               >
                 <Download className="w-4 h-4 text-emerald-600" />
-                <span>Sao lưu toàn bộ (JSON)</span>
+                <span>Sao lưu (JSON)</span>
               </button>
 
               <label className="py-2.5 px-3 rounded-xl border border-slate-200 bg-slate-50 hover:bg-slate-100 text-slate-700 transition flex items-center justify-center gap-2 cursor-pointer">
                 <Upload className="w-4 h-4 text-blue-600" />
-                <span>Khôi phục từ file</span>
+                <span>Khôi phục file</span>
                 <input
                   type="file"
                   accept=".json"

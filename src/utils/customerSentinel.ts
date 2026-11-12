@@ -22,12 +22,21 @@ export interface DuplicatePhoneGroup {
   customers: Customer[];
 }
 
+export interface CustomerOrderDiscrepancy {
+  customer: Customer;
+  historicalOrders: Order[];
+  differingPhones: string[];
+  differingAddresses: string[];
+  differingNames: string[];
+}
+
 export interface CustomerAnomalyAuditResult {
   totalAnomalies: number;
   toneTwins: ToneTwinGroup[];
   multiPhoneAnomalies: MultiPhoneAnomaly[];
   multiAddressAnomalies: MultiAddressAnomaly[];
   duplicatePhoneGroups: DuplicatePhoneGroup[];
+  orderDiscrepancies: CustomerOrderDiscrepancy[];
 }
 
 export interface MigrationRepairResult {
@@ -122,12 +131,17 @@ export function extractIndividualAddresses(addressStr: string): string[] {
  * 2. Multi-phone anomalies (concatenated or delimited phones)
  * 3. Multi-address anomalies (slashed or delimited addresses)
  * 4. Duplicate phone numbers across different customer records
+ * 5. Historical Order Discrepancies (customer profile phone/address/name overwritten compared to past orders)
  */
-export function auditCustomerData(customers: Customer[]): CustomerAnomalyAuditResult {
+export function auditCustomerData(
+  customers: Customer[],
+  orders: Order[] = []
+): CustomerAnomalyAuditResult {
   const toneMap = new Map<string, Customer[]>();
   const multiPhoneAnomalies: MultiPhoneAnomaly[] = [];
   const multiAddressAnomalies: MultiAddressAnomaly[] = [];
   const phoneMap = new Map<string, Customer[]>();
+  const orderDiscrepancies: CustomerOrderDiscrepancy[] = [];
 
   for (const c of customers) {
     // 1. Group for Tone Twins (excluding generic names)
@@ -183,6 +197,60 @@ export function auditCustomerData(customers: Customer[]): CustomerAnomalyAuditRe
         phoneMap.set(norm, list);
       }
     }
+
+    // 5. Check Historical Order Discrepancies
+    if (orders.length > 0 && !isGenericCustomerName(c.name)) {
+      const custOrders = orders.filter(
+        o => o.customerId === c.id || (c.phone && o.customerPhone && isPhoneMatching(o.customerPhone, c.phone))
+      );
+
+      const differingPhones = new Set<string>();
+      const differingAddresses = new Set<string>();
+      const differingNames = new Set<string>();
+
+      const cPhoneNorm = normalizeSinglePhone(c.phone || '');
+      const cAddrNorm = (c.address || '').trim().toLowerCase();
+      const cNameNorm = (c.name || '').normalize('NFC').trim();
+
+      for (const ord of custOrders) {
+        const ordPhone = normalizeSinglePhone(ord.customerPhone || '');
+        if (ordPhone && cPhoneNorm && ordPhone !== cPhoneNorm && !isPhoneMatching(ordPhone, cPhoneNorm)) {
+          differingPhones.add(ord.customerPhone!.trim());
+        }
+
+        const ordAddr = (ord.customerAddress || '').trim();
+        if (
+          ordAddr &&
+          ordAddr.length >= 3 &&
+          cAddrNorm &&
+          !cAddrNorm.includes(ordAddr.toLowerCase()) &&
+          !ordAddr.toLowerCase().includes(cAddrNorm)
+        ) {
+          differingAddresses.add(ordAddr);
+        }
+
+        const ordName = (ord.customerName || '').normalize('NFC').trim();
+        if (
+          ordName &&
+          !isGenericCustomerName(ordName) &&
+          ordName !== cNameNorm &&
+          removeVietnameseTones(ordName) === removeVietnameseTones(cNameNorm)
+        ) {
+          // Tone twin name or distinct spelling in order snapshot
+          differingNames.add(ordName);
+        }
+      }
+
+      if (differingPhones.size > 0 || differingAddresses.size > 0 || differingNames.size > 0) {
+        orderDiscrepancies.push({
+          customer: c,
+          historicalOrders: custOrders,
+          differingPhones: Array.from(differingPhones),
+          differingAddresses: Array.from(differingAddresses),
+          differingNames: Array.from(differingNames),
+        });
+      }
+    }
   }
 
   // Filter Tone Twins with > 1 customers
@@ -205,7 +273,8 @@ export function auditCustomerData(customers: Customer[]): CustomerAnomalyAuditRe
     toneTwins.length +
     multiPhoneAnomalies.length +
     multiAddressAnomalies.length +
-    duplicatePhoneGroups.length;
+    duplicatePhoneGroups.length +
+    orderDiscrepancies.length;
 
   return {
     totalAnomalies,
@@ -213,6 +282,7 @@ export function auditCustomerData(customers: Customer[]): CustomerAnomalyAuditRe
     multiPhoneAnomalies,
     multiAddressAnomalies,
     duplicatePhoneGroups,
+    orderDiscrepancies,
   };
 }
 
@@ -659,4 +729,90 @@ export function mergeDuplicateCustomers(
   }
 
   return { mergedCustomer, ordersToUpdate };
+}
+
+/**
+ * 1-Click Restoration from Original Order Snapshot (ADR-0018)
+ * Restores a customer's overwritten name, phone, or address back to the verified order snapshot.
+ */
+export function restoreCustomerFromOrderSnapshot(
+  customer: Customer,
+  order: Order
+): {
+  updatedCustomer: Customer;
+  log: string;
+} {
+  const updatedCustomer: Customer = {
+    ...customer,
+    name: order.customerName || customer.name,
+    phone: order.customerPhone || customer.phone,
+    address: order.customerAddress || customer.address,
+    updatedAt: new Date().toISOString(),
+  };
+
+  const log = `Đã khôi phục thông tin khách "${customer.name}" theo đơn #${order.id}: Tên "${updatedCustomer.name}", SĐT "${updatedCustomer.phone}", ĐC "${updatedCustomer.address}"`;
+  return { updatedCustomer, log };
+}
+
+/**
+ * 1-Click Separation by Historical Order (ADR-0018)
+ * Splits a customer when past orders contained a distinct phone number or person.
+ * Automatically reassigns orders matching the target phone to the newly created customer.
+ */
+export function splitCustomerByHistoricalOrder(
+  customer: Customer,
+  targetPhone: string,
+  orders: Order[] = []
+): {
+  customerA: Customer;
+  customerB: Customer;
+  ordersToUpdate: Order[];
+} {
+  const normTarget = normalizeSinglePhone(targetPhone);
+  const matchingOrders = orders.filter(
+    o => o.customerId === customer.id && o.customerPhone && isPhoneMatching(o.customerPhone, normTarget)
+  );
+
+  const snapshotName = matchingOrders.find(o => o.customerName && o.customerName !== customer.name)?.customerName;
+  const snapshotAddr = matchingOrders.find(o => o.customerAddress && o.customerAddress !== customer.address)?.customerAddress;
+
+  const newId = `KH_${Date.now()}_${Math.floor(1000 + Math.random() * 9000)}`;
+  const customerB: Customer = {
+    id: newId,
+    name: snapshotName || `${customer.name} (SĐT ${normTarget.slice(-4)})`,
+    phone: normTarget,
+    address: snapshotAddr || customer.address || '',
+    debt: 0,
+    totalSpent: 0,
+    orderCount: 0,
+    createdAt: new Date().toISOString(),
+    updatedAt: new Date().toISOString(),
+  };
+
+  const ordersToUpdate: Order[] = [];
+  for (const ord of matchingOrders) {
+    ordersToUpdate.push({
+      ...ord,
+      customerId: customerB.id,
+      customerName: customerB.name,
+      updatedAt: new Date().toISOString(),
+    });
+  }
+
+  const remainingOrders = orders.filter(
+    o => o.customerId === customer.id && !ordersToUpdate.some(u => u.id === o.id) && o.status !== 'cancelled'
+  );
+  const ordersB = ordersToUpdate.filter(o => o.status !== 'cancelled');
+
+  const customerA: Customer = {
+    ...customer,
+    orderCount: remainingOrders.length,
+    totalSpent: remainingOrders.reduce((sum, o) => sum + (o.total || 0), 0),
+    updatedAt: new Date().toISOString(),
+  };
+
+  customerB.orderCount = ordersB.length;
+  customerB.totalSpent = ordersB.reduce((sum, o) => sum + (o.total || 0), 0);
+
+  return { customerA, customerB, ordersToUpdate };
 }
