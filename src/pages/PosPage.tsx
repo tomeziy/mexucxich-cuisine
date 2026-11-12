@@ -868,9 +868,39 @@ export const PosPage: React.FC = () => {
                           />
                         </div>
                         <div>
-                          <label className="text-[10px] font-bold text-slate-600 block mb-0.5">
-                            SĐT nhận hàng
-                          </label>
+                          <div className="flex items-center justify-between mb-0.5">
+                            <label className="text-[10px] font-bold text-slate-600 block">
+                              SĐT nhận hàng
+                            </label>
+                            {selectedCustomer && selectedCustomer.phone && selectedCustomer.phone2 && (
+                              <div className="flex items-center gap-1">
+                                <button
+                                  type="button"
+                                  onClick={() => setDeliveryPhone(selectedCustomer.phone)}
+                                  className={`px-1.5 py-0.2 rounded text-[9.5px] font-bold transition ${
+                                    deliveryPhone === selectedCustomer.phone
+                                      ? 'bg-amber-500 text-white shadow-2xs'
+                                      : 'bg-white hover:bg-amber-100 text-amber-800 border border-amber-300'
+                                  }`}
+                                  title={`Chọn SĐT 1: ${selectedCustomer.phone}`}
+                                >
+                                  SĐT 1
+                                </button>
+                                <button
+                                  type="button"
+                                  onClick={() => setDeliveryPhone(selectedCustomer.phone2!)}
+                                  className={`px-1.5 py-0.2 rounded text-[9.5px] font-bold transition ${
+                                    deliveryPhone === selectedCustomer.phone2
+                                      ? 'bg-amber-500 text-white shadow-2xs'
+                                      : 'bg-white hover:bg-amber-100 text-amber-800 border border-amber-300'
+                                  }`}
+                                  title={`Chọn SĐT 2: ${selectedCustomer.phone2}`}
+                                >
+                                  SĐT 2
+                                </button>
+                              </div>
+                            )}
+                          </div>
                           <input
                             type="tel"
                             value={deliveryPhone}

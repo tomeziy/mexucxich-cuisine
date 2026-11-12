@@ -142,7 +142,7 @@ export const transformProductFromDb = (row: any): Product => ({
 export const transformCustomerToDb = (c: Customer) => ({
   id: c.id,
   name: c.name,
-  phone: c.phone || '',
+  phone: c.phone2 ? `${c.phone || ''} / ${c.phone2}` : (c.phone || ''),
   address: c.address || '',
   debt: c.debt || 0,
   total_spent: c.totalSpent || 0,
@@ -151,17 +151,29 @@ export const transformCustomerToDb = (c: Customer) => ({
   updated_at: c.updatedAt || c.createdAt || new Date().toISOString(),
 });
 
-export const transformCustomerFromDb = (row: any): Customer => ({
-  id: row.id,
-  name: row.name,
-  phone: row.phone || '',
-  address: row.address || '',
-  debt: Number(row.debt) || 0,
-  totalSpent: Number(row.total_spent) || 0,
-  orderCount: Number(row.order_count) || 0,
-  createdAt: row.created_at,
-  updatedAt: row.updated_at || row.created_at,
-});
+export const transformCustomerFromDb = (row: any): Customer => {
+  let phone = row.phone || '';
+  let phone2: string | undefined = row.phone2 ? String(row.phone2).trim() : undefined;
+
+  if (!phone2 && phone.includes(' / ')) {
+    const parts = phone.split(' / ');
+    phone = parts[0].trim();
+    phone2 = parts.slice(1).join(' / ').trim() || undefined;
+  }
+
+  return {
+    id: row.id,
+    name: row.name,
+    phone,
+    phone2,
+    address: row.address || '',
+    debt: Number(row.debt) || 0,
+    totalSpent: Number(row.total_spent) || 0,
+    orderCount: Number(row.order_count) || 0,
+    createdAt: row.created_at,
+    updatedAt: row.updated_at || row.created_at,
+  };
+};
 
 export const transformOrderToDb = (o: Order) => ({
   id: o.id,

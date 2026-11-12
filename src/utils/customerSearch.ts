@@ -51,17 +51,19 @@ export function scoreCustomer(
   const nameClean = removeVietnameseTones(nameRaw);
 
   const phoneRaw = customer.phone || '';
-  const normPhones = normalizeVietnamesePhone(phoneRaw);
-  const customerPhones = (normPhones ? normPhones.split(' / ') : phoneRaw.split(/[\/,;\n\r|]|\s+-\s+/))
+  const phone2Raw = customer.phone2 || '';
+  const combinedPhoneRaw = [phoneRaw, phone2Raw].filter(Boolean).join(' / ');
+  const normPhones = normalizeVietnamesePhone(combinedPhoneRaw);
+  const customerPhones = (normPhones ? normPhones.split(' / ') : combinedPhoneRaw.split(/[\/,;\n\r|]|\s+-\s+/))
     .map(p => p.trim())
     .filter(Boolean);
   const customerPhoneDigitsList = customerPhones
     .map(p => p.replace(/\D/g, ''))
     .filter(Boolean);
-  const customerAllDigits = phoneRaw.replace(/\D/g, '');
+  const customerAllDigits = combinedPhoneRaw.replace(/\D/g, '');
 
   const addressClean = customer.address ? removeVietnameseTones(customer.address.normalize('NFC')) : '';
-  const combined = `${nameClean} ${phoneRaw} ${customerAllDigits} ${addressClean}`;
+  const combined = `${nameClean} ${combinedPhoneRaw} ${customerAllDigits} ${addressClean}`;
 
   // Check if search query consists solely of phone number digits / phone punctuation (no alphabetical letters)
   const isPurePhoneQuery = /^[\d\s+\-()./]+$/.test(rawTrimmed) && numericQuery.length >= 3;
@@ -255,7 +257,9 @@ export function findDuplicatePhoneCustomer(
   return (
     customers.find(c => {
       if (excludeCustomerId && c.id === excludeCustomerId) return false;
-      return c.phone && isPhoneMatching(c.phone, norm);
+      const matchPhone1 = Boolean(c.phone && isPhoneMatching(c.phone, norm));
+      const matchPhone2 = Boolean(c.phone2 && isPhoneMatching(c.phone2, norm));
+      return matchPhone1 || matchPhone2;
     }) || null
   );
 }

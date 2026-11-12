@@ -164,9 +164,11 @@ export const CustomerCombobox: React.FC<CustomerComboboxProps> = ({
             <span className="truncate font-bold text-slate-900">
               {selectedCustomer?.name || 'Chọn khách hàng...'}
             </span>
-            {selectedCustomer?.phone && (
+            {selectedCustomer && (selectedCustomer.phone || selectedCustomer.phone2) && (
               <span className="text-[11px] text-slate-500 shrink-0 font-normal">
-                ({selectedCustomer.phone})
+                {selectedCustomer.phone && selectedCustomer.phone2
+                  ? `(${selectedCustomer.phone}, ${selectedCustomer.phone2})`
+                  : `(${selectedCustomer.phone || selectedCustomer.phone2})`}
               </span>
             )}
             {selectedCustomer && selectedCustomer.debt > 0 && (
@@ -263,10 +265,16 @@ export const CustomerCombobox: React.FC<CustomerComboboxProps> = ({
                       <div className="min-w-0 flex-1 space-y-0.5">
                         <div className="flex items-center gap-1.5 flex-wrap">
                           <span className="font-bold text-slate-900 text-xs">{c.name}</span>
-                          {c.phone && (
-                            <span className="text-[11px] text-slate-500 font-mono flex items-center gap-0.5">
+                          {(c.phone || c.phone2) && (
+                            <span className="text-[11px] text-slate-500 font-mono flex items-center gap-1">
                               <Phone className="w-2.5 h-2.5 text-slate-400" />
-                              {c.phone}
+                              <span>{c.phone || ''}</span>
+                              {c.phone && c.phone2 && <span className="text-slate-300">•</span>}
+                              {c.phone2 && (
+                                <span className="text-amber-700 bg-amber-50 px-1 py-0.2 rounded font-semibold text-[10px]">
+                                  SĐT 2: {c.phone2}
+                                </span>
+                              )}
                             </span>
                           )}
                           {c.debt > 0 && (

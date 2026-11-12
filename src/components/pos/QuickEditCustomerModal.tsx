@@ -1,7 +1,7 @@
 import React, { useState, useEffect, useMemo } from 'react';
 import { useStore } from '../../context/StoreContext';
 import { Customer } from '../../types';
-import { normalizeVietnamesePhone } from '../../utils/excel';
+import { normalizeVietnamesePhone, isPhoneMatching } from '../../utils/excel';
 import { findDuplicatePhoneCustomer } from '../../utils/customerSearch';
 import { Edit2, X, AlertTriangle, Info } from 'lucide-react';
 
@@ -21,6 +21,7 @@ export const QuickEditCustomerModal: React.FC<QuickEditCustomerModalProps> = ({
   const { customers, updateCustomer } = useStore();
   const [name, setName] = useState('');
   const [phone, setPhone] = useState('');
+  const [phone2, setPhone2] = useState('');
   const [address, setAddress] = useState('');
   const [error, setError] = useState('');
 
@@ -28,16 +29,26 @@ export const QuickEditCustomerModal: React.FC<QuickEditCustomerModalProps> = ({
     if (customer && isOpen) {
       setName(customer.name || '');
       setPhone(customer.phone || '');
+      setPhone2(customer.phone2 || '');
       setAddress(customer.address || '');
       setError('');
     }
   }, [customer, isOpen]);
 
   // Live duplicate phone check (excluding current customer id)
-  const duplicateCustomer = useMemo(() => {
-    if (!customer) return null;
+  const duplicateCustomer1 = useMemo(() => {
+    if (!customer || !phone.trim()) return null;
     return findDuplicatePhoneCustomer(customers, phone, customer.id);
   }, [customers, phone, customer]);
+
+  const duplicateCustomer2 = useMemo(() => {
+    if (!customer || !phone2.trim()) return null;
+    return findDuplicatePhoneCustomer(customers, phone2, customer.id);
+  }, [customers, phone2, customer]);
+
+  const isSelfDuplicate = useMemo(() => {
+    return Boolean(phone.trim() && phone2.trim() && isPhoneMatching(phone, phone2));
+  }, [phone, phone2]);
 
   if (!isOpen || !customer) return null;
 
@@ -48,23 +59,40 @@ export const QuickEditCustomerModal: React.FC<QuickEditCustomerModalProps> = ({
       return;
     }
 
-    if (duplicateCustomer) {
+    if (duplicateCustomer1) {
       setError(
-        `Số điện thoại này đã thuộc về khách hàng khác: "${duplicateCustomer.name}" (${duplicateCustomer.phone}). Không thể lưu trùng số!`
+        `Số điện thoại chính đã thuộc về khách hàng khác: "${duplicateCustomer1.name}" (${duplicateCustomer1.phone}). Không thể lưu trùng số!`
       );
       return;
     }
 
+    if (duplicateCustomer2) {
+      setError(
+        `Số điện thoại 2 đã thuộc về khách hàng khác: "${duplicateCustomer2.name}" (${duplicateCustomer2.phone}). Không thể lưu trùng số!`
+      );
+      return;
+    }
+
+    if (isSelfDuplicate) {
+      setError('Số điện thoại 2 trùng với số điện thoại chính. Vui lòng nhập 2 số khác nhau!');
+      return;
+    }
+
+    const normPhone1 = normalizeVietnamesePhone(phone.trim()) || phone.trim();
+    const normPhone2 = phone2.trim() ? (normalizeVietnamesePhone(phone2.trim()) || phone2.trim()) : undefined;
+
     const updatedCustomer: Customer = {
       ...customer,
       name: name.trim(),
-      phone: normalizeVietnamesePhone(phone.trim()) || phone.trim(),
+      phone: normPhone1,
+      phone2: normPhone2,
       address: address.trim(),
     };
 
     updateCustomer(customer.id, {
       name: updatedCustomer.name,
       phone: updatedCustomer.phone,
+      phone2: updatedCustomer.phone2,
       address: updatedCustomer.address,
     });
 
@@ -129,7 +157,7 @@ export const QuickEditCustomerModal: React.FC<QuickEditCustomerModalProps> = ({
           </div>
 
           <div>
-            <label className="font-bold text-slate-700 block mb-1">Số điện thoại</label>
+            <label className="font-bold text-slate-700 block mb-1">Số điện thoại chính</label>
             <input
               type="tel"
               value={phone}
@@ -139,17 +167,49 @@ export const QuickEditCustomerModal: React.FC<QuickEditCustomerModalProps> = ({
               }}
               placeholder="0988xxxxxx"
               className={`w-full bg-slate-50 border rounded-xl px-3 py-2 text-xs focus:outline-none font-medium ${
-                duplicateCustomer
+                duplicateCustomer1
                   ? 'border-rose-400 focus:ring-1 focus:ring-rose-500 bg-rose-50/30'
                   : 'border-slate-200 focus:ring-1 focus:ring-amber-500'
               }`}
             />
-            {duplicateCustomer && (
+            {duplicateCustomer1 && (
               <div className="mt-1 p-1.5 bg-rose-50 border border-rose-200 rounded-lg text-[11px] text-rose-700 flex items-start gap-1">
                 <AlertTriangle className="w-3.5 h-3.5 shrink-0 mt-0.5 text-rose-600" />
                 <span>
-                  Trùng SĐT với khách: <strong>{duplicateCustomer.name}</strong> ({duplicateCustomer.phone})
+                  Trùng SĐT với khách: <strong>{duplicateCustomer1.name}</strong> ({duplicateCustomer1.phone})
                 </span>
+              </div>
+            )}
+          </div>
+
+          <div>
+            <label className="font-bold text-slate-700 block mb-1">Số điện thoại 2 (tùy chọn)</label>
+            <input
+              type="tel"
+              value={phone2}
+              onChange={e => {
+                setPhone2(e.target.value);
+                if (error) setError('');
+              }}
+              placeholder="SĐT phụ, người nhận thay..."
+              className={`w-full bg-slate-50 border rounded-xl px-3 py-2 text-xs focus:outline-none font-medium ${
+                duplicateCustomer2 || isSelfDuplicate
+                  ? 'border-rose-400 focus:ring-1 focus:ring-rose-500 bg-rose-50/30'
+                  : 'border-slate-200 focus:ring-1 focus:ring-amber-500'
+              }`}
+            />
+            {duplicateCustomer2 && (
+              <div className="mt-1 p-1.5 bg-rose-50 border border-rose-200 rounded-lg text-[11px] text-rose-700 flex items-start gap-1">
+                <AlertTriangle className="w-3.5 h-3.5 shrink-0 mt-0.5 text-rose-600" />
+                <span>
+                  Trùng SĐT với khách: <strong>{duplicateCustomer2.name}</strong> ({duplicateCustomer2.phone})
+                </span>
+              </div>
+            )}
+            {isSelfDuplicate && (
+              <div className="mt-1 p-1.5 bg-amber-50 border border-amber-200 rounded-lg text-[11px] text-amber-800 flex items-start gap-1">
+                <AlertTriangle className="w-3.5 h-3.5 shrink-0 mt-0.5 text-amber-600" />
+                <span>SĐT 2 trùng với số chính</span>
               </div>
             )}
           </div>
@@ -175,7 +235,7 @@ export const QuickEditCustomerModal: React.FC<QuickEditCustomerModalProps> = ({
             </button>
             <button
               type="submit"
-              disabled={!!duplicateCustomer}
+              disabled={!!duplicateCustomer1 || !!duplicateCustomer2 || isSelfDuplicate}
               className="flex-1 py-2 rounded-xl text-xs font-bold bg-amber-500 hover:bg-amber-600 disabled:opacity-50 disabled:cursor-not-allowed text-white shadow-sm shadow-amber-500/20 transition"
             >
               Lưu thay đổi

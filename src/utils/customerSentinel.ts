@@ -78,11 +78,12 @@ export function findToneTwinCustomers(
 }
 
 /**
- * Extract distinct phone numbers from a customer phone field.
+ * Extract distinct phone numbers from a customer phone field (or both phone and phone2).
  */
-export function extractIndividualPhones(phoneStr: string): string[] {
-  if (!phoneStr) return [];
-  const parts = phoneStr
+export function extractIndividualPhones(phoneStr: string, phone2Str?: string): string[] {
+  const combined = [phoneStr, phone2Str].filter(Boolean).join(' / ');
+  if (!combined) return [];
+  const parts = combined
     .split(/[\/,;\n\r|]|\s+-\s+/)
     .map(p => p.trim())
     .filter(Boolean);
@@ -154,15 +155,23 @@ export function auditCustomerData(
       }
     }
 
-    // 2. Check Multi-Phone Anomalies
-    const phones = extractIndividualPhones(c.phone || '');
-    if (
-      phones.length > 1 ||
-      (c.phone && (c.phone.includes('/') || c.phone.replace(/\D/g, '').length > 11))
-    ) {
+    // 2. Check Multi-Phone Anomalies (ADR-0017 & ADR-0019)
+    // When auditing a customer who has clean separate phone and phone2, do NOT flag them as an anomaly if both are valid numbers
+    const p1List = extractIndividualPhones(c.phone || '');
+    const p2List = c.phone2 ? extractIndividualPhones(c.phone2) : [];
+
+    const isP1Anomaly =
+      p1List.length > 1 ||
+      Boolean(c.phone && (c.phone.includes('/') || c.phone.replace(/\D/g, '').length > 11));
+    const isP2Anomaly =
+      p2List.length > 1 ||
+      Boolean(c.phone2 && (c.phone2.includes('/') || c.phone2.replace(/\D/g, '').length > 11));
+
+    if (isP1Anomaly || isP2Anomaly) {
+      const allExtracted = extractIndividualPhones(c.phone || '', c.phone2);
       multiPhoneAnomalies.push({
         customer: c,
-        phones: phones.length > 0 ? phones : [c.phone],
+        phones: allExtracted.length > 0 ? allExtracted : [c.phone, c.phone2].filter(Boolean) as string[],
       });
     }
 
@@ -175,9 +184,10 @@ export function auditCustomerData(
       });
     }
 
-    // 4. Map phones for Duplicate Phone Grouping
-    if (phones.length > 0) {
-      for (const p of phones) {
+    // 4. Map phones for Duplicate Phone Grouping (checks both phone and phone2)
+    const allPhones = extractIndividualPhones(c.phone || '', c.phone2);
+    if (allPhones.length > 0) {
+      for (const p of allPhones) {
         const norm = normalizeSinglePhone(p);
         if (norm) {
           const list = phoneMap.get(norm) || [];
@@ -187,21 +197,26 @@ export function auditCustomerData(
           phoneMap.set(norm, list);
         }
       }
-    } else if (c.phone) {
-      const norm = normalizeSinglePhone(c.phone);
-      if (norm) {
-        const list = phoneMap.get(norm) || [];
-        if (!list.some(existing => existing.id === c.id)) {
-          list.push(c);
+    } else {
+      for (const rawP of [c.phone, c.phone2].filter(Boolean) as string[]) {
+        const norm = normalizeSinglePhone(rawP);
+        if (norm) {
+          const list = phoneMap.get(norm) || [];
+          if (!list.some(existing => existing.id === c.id)) {
+            list.push(c);
+          }
+          phoneMap.set(norm, list);
         }
-        phoneMap.set(norm, list);
       }
     }
 
     // 5. Check Historical Order Discrepancies
     if (orders.length > 0 && !isGenericCustomerName(c.name)) {
       const custOrders = orders.filter(
-        o => o.customerId === c.id || (c.phone && o.customerPhone && isPhoneMatching(o.customerPhone, c.phone))
+        o =>
+          o.customerId === c.id ||
+          (c.phone && o.customerPhone && isPhoneMatching(o.customerPhone, c.phone)) ||
+          (c.phone2 && o.customerPhone && isPhoneMatching(o.customerPhone, c.phone2))
       );
 
       const differingPhones = new Set<string>();
@@ -209,15 +224,17 @@ export function auditCustomerData(
       const differingNames = new Set<string>();
 
       const cPhoneNorm = normalizeSinglePhone(c.phone || '');
+      const cPhone2Norm = c.phone2 ? normalizeSinglePhone(c.phone2) : '';
       const cAddrNorm = (c.address || '').trim().toLowerCase();
       const cNameNorm = (c.name || '').normalize('NFC').trim();
 
       for (const ord of custOrders) {
         const ordPhone = normalizeSinglePhone(ord.customerPhone || '');
-        if (
-          ordPhone &&
-          ((!cPhoneNorm) || (cPhoneNorm && ordPhone !== cPhoneNorm && !isPhoneMatching(ordPhone, cPhoneNorm)))
-        ) {
+        const matchesKnownPhone =
+          Boolean(cPhoneNorm && (ordPhone === cPhoneNorm || isPhoneMatching(ordPhone, cPhoneNorm))) ||
+          Boolean(cPhone2Norm && (ordPhone === cPhone2Norm || isPhoneMatching(ordPhone, cPhone2Norm)));
+
+        if (ordPhone && !matchesKnownPhone && (cPhoneNorm || cPhone2Norm)) {
           differingPhones.add(ord.customerPhone!.trim());
         }
 

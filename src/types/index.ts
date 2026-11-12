@@ -15,6 +15,7 @@ export interface Customer {
   id: string;
   name: string;
   phone: string;
+  phone2?: string;
   address: string;
   debt: number;
   totalSpent?: number;
