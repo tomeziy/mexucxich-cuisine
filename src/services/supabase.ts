@@ -647,6 +647,17 @@ export const cloudSyncCustomersBatch = async (customers: Customer[]) => {
   }
 };
 
+export const cloudSyncOrdersBatch = async (orders: Order[]) => {
+  const client = getSupabaseClient();
+  if (!client || orders.length === 0) return;
+  try {
+    const oRows = orders.map(transformOrderToDb);
+    await upsertInChunks(client, 'orders', oRows, 500);
+  } catch (e) {
+    console.error('cloudSyncOrdersBatch error:', e);
+  }
+};
+
 export const cloudSyncOrder = async (o: Order) => {
   const client = getSupabaseClient();
   if (!client) return;
@@ -767,6 +778,7 @@ alter table products add column if not exists updated_at timestamptz default now
 alter table customers add column if not exists updated_at timestamptz default now();
 alter table orders add column if not exists updated_at timestamptz default now();
 alter table debt_payments add column if not exists updated_at timestamptz default now();
+alter table store_settings add column if not exists updated_at timestamptz default now();
 
 -- Hàm điều chỉnh tồn kho nguyên tử (Atomic Stock Adjustment - ADR-0008)
 create or replace function adjust_product_stock(p_id text, p_delta numeric)

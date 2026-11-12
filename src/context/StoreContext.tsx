@@ -19,6 +19,7 @@ import {
   saveVaultSnapshot,
   loadVaultSnapshot,
   listVaultBackups,
+  EMERGENCY_VAULT_KEY,
 } from '../utils/vault';
 import {
   getSupabaseConfig,
@@ -31,6 +32,7 @@ import {
   cloudSyncCustomersBatch,
   cloudSyncOrder,
   cloudDeleteOrder,
+  cloudSyncOrdersBatch,
   cloudSyncDebtPayment,
   cloudSyncSettings,
   pushAllDataToCloud,
@@ -102,7 +104,30 @@ export const StoreProvider: React.FC<{ children: React.ReactNode }> = ({ childre
   // Products state
   const [products, setProducts] = useState<Product[]>(() => {
     const saved = localStorage.getItem(STORAGE_KEYS.PRODUCTS);
-    const initial: Product[] = saved ? JSON.parse(saved) : INITIAL_PRODUCTS;
+    let initial: Product[] | null = null;
+    if (saved) {
+      try {
+        const parsed = JSON.parse(saved);
+        if (Array.isArray(parsed) && parsed.length > 0) {
+          initial = parsed;
+        }
+      } catch {
+        initial = null;
+      }
+    }
+    // If no saved products or only mock items, auto-shield from Emergency Vault on boot
+    if (!initial || initial.length <= INITIAL_PRODUCTS.length) {
+      const vault = loadVaultSnapshot(EMERGENCY_VAULT_KEY);
+      if (vault && Array.isArray(vault.products) && vault.products.length > (initial?.length || 0)) {
+        console.warn(
+          `[Vault Shield] Auto-recovering ${vault.products.length} products from Emergency Vault on boot.`
+        );
+        initial = vault.products;
+      }
+    }
+    if (!initial) {
+      initial = INITIAL_PRODUCTS;
+    }
     return initial.map(p => ({
       ...p,
       updatedAt: p.updatedAt || p.createdAt || '2026-09-01T08:00:00Z',
@@ -112,7 +137,27 @@ export const StoreProvider: React.FC<{ children: React.ReactNode }> = ({ childre
   // Customers state
   const [customers, setCustomers] = useState<Customer[]>(() => {
     const saved = localStorage.getItem(STORAGE_KEYS.CUSTOMERS);
-    const initial: Customer[] = saved ? JSON.parse(saved) : INITIAL_CUSTOMERS;
+    let initial: Customer[] = [];
+    if (saved) {
+      try {
+        const parsed = JSON.parse(saved);
+        if (Array.isArray(parsed)) initial = parsed;
+      } catch {
+        initial = [];
+      }
+    }
+    if (initial.length === 0) {
+      const vault = loadVaultSnapshot(EMERGENCY_VAULT_KEY);
+      if (vault && Array.isArray(vault.customers) && vault.customers.length > 0) {
+        console.warn(
+          `[Vault Shield] Auto-recovering ${vault.customers.length} customers from Emergency Vault on boot.`
+        );
+        initial = vault.customers;
+      }
+    }
+    if (initial.length === 0) {
+      initial = INITIAL_CUSTOMERS;
+    }
     // Auto-repair and decouple fused/corrupted records (ADR-0017 Sentinel)
     const { repairedCustomers } = repairAndMigrateCustomers(initial);
     return repairedCustomers.map(c => ({
@@ -124,7 +169,25 @@ export const StoreProvider: React.FC<{ children: React.ReactNode }> = ({ childre
   // Orders state
   const [orders, setOrders] = useState<Order[]>(() => {
     const saved = localStorage.getItem(STORAGE_KEYS.ORDERS);
-    return saved ? JSON.parse(saved) : [];
+    let initial: Order[] = [];
+    if (saved) {
+      try {
+        const parsed = JSON.parse(saved);
+        if (Array.isArray(parsed)) initial = parsed;
+      } catch {
+        initial = [];
+      }
+    }
+    if (initial.length === 0) {
+      const vault = loadVaultSnapshot(EMERGENCY_VAULT_KEY);
+      if (vault && Array.isArray(vault.orders) && vault.orders.length > 0) {
+        console.warn(
+          `[Vault Shield] Auto-recovering ${vault.orders.length} orders from Emergency Vault on boot.`
+        );
+        initial = vault.orders;
+      }
+    }
+    return initial;
   });
 
   // Debt payments state
@@ -1043,6 +1106,7 @@ export const StoreProvider: React.FC<{ children: React.ReactNode }> = ({ childre
         const mergedO = mergeOrders(snapshot.orders, stateRef.current.orders);
         setOrders(mergedO);
         oCount = mergedO.length;
+        cloudSyncOrdersBatch(mergedO);
       }
       if (Array.isArray(snapshot.debtPayments)) {
         const mergedD = mergeDebtPayments(snapshot.debtPayments, stateRef.current.debtPayments);
@@ -1128,8 +1192,8 @@ export const StoreProvider: React.FC<{ children: React.ReactNode }> = ({ childre
     const nextOrders = [...newOrders, ...stateRef.current.orders];
     setOrders(nextOrders);
 
-    for (const no of newOrders) {
-      cloudSyncOrder(no);
+    if (newOrders.length > 0) {
+      cloudSyncOrdersBatch(newOrders);
     }
 
     // 4. Auto-restore customers from order contacts

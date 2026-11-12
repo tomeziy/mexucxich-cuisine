@@ -56,29 +56,31 @@ On November 12, 2026, the store owner (Hằng - Mexucxich Cuisine) reported a cr
 ### 4. Rolling Daily Backup & 1-Click Emergency Vault (`vault.ts` & `StoreContext.tsx`)
 - Designed an automated local persistence hierarchy:
   - **`mxc_emergency_vault`**: High-priority recovery vault. Automatically updated during active store operations, but strictly protected against overwrite if the incoming dataset is smaller than the vault's product count.
-  - **`mxc_backup_daily_YYYY-MM-DD`**: Rolling daily snapshots automatically maintained and pruned after 7 days.
-- Implemented `restoreFromVault(key)`: Enables 1-click restoration from the Emergency Vault or historical daily backups directly inside `SettingsPage.tsx`.
+  - **`mxc_backup_daily_YYYY-MM-DD`**: Rolling daily snapshots automatically maintained and pruned after 7 days, protected with anti-shrink guards against accidental wipe overwrites.
+  - **Boot Auto-Shielding:** On application startup, if local storage products or orders are empty or contain only default mock items, the store automatically shields and initializes from the Emergency Vault.
+- Implemented `restoreFromVault(key)`: Enables 1-click restoration from the Emergency Vault or historical daily backups directly inside `SettingsPage.tsx`, immediately syncing restored catalogs and orders via `cloudSyncProductsBatch`, `cloudSyncCustomersBatch`, and `cloudSyncOrdersBatch`.
 - Integrated `listVaultBackups()` providing full metadata (timestamp, product count, order count) for auditability.
 
 ### 5. Native Order Excel Importer & 1-Click Menu Reconstruction (`excel.ts` & `ReportsPage.tsx`)
 - Built `parseOrdersExcel(file: File | ArrayBuffer | Uint8Array)`:
   - Reads standard daily export files (`mexucxich_bao_cao_*.xlsx`).
-  - Scans and maps headers using fuzzy aliases (`ORDER_HEADER_ALIASES`).
-  - Reconstructs full `Order` entities, including order ID, date, customer name, phone, order type, status, and financial breakdown.
-  - Robustly decomposes composite `"Món Đã Mua"` strings into individual `OrderItem` objects via `parseOrderItemsString`:
+  - Scans and maps headers using fuzzy aliases (`ORDER_HEADER_ALIASES`), including full delivery address preservation (`customerAddress`).
+  - Reconstructs full `Order` entities, including order ID, date, customer name, phone, delivery address, order type, status, and financial breakdown.
+  - Robustly decomposes composite `"Món Đã Mua"` strings into individual `OrderItem` objects via parenthesis-aware splitting (`splitOutsideParens`) and regex matchers in `parseOrderItemsString`:
     - Handles fractional quantities (e.g. `0.59kg`), formatted Vietnamese currency (`145.000đ`), and complex names with parenthetical specifications (`Lõi vai bò vân tuyết Aukobe (Cân ký lẻ)`).
+    - Seamlessly parses multi-line Excel cells (`\n`, `\r\n`), semicolons (`;`), pluses (`+`), prefix quantities (`2x Xúc xích Heo`), postfix quantities (`Xúc xích Heo x 2`), and colon specifications (`Xúc xích Heo: 2 gói - 145.000đ`).
 - Implemented `extractMissingProductsFromOrders(orders, existingProducts)`:
   - Extracts all unique menu items referenced in imported orders.
   - For any dish missing from the current menu catalog, automatically synthesizes a complete product profile (inferred category, unit, image emoji, price, cost estimate, and stock).
 - Added **"Nhập báo cáo Excel"** button in `src/pages/ReportsPage.tsx` next to "Xuất báo cáo Excel":
-  - Enables the store owner to upload daily sales reports and recover all orders and missing menu items with a single click.
+  - Enables the store owner to upload daily sales reports and recover all orders and missing menu items with a single click, batch-syncing new orders to Supabase Cloud via `cloudSyncOrdersBatch`.
 
 ### 6. Historical Order Discrepancy Scanner & 1-Click Snapshot Restore (`customerSentinel.ts` & `CustomerSentinelModal.tsx`)
-- Enhanced `auditCustomerData` to cross-reference CRM customer profiles against historical order receipt snapshots.
+- Enhanced `auditCustomerData` to cross-reference CRM customer profiles against historical order receipt snapshots, auditing differing phones, addresses, and names (including tone twins and alternate persons on the same ID).
 - Added a dedicated **"Lệch với đơn cũ"** (Discrepancy) tab in the Customer Data Sentinel modal:
   - Identifies customer records where names, phones, or delivery addresses in the CRM profile differ from historical order snapshots.
-  - Provides **"Khôi phục theo đơn này"** (Restore from order snapshot): 1-click rollback of customer contact info to the verified receipt data.
-  - Provides **"Tách thành 2 khách"** (Split into 2 customers): 1-click decoupling when orders contain an alternative phone number.
+  - Provides **"Khôi phục theo đơn này"** (Restore from order snapshot): 1-click rollback of customer contact info to the verified receipt data, with built-in safeguard against overwriting genuine customer names with generic placeholders ("Khách lẻ").
+  - Provides **"Tách thành 2 khách"** (Split into 2 customers): 1-click decoupling when orders contain an alternative phone number, automatically decoupling combined phone numbers and cleanly partitioning order debt.
 
 ---
 

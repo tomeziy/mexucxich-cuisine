@@ -69,9 +69,28 @@ export const ORDER_HEADER_ALIASES = {
   createdAt: ['thoigian', 'ngaytao', 'ngay', 'thoigiangiaodich', 'createdat', 'time', 'date'],
   customerName: ['khachhang', 'tenkhachhang', 'tenkhach', 'nguoimua', 'customer', 'customername'],
   customerPhone: ['sodienthoai', 'sdt', 'dienthoai', 'phone', 'tel', 'customerphone'],
+  customerAddress: ['diachi', 'diachigiaohang', 'noinhan', 'diachinhan', 'address', 'customeraddress'],
   orderType: ['hinhthuc', 'loaidon', 'loaihinh', 'ordertype', 'type'],
   status: ['trangthai', 'tinhtrang', 'status'],
-  items: ['mondamua', 'sanpham', 'chitiet', 'danhsachmon', 'items', 'mon', 'hanghoa'],
+  items: [
+    'mondamua',
+    'sanpham',
+    'chitiet',
+    'danhsachmon',
+    'items',
+    'mon',
+    'hanghoa',
+    'chitietdonhang',
+    'chitietmon',
+    'monan',
+    'tenmon',
+    'mathang',
+    'danhsachmonan',
+    'danhsachhang',
+    'danhsachhanghoa',
+    'sanphamdaban',
+    'noidung',
+  ],
   subtotal: ['tienhang', 'tongtienhang', 'tientruocgiam', 'subtotal'],
   discountAmount: ['giamgia', 'chietkhau', 'tiengiam', 'discount'],
   shippingFee: ['phiship', 'phivanchuyen', 'tienship', 'shippingfee', 'ship'],
@@ -535,6 +554,7 @@ export function exportOrdersToExcel(orders: Order[]): void {
     'Thời Gian': o.createdAt,
     'Khách Hàng': o.customerName,
     'Số Điện Thoại': o.customerPhone || '',
+    'Địa Chỉ': o.customerAddress || '',
     'Hình Thức': o.orderType === 'direct' ? 'Tại chỗ' : 'Giao hàng',
     'Trạng Thái': o.status,
     'Món Đã Mua': o.items.map(i => `${i.name} (x${formatDisplayQty(i.qty)} - ${i.price.toLocaleString('vi-VN')}đ)`).join(', '),
@@ -616,8 +636,12 @@ export function inferUnitFromName(name: string): string {
 
 /**
  * Parses a combined "Món Đã Mua" string into individual order items with name, qty, price.
- * Handles formats like:
- * "Xúc xích Heo Thảo Mộc (x1 - 145.000đ), Lõi vai bò vân tuyết Aukobe (Cân ký lẻ) (x0.59 - 380.000đ)"
+ * Robustly handles:
+ * - Parentheses specifications: "Lõi vai bò vân tuyết Aukobe (Cân ký lẻ) (x0.59 - 380.000đ)"
+ * - Multi-line strings (\n, \r\n), semicolons (;), commas (,), pluses (+)
+ * - Prefix formats: "2x Xúc xích Heo (145.000đ)"
+ * - Postfix formats: "Xúc xích Heo x 2"
+ * - Colon formats: "Xúc xích Heo: 2 gói - 145.000đ"
  */
 export function parseOrderItemsString(
   itemsStr: string
@@ -626,19 +650,37 @@ export function parseOrderItemsString(
   const trimmed = itemsStr.trim();
   if (!trimmed) return [];
 
-  // Split on item boundaries: typically "), "
-  const rawParts = trimmed.split(/\)\s*,\s*/);
+  // Split on commas, semicolons, newlines, or bullets that are NOT inside parentheses
+  const rawParts: string[] = [];
+  let current = '';
+  let depth = 0;
+  for (let i = 0; i < trimmed.length; i++) {
+    const char = trimmed[i];
+    if (char === '(') depth++;
+    else if (char === ')') depth = Math.max(0, depth - 1);
+
+    if (
+      depth === 0 &&
+      (char === ',' || char === ';' || char === '\n' || char === '\r' || char === '•' || char === '+')
+    ) {
+      if (current.trim()) rawParts.push(current.trim());
+      current = '';
+    } else {
+      current += char;
+    }
+  }
+  if (current.trim()) rawParts.push(current.trim());
+
   const items: Array<{ name: string; qty: number; price: number }> = [];
 
-  for (let idx = 0; idx < rawParts.length; idx++) {
-    let part = rawParts[idx].trim();
+  for (const rawPart of rawParts) {
+    let part = rawPart.trim();
     if (!part) continue;
-    // Re-attach closing paren if not the last or if stripped by split
-    if (!part.endsWith(')')) {
-      part += ')';
-    }
 
-    // Match "Name (xQty - Price)"
+    // Remove leading bullet/dash
+    part = part.replace(/^[-*•]\s*/, '').trim();
+
+    // 1. Match "Name (xQty - Price)" or "Name (xQty - Priceđ)"
     const matchWithPrice = part.match(/^(.*?)\s*\(\s*x\s*([\d.,]+)\s*-\s*([^)]+)\)$/i);
     if (matchWithPrice) {
       const name = matchWithPrice[1].trim();
@@ -650,13 +692,48 @@ export function parseOrderItemsString(
       }
     }
 
-    // Match "Name (xQty)"
+    // 2. Match "Name (xQty)"
     const matchQtyOnly = part.match(/^(.*?)\s*\(\s*x\s*([\d.,]+)\s*\)$/i);
     if (matchQtyOnly) {
       const name = matchQtyOnly[1].trim();
       const qty = parseFloat(matchQtyOnly[2].replace(',', '.')) || 1;
       if (name) {
         items.push({ name, qty, price: 0 });
+        continue;
+      }
+    }
+
+    // 3. Match "Qty x Name (Price)" e.g. "2x Xúc xích Heo (145.000đ)" or "2 x Xúc xích Heo"
+    const matchPrefixQty = part.match(/^([\d.,]+)\s*x\s+(.*?)(?:\s*\(([^)]+)\))?$/i);
+    if (matchPrefixQty) {
+      const qty = parseFloat(matchPrefixQty[1].replace(',', '.')) || 1;
+      const name = matchPrefixQty[2].trim();
+      const price = matchPrefixQty[3] ? parseVietnameseNumber(matchPrefixQty[3]) : 0;
+      if (name) {
+        items.push({ name, qty, price });
+        continue;
+      }
+    }
+
+    // 4. Match "Name x Qty" e.g. "Xúc xích Heo x 2"
+    const matchSuffixQty = part.match(/^(.*?)\s+x\s*([\d.,]+)$/i);
+    if (matchSuffixQty) {
+      const name = matchSuffixQty[1].trim();
+      const qty = parseFloat(matchSuffixQty[2].replace(',', '.')) || 1;
+      if (name) {
+        items.push({ name, qty, price: 0 });
+        continue;
+      }
+    }
+
+    // 5. Match "Name: Qty ... - Price" e.g. "Xúc xích Heo: 2 gói - 145.000đ"
+    const matchColon = part.match(/^(.*?)\s*:\s*([\d.,]+)\s*(?:gói|hũ|hộp|kg|cái|set|phần)?\s*(?:-\s*(.+))?$/i);
+    if (matchColon) {
+      const name = matchColon[1].trim();
+      const qty = parseFloat(matchColon[2].replace(',', '.')) || 1;
+      const price = matchColon[3] ? parseVietnameseNumber(matchColon[3]) : 0;
+      if (name) {
+        items.push({ name, qty, price });
         continue;
       }
     }
@@ -710,6 +787,7 @@ export async function parseOrdersExcel(
             let createdAt = '';
             let customerName = 'Khách lẻ';
             let customerPhone = '';
+            let customerAddress = '';
             let orderType: 'direct' | 'delivery' = 'direct';
             let status: any = 'completed';
             let itemsRaw = '';
@@ -749,6 +827,9 @@ export async function parseOrdersExcel(
                 if (name) customerName = name;
               } else if (field === 'customerPhone') {
                 customerPhone = normalizeSinglePhone(val);
+              } else if (field === 'customerAddress') {
+                const addr = String(val || '').trim();
+                if (addr) customerAddress = addr;
               } else if (field === 'orderType') {
                 const typeStr = removeVietnameseTones(String(val || '').toLowerCase());
                 if (typeStr.includes('giao') || typeStr.includes('ship') || typeStr.includes('delivery')) {
@@ -822,7 +903,7 @@ export async function parseOrdersExcel(
               customerId: customerPhone ? `KH_${customerPhone}` : 'KH_RETAIL',
               customerName,
               customerPhone,
-              customerAddress: '',
+              customerAddress,
               orderType,
               status,
               items: orderItems,

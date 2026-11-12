@@ -13,6 +13,7 @@ import {
   isMissingColumnError,
   safeUpsert,
   applyCatalogAntiShrinkGuard,
+  cloudSyncOrdersBatch,
 } from '../src/services/supabase.ts';
 import {
   saveVaultSnapshot,
@@ -63,6 +64,29 @@ assert.strictEqual(inferUnitFromName('Lõi vai bò vân tuyết Aukobe (Cân ký
 assert.strictEqual(inferUnitFromName('Xúc xích Gà Nấm 500g'), 'Gói 500g');
 assert.strictEqual(inferUnitFromName('Pate Gan Gà Nấm Truffle 250g'), 'Hũ 250g');
 
+// Multi-line and alternate item format parsing tests (ADR-0018 deep verification)
+const multiLineItemStr = 'Xúc xích Heo (x2 - 145.000đ)\nXúc xích Gà (x1 - 130.000đ)\r\nPate Gan Gà (x1 - 120.000đ)';
+const parsedMultiLine = parseOrderItemsString(multiLineItemStr);
+assert.strictEqual(parsedMultiLine.length, 3, 'Must parse multi-line items cleanly');
+assert.strictEqual(parsedMultiLine[0].name, 'Xúc xích Heo');
+assert.strictEqual(parsedMultiLine[0].qty, 2);
+assert.strictEqual(parsedMultiLine[0].price, 145000);
+
+const semicolonItemStr = 'Xúc xích Heo (x2 - 145.000đ); Xúc xích Gà (x1 - 130.000đ)';
+const parsedSemicolon = parseOrderItemsString(semicolonItemStr);
+assert.strictEqual(parsedSemicolon.length, 2, 'Must parse semicolon-separated items');
+
+const prefixQtyStr = '2x Xúc xích Heo (145.000đ), Xúc xích Gà x 2, Pate: 1 hũ - 120.000đ';
+const parsedAlternate = parseOrderItemsString(prefixQtyStr);
+assert.strictEqual(parsedAlternate.length, 3, 'Must parse prefix, postfix and colon formats');
+assert.strictEqual(parsedAlternate[0].name, 'Xúc xích Heo');
+assert.strictEqual(parsedAlternate[0].qty, 2);
+assert.strictEqual(parsedAlternate[1].name, 'Xúc xích Gà');
+assert.strictEqual(parsedAlternate[1].qty, 2);
+assert.strictEqual(parsedAlternate[2].name, 'Pate');
+assert.strictEqual(parsedAlternate[2].qty, 1);
+assert.strictEqual(parsedAlternate[2].price, 120000);
+
 // Round-trip Excel generation and parseOrdersExcel
 const testOrdersData = [
   {
@@ -71,6 +95,7 @@ const testOrdersData = [
     'Thời Gian': '2026-11-10T10:15:00.000Z',
     'Khách Hàng': 'Chị Mai Hoa',
     'Số Điện Thoại': '0904047976',
+    'Địa Chỉ': '193C Bà Triệu, Hà Nội',
     'Hình Thức': 'Giao hàng',
     'Trạng Thái': 'completed',
     'Món Đã Mua': 'Xúc xích Gà Nấm (x2 - 130.000đ), Chả Mực Giã Tay (x1 - 240.000đ)',
@@ -88,6 +113,7 @@ const testOrdersData = [
     'Thời Gian': '2026-11-10T11:45:00.000Z',
     'Khách Hàng': 'Anh Hoàng Bách',
     'Số Điện Thoại': '0912345678',
+    'Địa Chỉ': 'E4 Ciputra, Tây Hồ, Hà Nội',
     'Hình Thức': 'Tại chỗ',
     'Trạng Thái': 'completed',
     'Món Đã Mua': 'Sủi Cảo Tôm Thịt Đặc Biệt (x3 - 95.000đ)',
@@ -111,12 +137,15 @@ assert.strictEqual(parsedOrdersFromExcel.length, 2, 'Should reconstruct 2 orders
 assert.strictEqual(parsedOrdersFromExcel[0].id, 'HD-20261110-01');
 assert.strictEqual(parsedOrdersFromExcel[0].customerName, 'Chị Mai Hoa');
 assert.strictEqual(parsedOrdersFromExcel[0].customerPhone, '0904047976');
+assert.strictEqual(parsedOrdersFromExcel[0].customerAddress, '193C Bà Triệu, Hà Nội');
 assert.strictEqual(parsedOrdersFromExcel[0].orderType, 'delivery');
 assert.strictEqual(parsedOrdersFromExcel[0].total, 510000);
 assert.strictEqual(parsedOrdersFromExcel[0].items.length, 2);
 assert.strictEqual(parsedOrdersFromExcel[0].items[0].name, 'Xúc xích Gà Nấm');
 assert.strictEqual(parsedOrdersFromExcel[0].items[0].qty, 2);
 assert.strictEqual(parsedOrdersFromExcel[0].items[0].price, 130000);
+
+assert.strictEqual(parsedOrdersFromExcel[1].customerAddress, 'E4 Ciputra, Tây Hồ, Hà Nội');
 
 console.log('✓ Order items string & Excel parsing verified.');
 
@@ -234,6 +263,7 @@ assert.strictEqual(mockCallCount, 2, 'safeUpsert must retry once on PGRST204');
 assert.strictEqual(safeUpsertResult.stripped, true, 'safeUpsert should report stripped = true');
 assert.strictEqual(safeUpsertResult.error, null, 'Retry must succeed with zero error');
 assert.strictEqual(lastPayloadReceived.updated_at, undefined, 'Payload sent on retry must have no updated_at');
+assert.strictEqual(typeof cloudSyncOrdersBatch, 'function', 'cloudSyncOrdersBatch must be exported and callable');
 
 console.log('✓ Defensive Supabase Payload Sanitizer & PGRST204 Fallback verified.');
 
@@ -301,6 +331,7 @@ const shrunkSnapshot = {
 // With forceEmergency = false (auto-sync mode), it must refuse to overwrite the 83-item vault with 8 items!
 const resShrunk = saveVaultSnapshot(shrunkSnapshot, false, mockStorage);
 assert.strictEqual(resShrunk.savedEmergency, false, 'Must block overwriting emergency vault with smaller dataset');
+assert.strictEqual(resShrunk.savedDaily, false, 'Must block overwriting daily backup with smaller dataset');
 
 const preservedVault = loadVaultSnapshot(EMERGENCY_VAULT_KEY, mockStorage);
 assert.strictEqual(preservedVault?.products.length, 83, 'Emergency vault must remain protected with all 83 products');
@@ -410,14 +441,32 @@ assert.strictEqual(restoredCustResult.updatedCustomer.name, 'Thanh Hang');
 assert.strictEqual(restoredCustResult.updatedCustomer.phone, '0988111222');
 assert.strictEqual(restoredCustResult.updatedCustomer.address, '12 Hoàn Kiếm, Hà Nội');
 
-// Test 1-Click Separation by historical order
+// Generic name protection test: order with generic retail name should NOT overwrite real customer name
+const retailOrder = { ...mockHistoricalOrders[0], customerName: 'Khách lẻ tại quầy' };
+const protectedCustResult = restoreCustomerFromOrderSnapshot(mockCustomers[0], retailOrder);
+assert.strictEqual(protectedCustResult.updatedCustomer.name, 'Thanh Hằng', 'Real name must not be overwritten by generic placeholder');
+
+// Test 1-Click Separation by historical order with phone decoupling & debt partitioning
+const multiPhoneCustomer = {
+  ...mockCustomers[0],
+  phone: '0988111222 / 0988333444',
+  debt: 75000,
+};
+const orderWithDebt = [
+  { ...mockHistoricalOrders[0], debtAmount: 50000, paymentMethod: 'debt' },
+  mockHistoricalOrders[1],
+];
+
 const splitHistResult = splitCustomerByHistoricalOrder(
-  mockCustomers[0],
+  multiPhoneCustomer,
   '0988111222',
-  mockHistoricalOrders
+  orderWithDebt
 );
 assert.strictEqual(splitHistResult.customerB.phone, '0988111222');
 assert.strictEqual(splitHistResult.customerB.name, 'Thanh Hang');
+assert.strictEqual(splitHistResult.customerB.debt, 50000, 'Customer B receives debt from their split order');
+assert.strictEqual(splitHistResult.customerA.phone, '0988333444', 'Customer A retains remaining phone without collision');
+assert.strictEqual(splitHistResult.customerA.debt, 25000, 'Customer A retains remaining net debt');
 assert.strictEqual(splitHistResult.ordersToUpdate.length, 1);
 assert.strictEqual(splitHistResult.ordersToUpdate[0].id, 'HD_HIST_01');
 assert.strictEqual(splitHistResult.ordersToUpdate[0].customerId, splitHistResult.customerB.id);

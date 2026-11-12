@@ -214,7 +214,10 @@ export function auditCustomerData(
 
       for (const ord of custOrders) {
         const ordPhone = normalizeSinglePhone(ord.customerPhone || '');
-        if (ordPhone && cPhoneNorm && ordPhone !== cPhoneNorm && !isPhoneMatching(ordPhone, cPhoneNorm)) {
+        if (
+          ordPhone &&
+          ((!cPhoneNorm) || (cPhoneNorm && ordPhone !== cPhoneNorm && !isPhoneMatching(ordPhone, cPhoneNorm)))
+        ) {
           differingPhones.add(ord.customerPhone!.trim());
         }
 
@@ -222,9 +225,7 @@ export function auditCustomerData(
         if (
           ordAddr &&
           ordAddr.length >= 3 &&
-          cAddrNorm &&
-          !cAddrNorm.includes(ordAddr.toLowerCase()) &&
-          !ordAddr.toLowerCase().includes(cAddrNorm)
+          ((!cAddrNorm) || (cAddrNorm && !cAddrNorm.includes(ordAddr.toLowerCase()) && !ordAddr.toLowerCase().includes(cAddrNorm)))
         ) {
           differingAddresses.add(ordAddr);
         }
@@ -234,9 +235,9 @@ export function auditCustomerData(
           ordName &&
           !isGenericCustomerName(ordName) &&
           ordName !== cNameNorm &&
-          removeVietnameseTones(ordName) === removeVietnameseTones(cNameNorm)
+          (removeVietnameseTones(ordName) === removeVietnameseTones(cNameNorm) || ord.customerId === c.id)
         ) {
-          // Tone twin name or distinct spelling in order snapshot
+          // Tone twin name, distinct spelling, or alternate person on same customer ID
           differingNames.add(ordName);
         }
       }
@@ -734,6 +735,7 @@ export function mergeDuplicateCustomers(
 /**
  * 1-Click Restoration from Original Order Snapshot (ADR-0018)
  * Restores a customer's overwritten name, phone, or address back to the verified order snapshot.
+ * Safeguard: Never overwrites a customer's real name with a generic retail placeholder ("Khách lẻ").
  */
 export function restoreCustomerFromOrderSnapshot(
   customer: Customer,
@@ -742,9 +744,14 @@ export function restoreCustomerFromOrderSnapshot(
   updatedCustomer: Customer;
   log: string;
 } {
+  const newName =
+    order.customerName && !isGenericCustomerName(order.customerName)
+      ? order.customerName
+      : customer.name;
+
   const updatedCustomer: Customer = {
     ...customer,
-    name: order.customerName || customer.name,
+    name: newName,
     phone: order.customerPhone || customer.phone,
     address: order.customerAddress || customer.address,
     updatedAt: new Date().toISOString(),
@@ -758,6 +765,7 @@ export function restoreCustomerFromOrderSnapshot(
  * 1-Click Separation by Historical Order (ADR-0018)
  * Splits a customer when past orders contained a distinct phone number or person.
  * Automatically reassigns orders matching the target phone to the newly created customer.
+ * Decouples concatenated phone numbers and accurately partitions order debt.
  */
 export function splitCustomerByHistoricalOrder(
   customer: Customer,
@@ -773,8 +781,12 @@ export function splitCustomerByHistoricalOrder(
     o => o.customerId === customer.id && o.customerPhone && isPhoneMatching(o.customerPhone, normTarget)
   );
 
-  const snapshotName = matchingOrders.find(o => o.customerName && o.customerName !== customer.name)?.customerName;
-  const snapshotAddr = matchingOrders.find(o => o.customerAddress && o.customerAddress !== customer.address)?.customerAddress;
+  const snapshotName = matchingOrders.find(
+    o => o.customerName && !isGenericCustomerName(o.customerName) && o.customerName !== customer.name
+  )?.customerName;
+  const snapshotAddr = matchingOrders.find(
+    o => o.customerAddress && o.customerAddress !== customer.address
+  )?.customerAddress;
 
   const newId = `KH_${Date.now()}_${Math.floor(1000 + Math.random() * 9000)}`;
   const customerB: Customer = {
@@ -804,13 +816,25 @@ export function splitCustomerByHistoricalOrder(
   );
   const ordersB = ordersToUpdate.filter(o => o.status !== 'cancelled');
 
+  // Decouple phones: if customer.phone had multiple phones, strip the split target phone from customerA
+  const existingPhones = extractIndividualPhones(customer.phone || '');
+  const remainingPhones = existingPhones.filter(p => !isPhoneMatching(p, normTarget));
+  const newPhoneA = remainingPhones.length > 0 ? remainingPhones.join(' / ') : customer.phone;
+
+  // Partition debt based on split orders
+  const debtB = ordersB.reduce((sum, o) => sum + (o.debtAmount || 0), 0);
+  const debtA = Math.max(0, (customer.debt || 0) - debtB);
+
   const customerA: Customer = {
     ...customer,
+    phone: newPhoneA,
+    debt: debtA,
     orderCount: remainingOrders.length,
     totalSpent: remainingOrders.reduce((sum, o) => sum + (o.total || 0), 0),
     updatedAt: new Date().toISOString(),
   };
 
+  customerB.debt = debtB;
   customerB.orderCount = ordersB.length;
   customerB.totalSpent = ordersB.reduce((sum, o) => sum + (o.total || 0), 0);
 

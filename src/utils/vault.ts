@@ -77,10 +77,33 @@ export function saveVaultSnapshot(
 
   try {
     const serialized = JSON.stringify(snapshot);
+    const incomingProds = snapshot.products?.length || 0;
+
+    // Daily backup logic: protect against overwriting with smaller catalog unless forced
     const dailyKey = getDailyBackupKey(new Date(snapshot.timestamp || Date.now()));
-    storage.setItem(dailyKey, serialized);
-    savedDaily = true;
-    pruneDailyBackups(storage, 7);
+    let shouldUpdateDaily = forceEmergency;
+    if (!shouldUpdateDaily) {
+      const existingDailyRaw = storage.getItem(dailyKey);
+      if (!existingDailyRaw) {
+        shouldUpdateDaily = true;
+      } else {
+        try {
+          const existingDaily = JSON.parse(existingDailyRaw);
+          const existingDailyProds = existingDaily.products?.length || 0;
+          if (incomingProds >= existingDailyProds) {
+            shouldUpdateDaily = true;
+          }
+        } catch {
+          shouldUpdateDaily = true;
+        }
+      }
+    }
+
+    if (shouldUpdateDaily) {
+      storage.setItem(dailyKey, serialized);
+      savedDaily = true;
+      pruneDailyBackups(storage, 7);
+    }
 
     // Emergency vault logic
     let shouldUpdateEmergency = forceEmergency;
