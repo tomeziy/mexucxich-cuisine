@@ -197,8 +197,8 @@ export const EditOrderModal: React.FC<EditOrderModalProps> = ({ order, isOpen, o
       ? (order.customerName || selectedCustomer?.name || 'Khách lẻ tại quầy')
       : (selectedCustomer?.name || 'Khách lẻ tại quầy');
     const finalCustomerPhone = isSameCustomer
-      ? (order.customerPhone ?? selectedCustomer?.phone ?? '')
-      : (selectedCustomer?.phone ?? '');
+      ? (order.customerPhone ?? selectedCustomer?.phone ?? selectedCustomer?.phone2 ?? '')
+      : (selectedCustomer?.phone ?? selectedCustomer?.phone2 ?? '');
     const finalCustomerAddress = isSameCustomer
       ? (order.customerAddress ?? selectedCustomer?.address ?? '')
       : (selectedCustomer?.address ?? '');
@@ -266,7 +266,7 @@ export const EditOrderModal: React.FC<EditOrderModalProps> = ({ order, isOpen, o
               >
                 {customers.map(c => (
                   <option key={c.id} value={c.id}>
-                    {c.name} {c.phone ? `(${c.phone})` : ''}
+                    {c.name} {c.phone ? (c.phone2 ? `(${c.phone}, ${c.phone2})` : `(${c.phone})`) : (c.phone2 ? `(${c.phone2})` : '')}
                   </option>
                 ))}
               </select>

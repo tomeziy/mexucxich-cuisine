@@ -1200,6 +1200,7 @@ export const StoreProvider: React.FC<{ children: React.ReactNode }> = ({ childre
     const existingCustomerMap = new Map<string, Customer>();
     for (const c of stateRef.current.customers) {
       if (c.phone) existingCustomerMap.set(c.phone.replace(/\D/g, ''), c);
+      if (c.phone2) existingCustomerMap.set(c.phone2.replace(/\D/g, ''), c);
       existingCustomerMap.set(removeVietnameseTones(c.name.toLowerCase()).trim(), c);
     }
 

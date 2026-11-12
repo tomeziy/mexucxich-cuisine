@@ -13,7 +13,16 @@ import {
 import {
   extractIndividualPhones,
   auditCustomerData,
+  splitCustomerByPhones,
+  mergeDuplicateCustomers,
+  splitCustomerByHistoricalOrder,
+  repairAndMigrateCustomers,
 } from '../src/utils/customerSentinel.ts';
+import {
+  CUSTOMER_HEADER_ALIASES,
+  isPhoneMatching,
+  normalizeHeaderKey,
+} from '../src/utils/excel.ts';
 
 console.log('--- RUNNING ADR-0019 DUAL CUSTOMER PHONE, MULTI-PHONE SEARCH & SERIALIZATION TESTS ---');
 
@@ -295,6 +304,205 @@ const orderWithP2 = simulatePosDeliveryPhoneSelection(customerDualPhone, 'phone2
 assert.strictEqual(orderWithP2.customerPhone, '0988123456', 'Order created with phone 2');
 
 console.log('✓ POS delivery phone selection invariant verified.');
+
+// ----------------------------------------------------------------------------
+// Test Suite 7: Sentinel Customer Split by Phones with Dual Phone Profile
+// ----------------------------------------------------------------------------
+console.log('7. Testing Customer Split by Phones with Dual Phone Profile...');
+
+const custToSplit = {
+  id: 'KH_SPLIT_01',
+  name: 'Chị Lan',
+  phone: '0901234567',
+  phone2: '0987654321',
+  address: '12 Tràng Thi, Hà Nội',
+  debt: 100000,
+  totalSpent: 500000,
+  orderCount: 2,
+};
+
+const ordersForSplit = [
+  {
+    id: 'ORD_SPLIT_1',
+    createdAt: '2026-11-12T10:00:00Z',
+    customerId: custToSplit.id,
+    customerName: custToSplit.name,
+    customerPhone: '0901234567',
+    customerAddress: custToSplit.address,
+    orderType: 'delivery',
+    status: 'completed',
+    items: [],
+    subtotal: 200000,
+    total: 200000,
+    paymentMethod: 'cash',
+    paidAmount: 200000,
+    debtAmount: 0,
+  },
+  {
+    id: 'ORD_SPLIT_2',
+    createdAt: '2026-11-12T11:00:00Z',
+    customerId: custToSplit.id,
+    customerName: custToSplit.name,
+    customerPhone: '0987654321', // order using phone2
+    customerAddress: custToSplit.address,
+    orderType: 'delivery',
+    status: 'completed',
+    items: [],
+    subtotal: 300000,
+    total: 300000,
+    paymentMethod: 'cash',
+    paidAmount: 300000,
+    debtAmount: 0,
+  },
+];
+
+const splitResult = splitCustomerByPhones(custToSplit, ordersForSplit);
+assert.strictEqual(splitResult.customerA.phone, '0901234567', 'customerA must retain primary phone');
+assert.strictEqual(splitResult.customerA.phone2, undefined, 'customerA phone2 must be cleared');
+assert.strictEqual(splitResult.customerB.phone, '0987654321', 'customerB must receive secondary phone');
+assert.strictEqual(splitResult.customerB.phone2, undefined, 'customerB phone2 must be undefined');
+assert.strictEqual(splitResult.ordersToUpdate.length, 1, 'Order using phone2 must be reassigned to customerB');
+assert.strictEqual(splitResult.ordersToUpdate[0].id, 'ORD_SPLIT_2');
+assert.strictEqual(splitResult.ordersToUpdate[0].customerId, splitResult.customerB.id);
+
+console.log('✓ Customer split by phones with dual phone profile verified.');
+
+// ----------------------------------------------------------------------------
+// Test Suite 8: Customer Merge Preserving Secondary Phone into phone2
+// ----------------------------------------------------------------------------
+console.log('8. Testing Customer Merge Preserving Secondary Phone into phone2...');
+
+const primaryCust = {
+  id: 'KH_MERGE_PRI',
+  name: 'Bác Tuấn',
+  phone: '0912111222',
+  address: 'Hà Nội',
+  debt: 100000,
+  totalSpent: 400000,
+  orderCount: 2,
+};
+
+const duplicateCust = {
+  id: 'KH_MERGE_DUP',
+  name: 'Bác Tuấn (SĐT 2)',
+  phone: '0988776655',
+  address: 'Hà Nội',
+  debt: 50000,
+  totalSpent: 200000,
+  orderCount: 1,
+};
+
+const mergeResult = mergeDuplicateCustomers(primaryCust, duplicateCust, []);
+assert.strictEqual(mergeResult.mergedCustomer.phone, '0912111222', 'Primary phone must remain');
+assert.strictEqual(
+  mergeResult.mergedCustomer.phone2,
+  '0988776655',
+  'Duplicate customer phone must be preserved as phone2'
+);
+assert.strictEqual(mergeResult.mergedCustomer.debt, 150000, 'Debts must be combined');
+assert.strictEqual(mergeResult.mergedCustomer.totalSpent, 600000, 'Total spent must be combined');
+
+console.log('✓ Customer merge preserving secondary phone into phone2 verified.');
+
+// ----------------------------------------------------------------------------
+// Test Suite 9: Split Customer by Historical Order Matching phone2
+// ----------------------------------------------------------------------------
+console.log('9. Testing Split Customer by Historical Order Matching phone2...');
+
+const dualForHistSplit = {
+  id: 'KH_HIST_DUAL',
+  name: 'Anh Dũng',
+  phone: '0911222333',
+  phone2: '0944555666',
+  address: 'Ba Đình, Hà Nội',
+  debt: 200000,
+  totalSpent: 800000,
+  orderCount: 3,
+};
+
+const ordersHist = [
+  {
+    id: 'ORD_HIST_1',
+    createdAt: '2026-11-12T10:00:00Z',
+    customerId: dualForHistSplit.id,
+    customerName: dualForHistSplit.name,
+    customerPhone: '0911222333',
+    customerAddress: dualForHistSplit.address,
+    orderType: 'delivery',
+    status: 'completed',
+    items: [],
+    subtotal: 500000,
+    total: 500000,
+    paymentMethod: 'cash',
+    paidAmount: 500000,
+    debtAmount: 0,
+  },
+  {
+    id: 'ORD_HIST_2',
+    createdAt: '2026-11-12T12:00:00Z',
+    customerId: dualForHistSplit.id,
+    customerName: 'Chị Dũng (Vợ)',
+    customerPhone: '0944555666',
+    customerAddress: dualForHistSplit.address,
+    orderType: 'delivery',
+    status: 'completed',
+    items: [],
+    subtotal: 300000,
+    total: 300000,
+    paymentMethod: 'debt',
+    paidAmount: 100000,
+    debtAmount: 200000,
+  },
+];
+
+const histSplitResult = splitCustomerByHistoricalOrder(dualForHistSplit, '0944555666', ordersHist);
+assert.strictEqual(histSplitResult.customerA.phone, '0911222333');
+assert.strictEqual(histSplitResult.customerA.phone2, undefined, 'Splitting out phone2 clears customerA phone2');
+assert.strictEqual(histSplitResult.customerB.phone, '0944555666');
+assert.strictEqual(histSplitResult.customerB.debt, 200000);
+assert.strictEqual(histSplitResult.customerA.debt, 0);
+
+console.log('✓ Split customer by historical order matching phone2 verified.');
+
+// ----------------------------------------------------------------------------
+// Test Suite 10: Sentinel Repair Auto-Migrating Concatenated Phones
+// ----------------------------------------------------------------------------
+console.log('10. Testing Sentinel Repair Auto-Migrating Concatenated Phones...');
+
+const legacyConcatCust = {
+  id: 'KH_CONCAT_01',
+  name: 'Cô Thu',
+  phone: '0903111222 / 0903333444',
+  address: 'Hà Nội',
+  debt: 0,
+};
+
+const repairRes = repairAndMigrateCustomers([legacyConcatCust], []);
+const repairedThu = repairRes.repairedCustomers.find(c => c.id === 'KH_CONCAT_01');
+assert.ok(repairedThu);
+assert.strictEqual(repairedThu.phone, '0903111222', 'Primary phone must be separated');
+assert.strictEqual(repairedThu.phone2, '0903333444', 'Secondary phone must be migrated to phone2');
+
+console.log('✓ Sentinel repair auto-migrating concatenated phones verified.');
+
+// ----------------------------------------------------------------------------
+// Test Suite 11: Excel Header Aliases & Dual Phone Structure
+// ----------------------------------------------------------------------------
+console.log('11. Testing Excel Header Aliases & Dual Phone Structure...');
+
+assert.ok(CUSTOMER_HEADER_ALIASES.phone2, 'CUSTOMER_HEADER_ALIASES must define phone2 aliases');
+const p2Key = normalizeHeaderKey('Số điện thoại 2');
+assert.ok(
+  CUSTOMER_HEADER_ALIASES.phone2.includes(p2Key),
+  'normalizeHeaderKey("Số điện thoại 2") must match phone2 aliases'
+);
+const p2PhuKey = normalizeHeaderKey('SĐT phụ');
+assert.ok(
+  CUSTOMER_HEADER_ALIASES.phone2.includes(p2PhuKey),
+  'normalizeHeaderKey("SĐT phụ") must match phone2 aliases'
+);
+
+console.log('✓ Excel header aliases & dual phone structure verified.');
 
 console.log('================================================================');
 console.log('🎉 ALL ADR-0019 DUAL CUSTOMER PHONE & SERIALIZATION TESTS PASSED!');

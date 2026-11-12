@@ -2,6 +2,7 @@ import React, { useState } from 'react';
 import { useStore } from '../context/StoreContext';
 import { Product, OrderItem, CartItem, Order, OrderType, PaymentMethod, OrderStatus } from '../types';
 import { matchesSearch } from '../utils/vietnamese';
+import { isPhoneMatching } from '../utils/excel';
 import {
   formatVND,
   formatDate,
@@ -298,7 +299,7 @@ export const PosPage: React.FC = () => {
     const finalCustomerPhone =
       orderType === 'delivery'
         ? deliveryPhone.trim()
-        : selectedCustomer?.phone || '';
+        : selectedCustomer?.phone || selectedCustomer?.phone2 || '';
     const finalCustomerAddress =
       orderType === 'delivery'
         ? deliveryAddress.trim()
@@ -703,7 +704,7 @@ export const PosPage: React.FC = () => {
                     onSelectCustomer={cust => {
                       setSelectedCustomerId(cust.id);
                       setDeliveryName(cust.name || '');
-                      setDeliveryPhone(cust.phone || '');
+                      setDeliveryPhone(cust.phone || cust.phone2 || '');
                       setDeliveryAddress(cust.address || '');
                     }}
                     onQuickAdd={(query, fieldType) => {
@@ -878,7 +879,7 @@ export const PosPage: React.FC = () => {
                                   type="button"
                                   onClick={() => setDeliveryPhone(selectedCustomer.phone)}
                                   className={`px-1.5 py-0.2 rounded text-[9.5px] font-bold transition ${
-                                    deliveryPhone === selectedCustomer.phone
+                                    deliveryPhone === selectedCustomer.phone || isPhoneMatching(deliveryPhone, selectedCustomer.phone)
                                       ? 'bg-amber-500 text-white shadow-2xs'
                                       : 'bg-white hover:bg-amber-100 text-amber-800 border border-amber-300'
                                   }`}
@@ -890,7 +891,7 @@ export const PosPage: React.FC = () => {
                                   type="button"
                                   onClick={() => setDeliveryPhone(selectedCustomer.phone2!)}
                                   className={`px-1.5 py-0.2 rounded text-[9.5px] font-bold transition ${
-                                    deliveryPhone === selectedCustomer.phone2
+                                    selectedCustomer.phone2 && (deliveryPhone === selectedCustomer.phone2 || isPhoneMatching(deliveryPhone, selectedCustomer.phone2))
                                       ? 'bg-amber-500 text-white shadow-2xs'
                                       : 'bg-white hover:bg-amber-100 text-amber-800 border border-amber-300'
                                   }`}
@@ -1307,7 +1308,7 @@ export const PosPage: React.FC = () => {
         onCustomerAdded={newCust => {
           setSelectedCustomerId(newCust.id);
           setDeliveryName(newCust.name || '');
-          setDeliveryPhone(newCust.phone || '');
+          setDeliveryPhone(newCust.phone || newCust.phone2 || '');
           setDeliveryAddress(newCust.address || '');
         }}
       />
@@ -1319,7 +1320,7 @@ export const PosPage: React.FC = () => {
         customer={selectedCustomer || null}
         onCustomerUpdated={updatedCust => {
           setDeliveryName(updatedCust.name || '');
-          setDeliveryPhone(updatedCust.phone || '');
+          setDeliveryPhone(updatedCust.phone || updatedCust.phone2 || '');
           setDeliveryAddress(updatedCust.address || '');
         }}
       />

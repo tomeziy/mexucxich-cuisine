@@ -80,21 +80,37 @@ Ensured 100% backward compatibility with existing Supabase schema instances wher
   - Persists `phone2` into `addCustomer` and `updateCustomer`.
 - **`CustomersPage.tsx`**:
   - Added `phone2` input in "Thêm khách hàng mới" and "Chỉnh sửa thông tin khách hàng" modals.
-  - In Customer Table: displays primary phone with a prominent `SĐT 2: 098...` badge when `phone2` exists.
+  - In Customer Table & Responsive Mobile Cards (`md:hidden`): displays primary phone with a prominent `SĐT 2: 098...` badge when `phone2` exists.
   - In Customer Detail Modal (`selectedCustomerForDetail`): dedicated contact cards showing Phone 1 and Phone 2 with 1-click Call (`tel:`) and Copy buttons.
+  - Sentinel modal handoff: `onEditCustomer` now correctly delegates to `openEditModal` ensuring `phone2` is pre-populated in the edit dialog.
 - **`CustomerCombobox.tsx`**:
   - Dropdown search items display `phone • SĐT 2: phone2` when `phone2` exists.
   - Selected customer closed pill displays `(phone, phone2)`.
 - **`PosPage.tsx`**:
   - In the delivery information section (`orderType === 'delivery'`), when a customer with 2 phone numbers is selected, dynamic quick-toggle buttons/chips **"SĐT 1"** and **"SĐT 2"** appear above the recipient phone input.
+  - Active button state uses normalized matching (`isPhoneMatching`) so punctuation/formatting differences do not break highlight.
   - Cashier can click either button to instantly switch the order's recipient phone between primary and secondary numbers in 1 click!
+
+### 6. Excel Import/Export & Sentinel Split/Merge Hardening
+- **`src/utils/excel.ts`**:
+  - `CUSTOMER_HEADER_ALIASES`: Added aliases for secondary phone (`sodienthoai2`, `sdt2`, `dienthoai2`, `phone2`, `sdtphu`, `secondaryphone`).
+  - `ParsedCustomerRow`: Extended with `phone2?: string;`.
+  - `parseCustomersExcel`: Added mapping for `phone2` column and automatic decoupling of concatenated slashed numbers (`090... / 098...`) into `phone` and `phone2`.
+  - `exportCustomersToExcel`: Export file now includes `Số Điện Thoại 2` column.
+- **`src/utils/customerSentinel.ts`**:
+  - `splitCustomerByPhones`: Correctly extracts both `customer.phone` and `customer.phone2`, clears `phone2` on `customerA`, and assigns secondary phone to `customerB`.
+  - `mergeDuplicateCustomers`: Automatically adopts the duplicate customer's distinct phone into `primaryCustomer.phone2` rather than discarding it.
+  - `splitCustomerByHistoricalOrder`: When splitting by secondary phone, cleanly removes it from `customerA.phone2`.
+  - `repairAndMigrateCustomers`: Auto-migrates legacy slashed phones into `phone` and `phone2`, and normalizes `phone2`.
+- **`src/context/StoreContext.tsx`**:
+  - `auto-restore customers from order contacts`: Also indexes `c.phone2` in existing customer lookups to prevent creating redundant duplicate customer records.
 
 ---
 
 ## Consequences & Verification
 
 - **Backward Compatibility:** Works seamlessly with existing Supabase databases without schema migration errors.
-- **Data Integrity:** Fully compatible with Customer Sentinel, Excel import, and historical order reconciliation.
+- **Data Integrity:** Fully compatible with Customer Sentinel, Excel import/export, and historical order reconciliation.
 - **Zero Hallucination & Accuracy:** Tested thoroughly with automated test script `scripts/test_adr0019.js` verifying:
   1. Customer creation with dual phones.
   2. Search ranking and tier scoring across both numbers.
@@ -102,4 +118,9 @@ Ensured 100% backward compatibility with existing Supabase schema instances wher
   4. Supabase cloud serialization round-trip.
   5. Sentinel anomaly immunity.
   6. POS delivery phone selection invariant.
+  7. Sentinel customer split by phones with dual phone profile.
+  8. Customer merge preserving secondary phone into `phone2`.
+  9. Split customer by historical order matching `phone2`.
+  10. Sentinel repair auto-migrating concatenated phones.
+  11. Excel header aliases & dual phone structure.
 - All previous test suites (`test_adr0010.js` through `test_adr0018.js`) continue to pass 100% green.

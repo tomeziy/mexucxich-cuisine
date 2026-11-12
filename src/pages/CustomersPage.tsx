@@ -45,6 +45,7 @@ export interface CustomerImportRowItem {
   id: string;
   name: string;
   phone: string;
+  phone2?: string;
   address: string;
   debt: number;
   isDuplicate: boolean;
@@ -130,16 +131,27 @@ export const CustomersPage: React.FC = () => {
 
       const mapped: CustomerImportRowItem[] = parsed.map((p, idx) => {
         const normPPhone = normalizeVietnamesePhone(p.phone);
-        // ADR-0015: Match duplicates STRICTLY by normalized phone number
-        // Never match purely by unaccented name to prevent different Vietnamese customers from merging
-        const matchByPhone = normPPhone
-          ? customers.find(c => c.phone && isPhoneMatching(c.phone, normPPhone))
+        const normPPhone2 = p.phone2 ? normalizeVietnamesePhone(p.phone2) : undefined;
+        // ADR-0015 & ADR-0019: Match duplicates by normalized phone number across phone and phone2
+        const matchByPhone = (normPPhone || normPPhone2)
+          ? customers.find(c => {
+              const p1Match = normPPhone && (
+                (c.phone && isPhoneMatching(c.phone, normPPhone)) ||
+                (c.phone2 && isPhoneMatching(c.phone2, normPPhone))
+              );
+              const p2Match = normPPhone2 && (
+                (c.phone && isPhoneMatching(c.phone, normPPhone2)) ||
+                (c.phone2 && isPhoneMatching(c.phone2, normPPhone2))
+              );
+              return p1Match || p2Match;
+            })
           : null;
         const existing = matchByPhone;
         return {
           id: `cust_row_${Date.now()}_${idx}`,
           name: p.name,
           phone: normPPhone,
+          phone2: normPPhone2,
           address: p.address,
           debt: p.debt,
           isDuplicate: !!existing,
@@ -180,7 +192,11 @@ export const CustomersPage: React.FC = () => {
           const newPhone = normalizeVietnamesePhone(rowEditPhone.trim());
           // Re-evaluate duplication with modified phone / name
           const matchByPhone = newPhone
-            ? customers.find(c => c.phone && isPhoneMatching(c.phone, newPhone))
+            ? customers.find(
+                c =>
+                  (c.phone && isPhoneMatching(c.phone, newPhone)) ||
+                  (c.phone2 && isPhoneMatching(c.phone2, newPhone))
+              )
             : null;
           const existing = matchByPhone;
           return {
@@ -274,12 +290,14 @@ export const CustomersPage: React.FC = () => {
         if (targetKey && newCustomersMap.has(targetKey)) {
           const existingNew = newCustomersMap.get(targetKey)!;
           const mergedPhone = existingNew.phone || normPhone;
+          const mergedPhone2 = existingNew.phone2 || row.phone2;
           const mergedAddress = existingNew.address || row.address;
           const mergedDebt = existingNew.debt + row.debt;
 
           newCustomersMap.set(targetKey, {
             ...existingNew,
             phone: mergedPhone,
+            phone2: mergedPhone2,
             address: mergedAddress,
             debt: mergedDebt,
           });
@@ -290,6 +308,7 @@ export const CustomersPage: React.FC = () => {
           newCustomersMap.set(newCustKey, {
             name: row.name,
             phone: normPhone,
+            phone2: row.phone2,
             address: row.address,
             debt: row.debt,
           });
@@ -671,9 +690,10 @@ export const CustomersPage: React.FC = () => {
         </div>
       </div>
 
-      {/* Customers Table */}
+      {/* Customers Table & Mobile Cards */}
       <div className="bg-white rounded-2xl border border-slate-200 shadow-xs overflow-hidden">
-        <div className="overflow-x-auto custom-scroll">
+        {/* Desktop Table View */}
+        <div className="hidden md:block overflow-x-auto custom-scroll">
           <table className="w-full text-left border-collapse text-xs min-w-[820px]">
             <thead>
               <tr className="bg-slate-50/80 border-b border-slate-200 text-slate-500 uppercase text-[10px] font-extrabold tracking-wider">
@@ -795,6 +815,102 @@ export const CustomersPage: React.FC = () => {
               )}
             </tbody>
           </table>
+        </div>
+
+        {/* Mobile Cards View (ADR-0019) */}
+        <div className="md:hidden divide-y divide-slate-100">
+          {filteredCustomers.length === 0 ? (
+            <div className="py-12 text-center text-slate-400 text-xs">
+              Không tìm thấy khách hàng nào
+            </div>
+          ) : (
+            paginatedCustomers.map(cust => (
+              <div key={cust.id} className="p-3.5 space-y-2.5 hover:bg-amber-50/20 transition">
+                <div className="flex items-start justify-between gap-2">
+                  <div className="flex items-center gap-2.5 min-w-0">
+                    <div className="w-8 h-8 rounded-full bg-slate-100 border border-slate-200 text-slate-700 font-extrabold flex items-center justify-center text-xs shrink-0">
+                      {cust.name.slice(0, 1).toUpperCase()}
+                    </div>
+                    <div className="min-w-0">
+                      <strong className="text-slate-900 text-xs block truncate" title={cust.name}>
+                        {cust.name}
+                      </strong>
+                      <span className="text-[10px] text-slate-400 font-mono block">
+                        #{cust.id}
+                      </span>
+                    </div>
+                  </div>
+                  {cust.debt > 0 ? (
+                    <span className="text-rose-600 font-black text-xs bg-rose-50 border border-rose-200 px-2 py-0.5 rounded-lg shrink-0">
+                      Nợ: {formatVND(cust.debt)}
+                    </span>
+                  ) : (
+                    <span className="text-emerald-700 font-bold text-[10px] bg-emerald-50 border border-emerald-200 px-1.5 py-0.5 rounded-lg shrink-0">
+                      0đ (Đã đủ)
+                    </span>
+                  )}
+                </div>
+
+                {/* Phones & Address */}
+                <div className="space-y-1 text-xs">
+                  {(cust.phone || cust.phone2) ? (
+                    <div className="flex items-center gap-1.5 flex-wrap text-slate-600 font-mono text-[11px]">
+                      <Phone className="w-3 h-3 text-slate-400 shrink-0" />
+                      {cust.phone && <span>{cust.phone}</span>}
+                      {cust.phone && cust.phone2 && <span className="text-slate-300">•</span>}
+                      {cust.phone2 && (
+                        <span className="px-1.5 py-0.2 bg-amber-50 text-amber-800 border border-amber-200/60 rounded text-[10px] font-mono font-bold">
+                          SĐT 2: {cust.phone2}
+                        </span>
+                      )}
+                    </div>
+                  ) : null}
+
+                  {cust.address && (
+                    <div className="flex items-start gap-1.5 text-slate-500 text-[11px]">
+                      <MapPin className="w-3 h-3 text-slate-400 shrink-0 mt-0.5" />
+                      <span className="line-clamp-2">{cust.address}</span>
+                    </div>
+                  )}
+                </div>
+
+                {/* Stats & Actions */}
+                <div className="flex items-center justify-between pt-1 border-t border-slate-50 text-[11px] text-slate-500">
+                  <div>
+                    <span>{cust.orderCount || 0} đơn</span>
+                    <span className="mx-1 text-slate-300">•</span>
+                    <span className="font-bold text-slate-700">{formatVND(cust.totalSpent || 0)}</span>
+                  </div>
+
+                  <div className="flex items-center gap-1.5">
+                    <button
+                      onClick={() => setSelectedCustomerForDetail(cust)}
+                      className="p-1.5 rounded-lg border border-slate-200 bg-white hover:bg-slate-100 text-slate-600 transition"
+                      title="Xem sổ nợ & lịch sử"
+                    >
+                      <Eye className="w-3.5 h-3.5" />
+                    </button>
+                    <button
+                      onClick={() => openEditModal(cust)}
+                      className="p-1.5 rounded-lg border border-slate-200 bg-white hover:bg-amber-50 text-slate-600 hover:text-amber-600 transition"
+                      title="Chỉnh sửa thông tin khách hàng"
+                    >
+                      <Edit2 className="w-3.5 h-3.5" />
+                    </button>
+                    {cust.debt > 0 && (
+                      <button
+                        onClick={() => openPayDebtModal(cust)}
+                        className="px-2 py-1 rounded-lg bg-emerald-600 hover:bg-emerald-700 text-white text-[11px] font-bold shadow-2xs transition flex items-center gap-1"
+                      >
+                        <ArrowDownCircle className="w-3 h-3" />
+                        <span>Thu nợ</span>
+                      </button>
+                    )}
+                  </div>
+                </div>
+              </div>
+            ))
+          )}
         </div>
 
         {/* Pagination Bar (KiotViet Style) */}
@@ -1786,10 +1902,7 @@ export const CustomersPage: React.FC = () => {
           alert(`Đã tách thành công khách hàng mới với số điện thoại ${targetPhone}!`);
         }}
         onEditCustomer={cust => {
-          setEditingCustomer(cust);
-          setEditCustomerName(cust.name);
-          setEditCustomerPhone(cust.phone || '');
-          setEditCustomerAddress(cust.address || '');
+          openEditModal(cust);
         }}
       />
     </div>

@@ -521,12 +521,33 @@ export function repairAndMigrateCustomers(
   // --------------------------------------------------------------------------
   for (const c of list) {
     if (c.phone) {
-      const normalized = normalizeVietnamesePhone(c.phone);
-      if (normalized && normalized !== c.phone) {
-        c.phone = normalized;
+      // Migrate legacy slashed phones to phone + phone2 if phone2 is empty
+      if (c.phone.includes(' / ') && !c.phone2) {
+        const parts = c.phone.split(' / ').map(p => p.trim()).filter(Boolean);
+        if (parts.length >= 2) {
+          c.phone = parts[0];
+          c.phone2 = parts.slice(1).join(' / ');
+          c.updatedAt = new Date().toISOString();
+          changesCount++;
+          log.push(`Migrated concatenated phone to dual phone structure for customer "${c.name}" -> SĐT 1: ${c.phone}, SĐT 2: ${c.phone2}`);
+        }
+      } else {
+        const normalized = normalizeVietnamesePhone(c.phone);
+        if (normalized && normalized !== c.phone) {
+          c.phone = normalized;
+          c.updatedAt = new Date().toISOString();
+          changesCount++;
+          log.push(`Normalized phone format for customer "${c.name}" -> ${normalized}`);
+        }
+      }
+    }
+    if (c.phone2) {
+      const normalized2 = normalizeVietnamesePhone(c.phone2);
+      if (normalized2 && normalized2 !== c.phone2) {
+        c.phone2 = normalized2;
         c.updatedAt = new Date().toISOString();
         changesCount++;
-        log.push(`Normalized phone format for customer "${c.name}" -> ${normalized}`);
+        log.push(`Normalized secondary phone format for customer "${c.name}" -> ${normalized2}`);
       }
     }
   }
@@ -581,8 +602,8 @@ export function splitCustomerByPhones(
   customerB: Customer;
   ordersToUpdate: Order[];
 } {
-  const phones = extractIndividualPhones(customer.phone);
-  const phone1 = phones[0] || customer.phone;
+  const phones = extractIndividualPhones(customer.phone, customer.phone2);
+  const phone1 = phones[0] || customer.phone || '';
   const phone2 = phones[1] || '';
 
   const newId = `KH_${Date.now()}_${Math.floor(1000 + Math.random() * 9000)}`;
@@ -590,6 +611,7 @@ export function splitCustomerByPhones(
     id: newId,
     name: `${customer.name} (Phụ)`,
     phone: phone2,
+    phone2: undefined,
     address: customer.address || '',
     debt: 0,
     totalSpent: 0,
@@ -623,6 +645,7 @@ export function splitCustomerByPhones(
     const customerA: Customer = {
       ...customer,
       phone: phone1,
+      phone2: undefined,
       orderCount: ordersA.length,
       totalSpent: ordersA.reduce((sum, o) => sum + (o.total || 0), 0),
       updatedAt: new Date().toISOString(),
@@ -637,6 +660,7 @@ export function splitCustomerByPhones(
   const customerA: Customer = {
     ...customer,
     phone: phone1,
+    phone2: undefined,
     updatedAt: new Date().toISOString(),
   };
 
@@ -726,8 +750,25 @@ export function mergeDuplicateCustomers(
   mergedCustomer: Customer;
   ordersToUpdate: Order[];
 } {
+  // If primaryCustomer lacks phone2, adopt the duplicate customer's phone if distinct
+  let mergedPhone2 = primaryCustomer.phone2;
+  if (
+    !mergedPhone2 &&
+    duplicateCustomer.phone &&
+    (!primaryCustomer.phone || !isPhoneMatching(primaryCustomer.phone, duplicateCustomer.phone))
+  ) {
+    mergedPhone2 = duplicateCustomer.phone;
+  } else if (
+    !mergedPhone2 &&
+    duplicateCustomer.phone2 &&
+    (!primaryCustomer.phone || !isPhoneMatching(primaryCustomer.phone, duplicateCustomer.phone2))
+  ) {
+    mergedPhone2 = duplicateCustomer.phone2;
+  }
+
   const mergedCustomer: Customer = {
     ...primaryCustomer,
+    phone2: mergedPhone2,
     debt: (primaryCustomer.debt || 0) + (duplicateCustomer.debt || 0),
     totalSpent: (primaryCustomer.totalSpent || 0) + (duplicateCustomer.totalSpent || 0),
     orderCount: (primaryCustomer.orderCount || 0) + (duplicateCustomer.orderCount || 0),
@@ -833,10 +874,15 @@ export function splitCustomerByHistoricalOrder(
   );
   const ordersB = ordersToUpdate.filter(o => o.status !== 'cancelled');
 
-  // Decouple phones: if customer.phone had multiple phones, strip the split target phone from customerA
-  const existingPhones = extractIndividualPhones(customer.phone || '');
+  // Decouple phones: if customer had multiple phones (phone or phone2), strip the split target phone from customerA
+  const existingPhones = extractIndividualPhones(customer.phone || '', customer.phone2);
   const remainingPhones = existingPhones.filter(p => !isPhoneMatching(p, normTarget));
-  const newPhoneA = remainingPhones.length > 0 ? remainingPhones.join(' / ') : customer.phone;
+  let newPhoneA = remainingPhones[0] || '';
+  let newPhone2A: string | undefined = remainingPhones[1] || undefined;
+  if (!newPhoneA && newPhone2A) {
+    newPhoneA = newPhone2A;
+    newPhone2A = undefined;
+  }
 
   // Partition debt based on split orders
   const debtB = ordersB.reduce((sum, o) => sum + (o.debtAmount || 0), 0);
@@ -845,6 +891,7 @@ export function splitCustomerByHistoricalOrder(
   const customerA: Customer = {
     ...customer,
     phone: newPhoneA,
+    phone2: newPhone2A,
     debt: debtA,
     orderCount: remainingOrders.length,
     totalSpent: remainingOrders.reduce((sum, o) => sum + (o.total || 0), 0),

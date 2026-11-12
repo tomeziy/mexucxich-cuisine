@@ -8,6 +8,7 @@ import {
   DuplicatePhoneGroup,
 } from '../../utils/customerSentinel';
 import { formatVND, formatDate } from '../../utils/format';
+import { isPhoneMatching } from '../../utils/excel';
 import {
   ShieldAlert,
   AlertTriangle,
@@ -273,9 +274,14 @@ export const CustomerSentinelModal: React.FC<CustomerSentinelModalProps> = ({
                               </div>
 
                               <div className="text-xs space-y-1 text-slate-600">
-                                <div className="flex items-center gap-1.5">
+                                <div className="flex items-center gap-1.5 flex-wrap">
                                   <Phone className="w-3.5 h-3.5 text-slate-400 shrink-0" />
                                   <span className="font-semibold text-slate-700">{c.phone || 'Chưa có SĐT'}</span>
+                                  {c.phone2 && (
+                                    <span className="text-[10px] font-mono text-amber-800 bg-amber-50 px-1.5 py-0.2 rounded border border-amber-200">
+                                      SĐT 2: {c.phone2}
+                                    </span>
+                                  )}
                                 </div>
                                 <div className="flex items-start gap-1.5">
                                   <MapPin className="w-3.5 h-3.5 text-slate-400 shrink-0 mt-0.5" />
@@ -614,7 +620,14 @@ export const CustomerSentinelModal: React.FC<CustomerSentinelModalProps> = ({
                             </span>
                           </div>
                           <div className="text-xs text-slate-600 flex flex-wrap items-center gap-3 mt-1">
-                            <span>SĐT hiện tại: <strong className="text-slate-800">{disc.customer.phone || 'Chưa có'}</strong></span>
+                            <span>
+                              SĐT hiện tại: <strong className="text-slate-800">{disc.customer.phone || 'Chưa có'}</strong>
+                              {disc.customer.phone2 && (
+                                <span className="ml-1 text-[11px] font-mono text-amber-800 bg-amber-50 px-1 py-0.2 rounded border border-amber-200">
+                                  SĐT 2: {disc.customer.phone2}
+                                </span>
+                              )}
+                            </span>
                             <span>•</span>
                             <span>Đ/C hiện tại: <strong className="text-slate-800">{disc.customer.address || 'Chưa có'}</strong></span>
                           </div>
@@ -678,7 +691,10 @@ export const CustomerSentinelModal: React.FC<CustomerSentinelModalProps> = ({
                                   </button>
                                 )}
 
-                                {onSplitByHistoricalOrder && ord.customerPhone && ord.customerPhone !== disc.customer.phone && (
+                                {onSplitByHistoricalOrder &&
+                                  ord.customerPhone &&
+                                  !isPhoneMatching(ord.customerPhone, disc.customer.phone || '') &&
+                                  (!disc.customer.phone2 || !isPhoneMatching(ord.customerPhone, disc.customer.phone2)) && (
                                   <button
                                     type="button"
                                     onClick={() => {

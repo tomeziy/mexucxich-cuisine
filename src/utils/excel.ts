@@ -48,7 +48,12 @@ export const CUSTOMER_HEADER_ALIASES = {
   ],
   phone: [
     'sodienthoai', 'sdt', 'dienthoai', 'phone', 'tel', 'didong', 'sodt',
-    'dienthoaididong', 'sdtlienhe', 'dt', 'dthoai', 'mobile', 'sdtlh'
+    'dienthoaididong', 'sdtlienhe', 'dt', 'dthoai', 'mobile', 'sdtlh',
+    'sdtchinh', 'dienthoaichinh', 'sodienthoaichinh', 'primaryphone'
+  ],
+  phone2: [
+    'sodienthoai2', 'sdt2', 'dienthoai2', 'phone2', 'tel2', 'sodt2',
+    'sdtphu', 'dienthoaiphu', 'sodienthoaiphu', 'phonephu', 'secondaryphone'
   ],
   address: [
     'diachi', 'diachigiaohang', 'address', 'noio', 'dc', 'diachinhanhang',
@@ -387,6 +392,7 @@ export async function parseProductsExcel(file: File): Promise<ParsedProductRow[]
 export interface ParsedCustomerRow {
   name: string;
   phone: string;
+  phone2?: string;
   address: string;
   debt: number;
 }
@@ -420,6 +426,7 @@ export async function parseCustomersExcel(file: File): Promise<ParsedCustomerRow
             const item: ParsedCustomerRow = {
               name: '',
               phone: '',
+              phone2: undefined,
               address: '',
               debt: 0,
             };
@@ -430,12 +437,23 @@ export async function parseCustomersExcel(file: File): Promise<ParsedCustomerRow
                 item.name = String(val || '').trim();
               } else if (field === 'phone') {
                 item.phone = normalizeVietnamesePhone(val);
+              } else if (field === 'phone2') {
+                item.phone2 = normalizeVietnamesePhone(val) || undefined;
               } else if (field === 'address') {
                 item.address = String(val || '').trim();
               } else if (field === 'debt') {
                 item.debt = parseVietnameseNumber(val);
               }
             });
+
+            // Auto-split concatenated slashed phone if phone2 was not in a separate column
+            if (item.phone && item.phone.includes(' / ') && !item.phone2) {
+              const parts = item.phone.split(' / ').map(p => p.trim()).filter(Boolean);
+              if (parts.length >= 2) {
+                item.phone = parts[0];
+                item.phone2 = parts.slice(1).join(' / ');
+              }
+            }
 
             if (item.name) {
               allCustomers.push(item);
@@ -498,18 +516,21 @@ export function downloadCustomerTemplate(): void {
     {
       'Tên khách hàng': 'Chị Hoàng Mai (Khách quen)',
       'Số điện thoại': '0904047976',
+      'Số điện thoại 2': '0988123456',
       'Địa chỉ': '12 Tràng Thi, Hoàn Kiếm, Hà Nội',
       'Dư nợ ban đầu': 250000,
     },
     {
       'Tên khách hàng': 'Anh Nguyễn Tuấn',
       'Số điện thoại': '0912345678',
+      'Số điện thoại 2': '',
       'Địa chỉ': 'Căn 1205 Tòa S2, Vinhomes Ocean Park',
       'Dư nợ ban đầu': 0,
     },
     {
       'Tên khách hàng': 'Cô Lan (Bán sỉ)',
       'Số điện thoại': '0988776655',
+      'Số điện thoại 2': '',
       'Địa chỉ': 'Ki-ốt 15 Chợ Hôm, Hà Nội',
       'Dư nợ ban đầu': 500000,
     },
@@ -584,6 +605,7 @@ export function exportCustomersToExcel(customers: Customer[]): void {
     'Mã Khách Hàng': c.id,
     'Tên Khách Hàng': c.name,
     'Số Điện Thoại': c.phone || '',
+    'Số Điện Thoại 2': c.phone2 || '',
     'Địa Chỉ': c.address || '',
     'Số Đơn Đã Mua': c.orderCount || 0,
     'Tổng Tiền Đã Mua': c.totalSpent || 0,
