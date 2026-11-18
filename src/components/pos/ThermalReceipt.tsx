@@ -131,7 +131,7 @@ export const ThermalReceipt: React.FC<ThermalReceiptProps> = ({
 
           <div className="flex justify-between items-baseline gap-1.5">
             <span className="shrink-0 font-bold">Khách:</span>
-            <span className="text-right font-bold break-words flex-1">
+            <span className="text-right font-bold break-words flex-1 min-w-0">
               {order.customerName || 'Khách lẻ tại quầy'}
             </span>
           </div>
@@ -139,16 +139,16 @@ export const ThermalReceipt: React.FC<ThermalReceiptProps> = ({
           {order.customerPhone && (
             <div className="flex justify-between items-baseline gap-1.5 pt-0.5">
               <span className="shrink-0 font-bold">SĐT:</span>
-              <span className="text-right font-bold tracking-wide flex-1">
+              <span className="text-right font-bold tracking-wide flex-1 min-w-0">
                 {order.customerPhone}
               </span>
             </div>
           )}
 
           {order.customerAddress && (
-            <div className="flex flex-col gap-0.5 pt-1">
+            <div className="flex justify-between items-baseline gap-1.5 pt-0.5">
               <span className="shrink-0 font-bold">Địa chỉ:</span>
-              <span className="font-bold text-left break-words pl-0.5">
+              <span className="text-right font-bold break-words flex-1 min-w-0">
                 {order.customerAddress}
               </span>
             </div>
