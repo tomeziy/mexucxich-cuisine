@@ -169,13 +169,18 @@ export interface MergeCustomersResult {
   cloudAccepted: Customer[];
 }
 
+export interface MergeCustomersOptions {
+  preserveLocalExtraAddressesWhenCloudLacksColumn?: boolean;
+}
+
 /**
  * Hợp nhất danh sách Khách hàng giữa Cục bộ và Cloud
  * Bảo vệ các thay đổi SĐT, Địa chỉ, Dư nợ mới cập nhật trên quầy không bị Cloud cũ ghi đè
  */
 export function mergeCustomersWithConflictResolution(
   localCustomers: Customer[],
-  cloudCustomers: Customer[]
+  cloudCustomers: Customer[],
+  options?: MergeCustomersOptions
 ): MergeCustomersResult {
   const localMap = new Map<string, Customer>();
   for (const c of localCustomers || []) {
@@ -195,7 +200,17 @@ export function mergeCustomersWithConflictResolution(
     const localC = localMap.get(cloudC.id);
     if (localC) {
       const { winner, source } = resolveCustomerConflict(localC, cloudC);
-      merged.push(winner);
+      if (
+        source === 'cloud' &&
+        options?.preserveLocalExtraAddressesWhenCloudLacksColumn &&
+        localC.extraAddresses &&
+        localC.extraAddresses.length > 0 &&
+        (!winner.extraAddresses || winner.extraAddresses.length === 0)
+      ) {
+        merged.push({ ...winner, extraAddresses: localC.extraAddresses });
+      } else {
+        merged.push(winner);
+      }
       if (source === 'local') {
         localPreserved.push(winner);
       } else {

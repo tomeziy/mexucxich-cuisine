@@ -17,6 +17,7 @@ export interface Customer {
   phone: string;
   phone2?: string;
   address: string;
+  extraAddresses?: string[];
   debt: number;
   totalSpent?: number;
   orderCount?: number;

@@ -9,6 +9,7 @@ import {
 } from '../../utils/customerSentinel';
 import { formatVND, formatDate } from '../../utils/format';
 import { isPhoneMatching } from '../../utils/excel';
+import { analyzeFusedPhone, repairCustomerFusedPhones } from '../../utils/phoneRecovery';
 import {
   ShieldAlert,
   AlertTriangle,
@@ -23,6 +24,8 @@ import {
   GitFork,
   Merge,
   ArrowRight,
+  Check,
+  ListChecks,
 } from 'lucide-react';
 
 interface CustomerSentinelModalProps {
@@ -37,6 +40,9 @@ interface CustomerSentinelModalProps {
   onEditCustomer: (customer: Customer) => void;
   onRestoreFromOrder?: (customerId: string, orderId: string) => void;
   onSplitByHistoricalOrder?: (customerId: string, targetPhone: string) => void;
+  onAcceptPhoneSplit?: (customerId: string) => void;
+  onConvertAddressToExtra?: (customerId: string) => void;
+  onConvertAddressesBatch?: (customerIds: string[]) => number;
 }
 
 export const CustomerSentinelModal: React.FC<CustomerSentinelModalProps> = ({
@@ -51,10 +57,15 @@ export const CustomerSentinelModal: React.FC<CustomerSentinelModalProps> = ({
   onEditCustomer,
   onRestoreFromOrder,
   onSplitByHistoricalOrder,
+  onAcceptPhoneSplit,
+  onConvertAddressToExtra,
+  onConvertAddressesBatch,
 }) => {
   const [activeTab, setActiveTab] = useState<'all' | 'tone' | 'phone' | 'address' | 'duplicate' | 'discrepancy'>('all');
   const [repairSuccessLog, setRepairSuccessLog] = useState<string[] | null>(null);
   const [acknowledgedToneTwins, setAcknowledgedToneTwins] = useState<Set<string>>(new Set());
+  const [showAddressBatchPreview, setShowAddressBatchPreview] = useState(false);
+  const [excludedAddressBatchIds, setExcludedAddressBatchIds] = useState<Set<string>>(new Set());
 
   if (!isOpen) return null;
 
@@ -359,12 +370,22 @@ export const CustomerSentinelModal: React.FC<CustomerSentinelModalProps> = ({
               </div>
 
               <div className="space-y-2.5">
-                {auditResult.multiPhoneAnomalies.map(({ customer, phones }) => (
+                {auditResult.multiPhoneAnomalies.map(({ customer, phones }) => {
+                  const analysis1 = analyzeFusedPhone(customer.phone || '');
+                  const analysis2 = analyzeFusedPhone(customer.phone2 || '');
+                  const isUnresolvableFused =
+                    (analysis1.isFused && analysis1.status !== 'ok') ||
+                    (analysis2.isFused && analysis2.status !== 'ok');
+                  const unresolvableAnalysis =
+                    analysis1.isFused && analysis1.status !== 'ok' ? analysis1 : analysis2;
+                  const repairPreview = repairCustomerFusedPhones(customer);
+                  const canAcceptSplit = !isUnresolvableFused && repairPreview.changed;
+                  return (
                   <div
                     key={customer.id}
                     className="p-3.5 bg-white rounded-2xl border border-slate-200 shadow-2xs space-y-2.5"
                   >
-                    <div className="flex items-start justify-between gap-3">
+                    <div className="flex items-start justify-between gap-3 flex-wrap">
                       <div>
                         <div className="flex items-center gap-2">
                           <span className="font-bold text-slate-800 text-sm">{customer.name}</span>
@@ -372,15 +393,30 @@ export const CustomerSentinelModal: React.FC<CustomerSentinelModalProps> = ({
                             #{customer.id}
                           </span>
                         </div>
-                        <div className="flex items-center gap-2 text-xs text-slate-600 mt-1">
+                        <div className="flex items-center gap-2 text-xs text-slate-600 mt-1 flex-wrap">
                           <span className="text-slate-400">SĐT gốc:</span>
                           <span className="font-mono bg-rose-50 text-rose-700 px-2 py-0.5 rounded border border-rose-200 font-bold">
                             {customer.phone}
                           </span>
+                          {customer.phone2 && (
+                            <span className="font-mono bg-amber-50 text-amber-800 px-2 py-0.5 rounded border border-amber-200 font-bold">
+                              SĐT 2: {customer.phone2}
+                            </span>
+                          )}
                         </div>
                       </div>
 
-                      <div className="flex items-center gap-2 shrink-0">
+                      <div className="flex items-center gap-2 shrink-0 flex-wrap">
+                        {canAcceptSplit && onAcceptPhoneSplit && (
+                          <button
+                            type="button"
+                            onClick={() => onAcceptPhoneSplit(customer.id)}
+                            className="px-3 py-1.5 bg-emerald-600 hover:bg-emerald-700 text-white rounded-xl text-xs font-bold transition shadow-xs flex items-center gap-1.5"
+                          >
+                            <Check className="w-3.5 h-3.5" />
+                            <span>{phones.length >= 2 ? 'Chấp nhận SĐT 1 & 2' : 'Chuẩn hóa số trùng'}</span>
+                          </button>
+                        )}
                         {phones.length >= 2 && (
                           <button
                             onClick={() => {
@@ -388,10 +424,10 @@ export const CustomerSentinelModal: React.FC<CustomerSentinelModalProps> = ({
                                 onSplitCustomer(customer.id, 'phone');
                               }
                             }}
-                            className="px-3 py-1.5 bg-amber-600 hover:bg-amber-700 text-white rounded-xl text-xs font-bold transition shadow-xs flex items-center gap-1.5"
+                            className="px-3 py-1.5 bg-amber-100 hover:bg-amber-200 text-amber-900 border border-amber-300 rounded-xl text-xs font-bold transition flex items-center gap-1.5"
                           >
                             <GitFork className="w-3.5 h-3.5" />
-                            <span>Tách thành 2 khách hàng</span>
+                            <span>Tách thành 2 khách</span>
                           </button>
                         )}
                         <button
@@ -404,21 +440,29 @@ export const CustomerSentinelModal: React.FC<CustomerSentinelModalProps> = ({
                       </div>
                     </div>
 
-                    {phones.length >= 2 && (
+                    {isUnresolvableFused ? (
+                      <div className="bg-rose-50 p-2.5 rounded-xl border border-rose-200 text-xs text-rose-800 flex items-center gap-2">
+                        <AlertTriangle className="w-4 h-4 text-rose-600 shrink-0" />
+                        <span>
+                          Chuỗi số ({unresolvableAnalysis.rawDigits.length} chữ số) không tách được chắc chắn theo đầu số Việt Nam. Vui lòng bấm <strong>Sửa SĐT</strong> để kiểm tra thủ công.
+                        </span>
+                      </div>
+                    ) : phones.length >= 1 && (
                       <div className="bg-slate-50 p-2.5 rounded-xl border border-slate-200/80 text-xs flex flex-wrap items-center gap-3">
-                        <span className="font-semibold text-slate-500">Các số điện thoại được tách:</span>
+                        <span className="font-semibold text-slate-500">Đề xuất tách:</span>
                         {phones.map((p, idx) => (
                           <span
                             key={idx}
                             className="font-mono bg-white px-2 py-1 rounded-md border border-slate-200 text-slate-800 font-bold"
                           >
-                            Số {idx + 1}: {p}
+                            {idx === 0 ? 'SĐT 1' : `SĐT ${idx + 1}`}: {p}
                           </span>
                         ))}
                       </div>
                     )}
                   </div>
-                ))}
+                  );
+                })}
               </div>
             </div>
           )}
@@ -426,15 +470,132 @@ export const CustomerSentinelModal: React.FC<CustomerSentinelModalProps> = ({
           {/* 3. MULTI-ADDRESS SECTION */}
           {(activeTab === 'all' || activeTab === 'address') && auditResult.multiAddressAnomalies.length > 0 && (
             <div className="space-y-3">
-              <div className="flex items-center justify-between">
-                <h3 className="text-xs font-black uppercase tracking-wider text-amber-800 flex items-center gap-1.5">
-                  <MapPin className="w-4 h-4 text-amber-600" />
-                  <span>Khách hàng gộp nhiều địa chỉ (Slashed Addresses)</span>
-                </h3>
-                <span className="text-[11px] text-slate-400">
-                  Tách riêng từng địa chỉ để giao hàng chuẩn xác
-                </span>
+              <div className="flex flex-wrap items-center justify-between gap-2">
+                <div>
+                  <h3 className="text-xs font-black uppercase tracking-wider text-amber-800 flex items-center gap-1.5">
+                    <MapPin className="w-4 h-4 text-amber-600" />
+                    <span>Khách hàng có nhiều địa chỉ giao hàng ({auditResult.multiAddressAnomalies.length})</span>
+                  </h3>
+                  <span className="text-[11px] text-slate-400">
+                    Chuyển các địa chỉ thứ 2 trở đi thành Địa chỉ phụ trên cùng 1 khách hàng
+                  </span>
+                </div>
+                {onConvertAddressesBatch && (
+                  <button
+                    type="button"
+                    onClick={() => {
+                      setExcludedAddressBatchIds(new Set());
+                      setShowAddressBatchPreview(prev => !prev);
+                    }}
+                    className="px-3 py-1.5 bg-amber-600 hover:bg-amber-700 text-white rounded-xl text-xs font-bold transition shadow-xs flex items-center gap-1.5 shrink-0"
+                  >
+                    <ListChecks className="w-3.5 h-3.5" />
+                    <span>
+                      {showAddressBatchPreview
+                        ? 'Ẩn xem trước hàng loạt'
+                        : `Xem trước & Chuyển hàng loạt (${auditResult.multiAddressAnomalies.length})`}
+                    </span>
+                  </button>
+                )}
               </div>
+
+              {showAddressBatchPreview && onConvertAddressesBatch && (
+                <div className="p-3.5 bg-amber-50/80 border-2 border-amber-300 rounded-2xl space-y-3">
+                  <div className="flex flex-wrap items-center justify-between gap-2">
+                    <div className="text-xs text-amber-900">
+                      <strong>Xem trước chuyển thành Địa chỉ phụ:</strong> Các số nhà có dấu <code>/</code> như <em>40/26</em> đã được loại trừ. Bỏ tick những dòng chưa muốn chuyển.
+                    </div>
+                    <div className="flex items-center gap-2 text-[11px] font-bold">
+                      <button
+                        type="button"
+                        onClick={() => setExcludedAddressBatchIds(new Set())}
+                        className="text-amber-800 hover:underline"
+                      >
+                        Chọn tất cả
+                      </button>
+                      <span className="text-amber-300">|</span>
+                      <button
+                        type="button"
+                        onClick={() =>
+                          setExcludedAddressBatchIds(new Set(auditResult.multiAddressAnomalies.map(a => a.customer.id)))
+                        }
+                        className="text-slate-600 hover:underline"
+                      >
+                        Bỏ chọn tất cả
+                      </button>
+                    </div>
+                  </div>
+
+                  <div className="max-h-60 overflow-y-auto bg-white rounded-xl border border-amber-200 divide-y divide-slate-100 text-xs">
+                    {auditResult.multiAddressAnomalies.map(({ customer, addresses }) => {
+                      const checked = !excludedAddressBatchIds.has(customer.id);
+                      return (
+                        <label
+                          key={customer.id}
+                          className="p-2.5 flex items-start gap-2.5 hover:bg-amber-50/40 cursor-pointer"
+                        >
+                          <input
+                            type="checkbox"
+                            checked={checked}
+                            onChange={() => {
+                              setExcludedAddressBatchIds(prev => {
+                                const next = new Set(prev);
+                                if (next.has(customer.id)) next.delete(customer.id);
+                                else next.add(customer.id);
+                                return next;
+                              });
+                            }}
+                            className="mt-0.5 rounded border-amber-400 text-amber-600 focus:ring-amber-500"
+                          />
+                          <div className="min-w-0 flex-1 space-y-0.5">
+                            <div className="font-bold text-slate-800">{customer.name}</div>
+                            <div className="text-[11px] text-slate-600">
+                              <span className="font-semibold text-emerald-700">Chính:</span> {addresses[0]}
+                            </div>
+                            <div className="text-[11px] text-amber-800">
+                              <span className="font-semibold">Phụ:</span> {addresses.slice(1).join(' | ')}
+                            </div>
+                          </div>
+                        </label>
+                      );
+                    })}
+                  </div>
+
+                  <div className="flex items-center justify-end gap-2">
+                    <button
+                      type="button"
+                      onClick={() => setShowAddressBatchPreview(false)}
+                      className="px-3 py-1.5 rounded-xl bg-white border border-slate-200 text-slate-600 text-xs font-bold hover:bg-slate-50"
+                    >
+                      Đóng xem trước
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => {
+                        const targetIds = auditResult.multiAddressAnomalies
+                          .map(a => a.customer.id)
+                          .filter(id => !excludedAddressBatchIds.has(id));
+                        if (targetIds.length === 0) return;
+                        const updatedCount = onConvertAddressesBatch(targetIds);
+                        setShowAddressBatchPreview(false);
+                        setRepairSuccessLog([
+                          `Đã chuyển thành công địa chỉ thứ 2 trở đi sang Địa chỉ phụ cho ${updatedCount} khách hàng.`,
+                        ]);
+                      }}
+                      disabled={
+                        auditResult.multiAddressAnomalies.every(a => excludedAddressBatchIds.has(a.customer.id))
+                      }
+                      className="px-4 py-1.5 rounded-xl bg-emerald-600 hover:bg-emerald-700 disabled:opacity-50 text-white text-xs font-bold shadow-xs flex items-center gap-1.5"
+                    >
+                      <Check className="w-3.5 h-3.5" />
+                      <span>
+                        Xác nhận chuyển (
+                        {auditResult.multiAddressAnomalies.filter(a => !excludedAddressBatchIds.has(a.customer.id)).length} khách)
+                      </span>
+                    </button>
+                  </div>
+                </div>
+              )}
 
               <div className="space-y-2.5">
                 {auditResult.multiAddressAnomalies.map(({ customer, addresses }) => (
@@ -442,7 +603,7 @@ export const CustomerSentinelModal: React.FC<CustomerSentinelModalProps> = ({
                     key={customer.id}
                     className="p-3.5 bg-white rounded-2xl border border-slate-200 shadow-2xs space-y-2.5"
                   >
-                    <div className="flex items-start justify-between gap-3">
+                    <div className="flex items-start justify-between gap-3 flex-wrap">
                       <div>
                         <div className="flex items-center gap-2">
                           <span className="font-bold text-slate-800 text-sm">{customer.name}</span>
@@ -458,7 +619,17 @@ export const CustomerSentinelModal: React.FC<CustomerSentinelModalProps> = ({
                         </div>
                       </div>
 
-                      <div className="flex items-center gap-2 shrink-0">
+                      <div className="flex items-center gap-2 shrink-0 flex-wrap">
+                        {addresses.length >= 2 && onConvertAddressToExtra && (
+                          <button
+                            type="button"
+                            onClick={() => onConvertAddressToExtra(customer.id)}
+                            className="px-3 py-1.5 bg-emerald-600 hover:bg-emerald-700 text-white rounded-xl text-xs font-bold transition shadow-xs flex items-center gap-1.5"
+                          >
+                            <Check className="w-3.5 h-3.5" />
+                            <span>Chuyển thành địa chỉ phụ</span>
+                          </button>
+                        )}
                         {addresses.length >= 2 && (
                           <button
                             onClick={() => {
@@ -466,10 +637,10 @@ export const CustomerSentinelModal: React.FC<CustomerSentinelModalProps> = ({
                                 onSplitCustomer(customer.id, 'address');
                               }
                             }}
-                            className="px-3 py-1.5 bg-amber-600 hover:bg-amber-700 text-white rounded-xl text-xs font-bold transition shadow-xs flex items-center gap-1.5"
+                            className="px-3 py-1.5 bg-amber-100 hover:bg-amber-200 text-amber-900 border border-amber-300 rounded-xl text-xs font-bold transition flex items-center gap-1.5"
                           >
                             <GitFork className="w-3.5 h-3.5" />
-                            <span>Tách theo từng địa chỉ</span>
+                            <span>Tách thành 2 khách</span>
                           </button>
                         )}
                         <button
@@ -492,7 +663,9 @@ export const CustomerSentinelModal: React.FC<CustomerSentinelModalProps> = ({
                               className="bg-white p-2 rounded-lg border border-slate-200 text-slate-800 truncate"
                               title={addr}
                             >
-                              <span className="font-bold text-slate-500 mr-1">Đ/c {idx + 1}:</span>
+                              <span className="font-bold text-slate-500 mr-1">
+                                {idx === 0 ? 'Chính:' : `Phụ ${idx + 1}:`}
+                              </span>
                               <span>{addr}</span>
                             </div>
                           ))}

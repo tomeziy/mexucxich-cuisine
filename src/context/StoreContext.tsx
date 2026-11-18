@@ -11,6 +11,8 @@ import {
   splitCustomerByHistoricalOrder,
   MigrationRepairResult,
 } from '../utils/customerSentinel';
+import { repairFusedPhonesBatch, repairCustomerFusedPhones } from '../utils/phoneRecovery';
+import { convertAddressToExtraAddresses, normalizeAddressList } from '../utils/addressUtils';
 import { extractMissingProductsFromOrders } from '../utils/excel';
 import { removeVietnameseTones } from '../utils/vietnamese';
 import {
@@ -45,6 +47,8 @@ import {
   mergeDebtPayments,
   calculateStockDelta,
   applyCatalogAntiShrinkGuard,
+  isCloudExtraAddressesUnsupported,
+  subscribeCloudExtraAddressesSupport,
 } from '../services/supabase';
 
 export { applyCatalogAntiShrinkGuard };
@@ -56,6 +60,7 @@ interface StoreContextType {
   debtPayments: DebtPayment[];
   receiptSettings: ReceiptSettings;
   cloudConfig: CloudConfig;
+  cloudExtraAddressesPendingSync: boolean;
   addProduct: (product: Omit<Product, 'id'>) => Product;
   addProductsBatch: (products: Array<Omit<Product, 'id'>>) => Product[];
   updateProduct: (id: string, product: Partial<Product>) => void;
@@ -75,6 +80,9 @@ interface StoreContextType {
   syncLocalToCloud: () => Promise<{ success: boolean; message: string }>;
   syncCloudToLocal: () => Promise<{ success: boolean; message: string }>;
   repairCustomerData: () => MigrationRepairResult;
+  acceptRecoveredPhoneSplit: (customerId: string) => void;
+  promoteMultiAddressToExtra: (customerId: string) => void;
+  promoteMultiAddressesBatch: (customerIds: string[]) => number;
   splitCustomerRecord: (customerId: string, type: 'phone' | 'address') => void;
   mergeCustomerRecords: (primaryId: string, duplicateId: string) => void;
   restoreCustomerFromOrder: (customerId: string, orderId: string) => { success: boolean; message: string };
@@ -95,11 +103,19 @@ const STORAGE_KEYS = {
   ORDERS: 'mxc_orders',
   DEBT_PAYMENTS: 'mxc_debt_payments',
   SETTINGS: 'mxc_receipt_settings',
+  ADR0020_PHONE_MIGRATION: 'mxc_adr0020_phone_repair_v1',
 };
 
 export const StoreProvider: React.FC<{ children: React.ReactNode }> = ({ children }) => {
   // Cloud Config state
   const [cloudConfig, setCloudConfig] = useState<CloudConfig>(getSupabaseConfig);
+  const [cloudExtraAddressesUnsupported, setCloudExtraAddressesUnsupported] = useState<boolean>(
+    isCloudExtraAddressesUnsupported
+  );
+
+  useEffect(() => {
+    return subscribeCloudExtraAddressesSupport(setCloudExtraAddressesUnsupported);
+  }, []);
 
   // Products state
   const [products, setProducts] = useState<Product[]>(() => {
@@ -273,14 +289,38 @@ export const StoreProvider: React.FC<{ children: React.ReactNode }> = ({ childre
     }
   }, [products, customers, orders, debtPayments, receiptSettings]);
 
-  // One-time Sentinel local data integrity audit and repair on boot (ADR-0017)
+  // One-time Sentinel local data integrity audit & ADR-0020 fused phone repair on boot
   useEffect(() => {
     const result = repairAndMigrateCustomers(stateRef.current.customers, stateRef.current.orders);
-    if (result.changesCount > 0) {
-      setCustomers(result.repairedCustomers);
+    let nextCustomers = result.repairedCustomers;
+    let hasChanges = result.changesCount > 0;
+
+    const phoneRepair = repairFusedPhonesBatch(nextCustomers);
+    if (phoneRepair.changedCustomers.length > 0) {
+      nextCustomers = phoneRepair.customers;
+      hasChanges = true;
+    }
+
+    if (hasChanges) {
+      stateRef.current.customers = nextCustomers;
+      stateRef.current.orders = result.repairedOrders;
+      setCustomers(nextCustomers);
       setOrders(result.repairedOrders);
-      localStorage.setItem(STORAGE_KEYS.CUSTOMERS, JSON.stringify(result.repairedCustomers));
+      localStorage.setItem(STORAGE_KEYS.CUSTOMERS, JSON.stringify(nextCustomers));
       localStorage.setItem(STORAGE_KEYS.ORDERS, JSON.stringify(result.repairedOrders));
+
+      if (
+        phoneRepair.changedCustomers.length > 0 &&
+        cloudConfig.supabaseUrl &&
+        cloudConfig.supabaseAnonKey &&
+        cloudConfig.autoSync
+      ) {
+        cloudSyncCustomersBatch(phoneRepair.changedCustomers);
+      }
+    }
+
+    if (localStorage.getItem(STORAGE_KEYS.ADR0020_PHONE_MIGRATION) !== '1') {
+      localStorage.setItem(STORAGE_KEYS.ADR0020_PHONE_MIGRATION, '1');
     }
   }, []);
 
@@ -304,11 +344,16 @@ export const StoreProvider: React.FC<{ children: React.ReactNode }> = ({ childre
               cloudData.customers,
               cloudData.orders
             );
-            setCustomers(repairedCustomers);
+            const phoneRepair = repairFusedPhonesBatch(repairedCustomers);
+            setCustomers(phoneRepair.customers);
             setOrders(repairedOrders);
             setDebtPayments(cloudData.debtPayments);
             if (cloudData.settings) {
               setReceiptSettings(prev => ({ ...prev, ...cloudData.settings }));
+            }
+            if (phoneRepair.changedCustomers.length > 0) {
+              localStorage.setItem(STORAGE_KEYS.CUSTOMERS, JSON.stringify(phoneRepair.customers));
+              cloudSyncCustomersBatch(phoneRepair.changedCustomers);
             }
             console.log('✅ Đã đồng bộ dữ liệu mới nhất từ Supabase Cloud kèm giải quyết xung đột & chuẩn hóa Sentinel!');
           }
@@ -372,10 +417,12 @@ export const StoreProvider: React.FC<{ children: React.ReactNode }> = ({ childre
       pullRes.customers,
       pullRes.orders
     );
+    const phoneRepair = repairFusedPhonesBatch(repairedCustomers);
+    const finalPulledCustomers = phoneRepair.customers;
 
     // 1. Đồng bộ tức thời vào localStorage tránh Race Condition khi trang reload (ADR-0008)
     localStorage.setItem(STORAGE_KEYS.PRODUCTS, JSON.stringify(pullRes.products));
-    localStorage.setItem(STORAGE_KEYS.CUSTOMERS, JSON.stringify(repairedCustomers));
+    localStorage.setItem(STORAGE_KEYS.CUSTOMERS, JSON.stringify(finalPulledCustomers));
     localStorage.setItem(STORAGE_KEYS.ORDERS, JSON.stringify(repairedOrders));
     localStorage.setItem(STORAGE_KEYS.DEBT_PAYMENTS, JSON.stringify(pullRes.debtPayments));
     if (pullRes.settings) {
@@ -384,11 +431,15 @@ export const StoreProvider: React.FC<{ children: React.ReactNode }> = ({ childre
 
     // 2. Cập nhật React state
     setProducts(pullRes.products);
-    setCustomers(repairedCustomers);
+    setCustomers(finalPulledCustomers);
     setOrders(repairedOrders);
     setDebtPayments(pullRes.debtPayments);
     if (pullRes.settings) {
       setReceiptSettings(pullRes.settings);
+    }
+
+    if (phoneRepair.changedCustomers.length > 0) {
+      cloudSyncCustomersBatch(phoneRepair.changedCustomers);
     }
 
     const preservedCount = pullRes.localPreservedCount || 0;
@@ -454,8 +505,11 @@ export const StoreProvider: React.FC<{ children: React.ReactNode }> = ({ childre
   const addCustomer = (customerData: Omit<Customer, 'id' | 'debt' | 'totalSpent' | 'orderCount'>): Customer => {
     const newId = `KH_${Date.now()}_${Math.floor(1000 + Math.random() * 9000)}`;
     const now = new Date().toISOString();
+    const normAddr = normalizeAddressList(customerData.address || '', customerData.extraAddresses);
     const newCustomer: Customer = {
       ...customerData,
+      address: normAddr.address,
+      extraAddresses: normAddr.extraAddresses,
       id: newId,
       debt: 0,
       totalSpent: 0,
@@ -471,15 +525,20 @@ export const StoreProvider: React.FC<{ children: React.ReactNode }> = ({ childre
   const addCustomersBatch = (customersData: Array<Omit<Customer, 'id' | 'totalSpent' | 'orderCount'>>): Customer[] => {
     const timestamp = Date.now();
     const now = new Date().toISOString();
-    const newCustomers: Customer[] = customersData.map((c, idx) => ({
-      ...c,
-      id: `KH_${timestamp}_${idx}_${Math.random().toString(36).substring(2, 6)}`,
-      debt: c.debt || 0,
-      totalSpent: 0,
-      orderCount: 0,
-      createdAt: now,
-      updatedAt: now,
-    }));
+    const newCustomers: Customer[] = customersData.map((c, idx) => {
+      const normAddr = normalizeAddressList(c.address || '', c.extraAddresses);
+      return {
+        ...c,
+        address: normAddr.address,
+        extraAddresses: normAddr.extraAddresses,
+        id: `KH_${timestamp}_${idx}_${Math.random().toString(36).substring(2, 6)}`,
+        debt: c.debt || 0,
+        totalSpent: 0,
+        orderCount: 0,
+        createdAt: now,
+        updatedAt: now,
+      };
+    });
     setCustomers(prev => [...newCustomers, ...prev]);
     cloudSyncCustomersBatch(newCustomers);
     return newCustomers;
@@ -490,9 +549,14 @@ export const StoreProvider: React.FC<{ children: React.ReactNode }> = ({ childre
     setCustomers(prev =>
       prev.map(c => {
         if (c.id === id) {
-          const updated = { ...c, ...updatedData, updatedAt: now };
-          cloudSyncCustomer(updated);
-          return updated;
+          const merged = { ...c, ...updatedData, updatedAt: now };
+          if ('address' in updatedData || 'extraAddresses' in updatedData) {
+            const normAddr = normalizeAddressList(merged.address || '', merged.extraAddresses);
+            merged.address = normAddr.address;
+            merged.extraAddresses = normAddr.extraAddresses;
+          }
+          cloudSyncCustomer(merged);
+          return merged;
         }
         return c;
       })
@@ -504,18 +568,85 @@ export const StoreProvider: React.FC<{ children: React.ReactNode }> = ({ childre
     cloudDeleteCustomer(id);
   };
 
-  // Sentinel Customer Repair & Decoupling actions (ADR-0017)
+  // Sentinel Customer Repair & Decoupling actions (ADR-0017 & ADR-0020)
   const repairCustomerData = (): MigrationRepairResult => {
     const result = repairAndMigrateCustomers(customers, orders);
-    if (result.changesCount > 0) {
-      setCustomers(result.repairedCustomers);
+    const phoneRepair = repairFusedPhonesBatch(result.repairedCustomers);
+    const combinedLog = [...result.log, ...phoneRepair.log];
+    const totalChanges = result.changesCount + phoneRepair.changedCustomers.length;
+
+    if (totalChanges > 0) {
+      setCustomers(phoneRepair.customers);
       setOrders(result.repairedOrders);
-      cloudSyncCustomersBatch(result.repairedCustomers);
-      for (const ord of result.repairedOrders) {
-        cloudSyncOrder(ord);
+      const changedSet = new Map<string, Customer>();
+      if (result.changesCount > 0) {
+        const origMap = new Map(customers.map(c => [c.id, c]));
+        for (const rc of phoneRepair.customers) {
+          const orig = origMap.get(rc.id);
+          if (!orig || orig.phone !== rc.phone || orig.phone2 !== rc.phone2 || orig.name !== rc.name || orig.address !== rc.address) {
+            changedSet.set(rc.id, rc);
+          }
+        }
+      }
+      for (const cc of phoneRepair.changedCustomers) {
+        changedSet.set(cc.id, cc);
+      }
+      const toSync = Array.from(changedSet.values());
+      if (toSync.length > 0) {
+        cloudSyncCustomersBatch(toSync);
+      }
+      if (result.changesCount > 0) {
+        for (const ord of result.repairedOrders) {
+          cloudSyncOrder(ord);
+        }
       }
     }
-    return result;
+
+    return {
+      repairedCustomers: phoneRepair.customers,
+      repairedOrders: result.repairedOrders,
+      changesCount: totalChanges,
+      log: combinedLog,
+    };
+  };
+
+  const acceptRecoveredPhoneSplit = (customerId: string) => {
+    const target = customers.find(c => c.id === customerId);
+    if (!target) return;
+    const res = repairCustomerFusedPhones(target);
+    if (!res.changed) return;
+    setCustomers(prev => prev.map(c => (c.id === customerId ? res.customer : c)));
+    cloudSyncCustomer(res.customer);
+  };
+
+  const promoteMultiAddressToExtra = (customerId: string) => {
+    const target = customers.find(c => c.id === customerId);
+    if (!target) return;
+    const res = convertAddressToExtraAddresses(target);
+    if (!res.changed) return;
+    setCustomers(prev => prev.map(c => (c.id === customerId ? res.customer : c)));
+    cloudSyncCustomer(res.customer);
+  };
+
+  const promoteMultiAddressesBatch = (customerIds: string[]): number => {
+    if (!customerIds || customerIds.length === 0) return 0;
+    const idSet = new Set(customerIds);
+    const now = new Date().toISOString();
+    const changedCustomers: Customer[] = [];
+    const nextList = customers.map(c => {
+      if (!idSet.has(c.id)) return c;
+      const res = convertAddressToExtraAddresses(c, now);
+      if (res.changed) {
+        changedCustomers.push(res.customer);
+        return res.customer;
+      }
+      return c;
+    });
+    if (changedCustomers.length > 0) {
+      setCustomers(nextList);
+      cloudSyncCustomersBatch(changedCustomers);
+    }
+    return changedCustomers.length;
   };
 
   const splitCustomerRecord = (customerId: string, type: 'phone' | 'address') => {
@@ -1323,6 +1454,9 @@ export const StoreProvider: React.FC<{ children: React.ReactNode }> = ({ childre
     }
   };
 
+  const cloudExtraAddressesPendingSync =
+    cloudExtraAddressesUnsupported && customers.some(c => (c.extraAddresses?.length || 0) > 0);
+
   return (
     <StoreContext.Provider
       value={{
@@ -1332,6 +1466,7 @@ export const StoreProvider: React.FC<{ children: React.ReactNode }> = ({ childre
         debtPayments,
         receiptSettings,
         cloudConfig,
+        cloudExtraAddressesPendingSync,
         addProduct,
         addProductsBatch,
         updateProduct,
@@ -1351,6 +1486,9 @@ export const StoreProvider: React.FC<{ children: React.ReactNode }> = ({ childre
         syncLocalToCloud,
         syncCloudToLocal,
         repairCustomerData,
+        acceptRecoveredPhoneSplit,
+        promoteMultiAddressToExtra,
+        promoteMultiAddressesBatch,
         splitCustomerRecord,
         mergeCustomerRecords,
         restoreCustomerFromOrder,

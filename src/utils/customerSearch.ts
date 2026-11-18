@@ -1,6 +1,7 @@
 import type { Customer } from '../types/index.ts';
 import { removeVietnameseTones } from './vietnamese.ts';
 import { normalizeSinglePhone, normalizeVietnamesePhone, isPhoneMatching } from './excel.ts';
+import { getAllCustomerAddresses } from './addressUtils.ts';
 
 export interface ScoreCustomerOptions {
   selectedCustomerId?: string;
@@ -62,7 +63,9 @@ export function scoreCustomer(
     .filter(Boolean);
   const customerAllDigits = combinedPhoneRaw.replace(/\D/g, '');
 
-  const addressClean = customer.address ? removeVietnameseTones(customer.address.normalize('NFC')) : '';
+  const allAddresses = getAllCustomerAddresses(customer);
+  const addressesClean = allAddresses.map(a => removeVietnameseTones(a.normalize('NFC')));
+  const addressClean = addressesClean.join(' ');
   const combined = `${nameClean} ${combinedPhoneRaw} ${customerAllDigits} ${addressClean}`;
 
   // Check if search query consists solely of phone number digits / phone punctuation (no alphabetical letters)
@@ -151,7 +154,7 @@ export function scoreCustomer(
 
   const isNameDiacriticSubstring = nameRawLower.includes(rawLower);
   const isNameSubstring = nameClean.includes(cleanQuery);
-  const isAddrSubstring = addressClean.includes(cleanQuery);
+  const isAddrSubstring = addressesClean.some(a => a.includes(cleanQuery));
 
   let score = 0;
 

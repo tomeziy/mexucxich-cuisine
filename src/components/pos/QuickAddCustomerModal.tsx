@@ -3,6 +3,8 @@ import { useStore } from '../../context/StoreContext';
 import { Customer } from '../../types';
 import { normalizeVietnamesePhone, isPhoneMatching } from '../../utils/excel';
 import { findDuplicatePhoneCustomer } from '../../utils/customerSearch';
+import { normalizeAddressList } from '../../utils/addressUtils';
+import { AddressListEditor } from '../customers/AddressListEditor';
 import { UserPlus, X, AlertTriangle } from 'lucide-react';
 
 interface QuickAddCustomerModalProps {
@@ -25,6 +27,7 @@ export const QuickAddCustomerModal: React.FC<QuickAddCustomerModalProps> = ({
   const [phone, setPhone] = useState(initialPhone);
   const [phone2, setPhone2] = useState('');
   const [address, setAddress] = useState('');
+  const [extraAddresses, setExtraAddresses] = useState<string[]>([]);
   const [error, setError] = useState('');
 
   const nameInputRef = useRef<HTMLInputElement>(null);
@@ -36,6 +39,7 @@ export const QuickAddCustomerModal: React.FC<QuickAddCustomerModalProps> = ({
       setPhone(initialPhone || '');
       setPhone2('');
       setAddress('');
+      setExtraAddresses([]);
       setError('');
 
       setTimeout(() => {
@@ -93,12 +97,14 @@ export const QuickAddCustomerModal: React.FC<QuickAddCustomerModalProps> = ({
 
     const normPhone1 = normalizeVietnamesePhone(phone.trim()) || phone.trim();
     const normPhone2 = phone2.trim() ? (normalizeVietnamesePhone(phone2.trim()) || phone2.trim()) : undefined;
+    const normAddr = normalizeAddressList(address, extraAddresses);
 
     const newCust = addCustomer({
       name: name.trim(),
       phone: normPhone1,
       phone2: normPhone2,
-      address: address.trim(),
+      address: normAddr.address,
+      extraAddresses: normAddr.extraAddresses,
     });
 
     onCustomerAdded(newCust);
@@ -106,6 +112,7 @@ export const QuickAddCustomerModal: React.FC<QuickAddCustomerModalProps> = ({
     setPhone('');
     setPhone2('');
     setAddress('');
+    setExtraAddresses([]);
     setError('');
     onClose();
   };
@@ -212,16 +219,13 @@ export const QuickAddCustomerModal: React.FC<QuickAddCustomerModalProps> = ({
             )}
           </div>
 
-          <div>
-            <label className="font-bold text-slate-700 block mb-1">Địa chỉ giao hàng</label>
-            <textarea
-              value={address}
-              onChange={e => setAddress(e.target.value)}
-              placeholder="Số nhà, ngõ, đường, quận..."
-              rows={2}
-              className="w-full bg-slate-50 border border-slate-200 rounded-xl px-3 py-1.5 text-xs focus:outline-none focus:ring-1 focus:ring-amber-500 font-medium resize-none"
-            />
-          </div>
+          <AddressListEditor
+            address={address}
+            extraAddresses={extraAddresses}
+            onChangeAddress={setAddress}
+            onChangeExtraAddresses={setExtraAddresses}
+            compact
+          />
 
           <div className="flex gap-2 pt-2 border-t border-slate-100">
             <button

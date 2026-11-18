@@ -5,6 +5,8 @@ import { formatVND, formatDate, formatDisplayQty } from '../utils/format';
 import { matchesSearch, removeVietnameseTones } from '../utils/vietnamese';
 import { filterAndRankCustomers, findDuplicatePhoneCustomer } from '../utils/customerSearch';
 import { auditCustomerData } from '../utils/customerSentinel';
+import { getAllCustomerAddresses, normalizeAddressList } from '../utils/addressUtils';
+import { AddressListEditor } from '../components/customers/AddressListEditor';
 import { CustomerSentinelModal } from '../components/customers/CustomerSentinelModal';
 import { ReceiptModal } from '../components/pos/ReceiptModal';
 import { EditOrderModal } from '../components/pos/EditOrderModal';
@@ -47,6 +49,7 @@ export interface CustomerImportRowItem {
   phone: string;
   phone2?: string;
   address: string;
+  extraAddresses?: string[];
   debt: number;
   isDuplicate: boolean;
   existingCustomer?: Customer;
@@ -59,12 +62,16 @@ export const CustomersPage: React.FC = () => {
     orders,
     debtPayments,
     receiptSettings,
+    cloudExtraAddressesPendingSync,
     addCustomer,
     addCustomersBatch,
     updateCustomer,
     deleteOrder,
     payDebt,
     repairCustomerData,
+    acceptRecoveredPhoneSplit,
+    promoteMultiAddressToExtra,
+    promoteMultiAddressesBatch,
     splitCustomerRecord,
     mergeCustomerRecords,
     restoreCustomerFromOrder,
@@ -104,6 +111,7 @@ export const CustomersPage: React.FC = () => {
   const [editCustomerPhone, setEditCustomerPhone] = useState('');
   const [editCustomerPhone2, setEditCustomerPhone2] = useState('');
   const [editCustomerAddress, setEditCustomerAddress] = useState('');
+  const [editCustomerExtraAddresses, setEditCustomerExtraAddresses] = useState<string[]>([]);
 
   // Excel Import states
   const [isImportModalOpen, setIsImportModalOpen] = useState(false);
@@ -153,6 +161,7 @@ export const CustomersPage: React.FC = () => {
           phone: normPPhone,
           phone2: normPPhone2,
           address: p.address,
+          extraAddresses: p.extraAddresses,
           debt: p.debt,
           isDuplicate: !!existing,
           existingCustomer: existing || undefined,
@@ -189,7 +198,16 @@ export const CustomersPage: React.FC = () => {
       prev.map(r => {
         if (r.id === rowId) {
           const newName = rowEditName.trim() || r.name;
-          const newPhone = normalizeVietnamesePhone(rowEditPhone.trim());
+          const normEdited = normalizeVietnamesePhone(rowEditPhone.trim());
+          let newPhone = normEdited;
+          let newPhone2 = r.phone2;
+          if (normEdited.includes(' / ')) {
+            const parts = normEdited.split(' / ').map(p => p.trim()).filter(Boolean);
+            if (parts.length >= 2) {
+              newPhone = parts[0];
+              newPhone2 = parts.slice(1).join(' / ');
+            }
+          }
           // Re-evaluate duplication with modified phone / name
           const matchByPhone = newPhone
             ? customers.find(
@@ -203,6 +221,7 @@ export const CustomersPage: React.FC = () => {
             ...r,
             name: newName,
             phone: newPhone,
+            phone2: newPhone2,
             address: rowEditAddress.trim(),
             debt: Math.max(0, rowEditDebt || 0),
             isDuplicate: !!existing,
@@ -229,7 +248,9 @@ export const CustomersPage: React.FC = () => {
         id: string;
         name: string;
         phone: string;
+        phone2?: string;
         address: string;
+        extraAddresses?: string[];
         debt: number;
         action: 'accumulate' | 'overwrite';
       }
@@ -248,26 +269,43 @@ export const CustomersPage: React.FC = () => {
         if (row.action === 'skip') {
           skippedCount++;
         } else if (row.action === 'overwrite') {
+          const normAddr = normalizeAddressList(
+            row.address || row.existingCustomer.address,
+            row.extraAddresses || row.existingCustomer.extraAddresses
+          );
           updatedCustomersMap.set(row.existingCustomer.id, {
             id: row.existingCustomer.id,
             name: row.name || row.existingCustomer.name,
             phone: row.phone || row.existingCustomer.phone,
-            address: row.address || row.existingCustomer.address,
+            phone2: row.phone2 ?? row.existingCustomer.phone2,
+            address: normAddr.address,
+            extraAddresses: normAddr.extraAddresses,
             debt: row.debt,
             action: 'overwrite',
           });
         } else {
-          // 'accumulate' (ADR-0015: strictly preserve verified contact info)
+          // 'accumulate' (ADR-0015: strictly preserve verified contact info, append any new extra addresses)
           const existingAcc = updatedCustomersMap.get(row.existingCustomer.id);
           const baseDebt = existingAcc ? existingAcc.debt : row.existingCustomer.debt;
           const baseName = existingAcc ? existingAcc.name : row.existingCustomer.name;
           const basePhone = existingAcc ? existingAcc.phone : row.existingCustomer.phone;
+          const basePhone2 = existingAcc ? existingAcc.phone2 : row.existingCustomer.phone2;
           const baseAddress = existingAcc ? existingAcc.address : row.existingCustomer.address;
+          const baseExtras = existingAcc ? existingAcc.extraAddresses : row.existingCustomer.extraAddresses;
+          const nextPhone = basePhone || row.phone;
+          const nextPhone2 =
+            basePhone2 || (row.phone2 && (!nextPhone || !isPhoneMatching(nextPhone, row.phone2)) ? row.phone2 : undefined);
+          const normAddr = normalizeAddressList(
+            baseAddress || row.address,
+            [...(baseExtras || []), ...(row.extraAddresses || []), ...(baseAddress && row.address ? [row.address] : [])]
+          );
           updatedCustomersMap.set(row.existingCustomer.id, {
             id: row.existingCustomer.id,
             name: baseName || row.name,
-            phone: basePhone || row.phone,
-            address: baseAddress || row.address,
+            phone: nextPhone,
+            phone2: nextPhone2,
+            address: normAddr.address,
+            extraAddresses: normAddr.extraAddresses,
             debt: baseDebt + row.debt,
             action: 'accumulate',
           });
@@ -291,25 +329,31 @@ export const CustomersPage: React.FC = () => {
           const existingNew = newCustomersMap.get(targetKey)!;
           const mergedPhone = existingNew.phone || normPhone;
           const mergedPhone2 = existingNew.phone2 || row.phone2;
-          const mergedAddress = existingNew.address || row.address;
+          const mergedAddr = normalizeAddressList(
+            existingNew.address || row.address,
+            [...(existingNew.extraAddresses || []), ...(row.extraAddresses || []), ...(existingNew.address && row.address ? [row.address] : [])]
+          );
           const mergedDebt = existingNew.debt + row.debt;
 
           newCustomersMap.set(targetKey, {
             ...existingNew,
             phone: mergedPhone,
             phone2: mergedPhone2,
-            address: mergedAddress,
+            address: mergedAddr.address,
+            extraAddresses: mergedAddr.extraAddresses,
             debt: mergedDebt,
           });
 
           if (mergedPhone) phoneToNewCustKey.set(mergedPhone, targetKey);
         } else {
           const newCustKey = `new_cust_${idx}`;
+          const normAddr = normalizeAddressList(row.address, row.extraAddresses);
           newCustomersMap.set(newCustKey, {
             name: row.name,
             phone: normPhone,
             phone2: row.phone2,
-            address: row.address,
+            address: normAddr.address,
+            extraAddresses: normAddr.extraAddresses,
             debt: row.debt,
           });
 
@@ -323,7 +367,9 @@ export const CustomersPage: React.FC = () => {
       updateCustomer(item.id, {
         name: item.name,
         phone: item.phone,
+        phone2: item.phone2,
         address: item.address,
+        extraAddresses: item.extraAddresses,
         debt: item.debt,
       });
       updatedCount++;
@@ -348,6 +394,7 @@ export const CustomersPage: React.FC = () => {
   const [formPhone, setFormPhone] = useState('');
   const [formPhone2, setFormPhone2] = useState('');
   const [formAddress, setFormAddress] = useState('');
+  const [formExtraAddresses, setFormExtraAddresses] = useState<string[]>([]);
 
   // Pay Debt Form
   const [payAmount, setPayAmount] = useState<number>(0);
@@ -431,17 +478,20 @@ export const CustomersPage: React.FC = () => {
 
     const normPhone1 = normalizeVietnamesePhone(formPhone.trim()) || formPhone.trim();
     const normPhone2 = formPhone2.trim() ? (normalizeVietnamesePhone(formPhone2.trim()) || formPhone2.trim()) : undefined;
+    const normAddr = normalizeAddressList(formAddress, formExtraAddresses);
 
     addCustomer({
       name: formName.trim(),
       phone: normPhone1,
       phone2: normPhone2,
-      address: formAddress.trim(),
+      address: normAddr.address,
+      extraAddresses: normAddr.extraAddresses,
     });
     setFormName('');
     setFormPhone('');
     setFormPhone2('');
     setFormAddress('');
+    setFormExtraAddresses([]);
     setIsAddCustomerOpen(false);
   };
 
@@ -480,6 +530,7 @@ export const CustomersPage: React.FC = () => {
     setEditCustomerPhone(cust.phone || '');
     setEditCustomerPhone2(cust.phone2 || '');
     setEditCustomerAddress(cust.address || '');
+    setEditCustomerExtraAddresses(cust.extraAddresses || []);
   };
 
   const handleSaveEditCustomer = (e: React.FormEvent) => {
@@ -508,12 +559,14 @@ export const CustomersPage: React.FC = () => {
 
     const normPhone1 = normalizeVietnamesePhone(editCustomerPhone.trim()) || editCustomerPhone.trim();
     const normPhone2 = editCustomerPhone2.trim() ? (normalizeVietnamesePhone(editCustomerPhone2.trim()) || editCustomerPhone2.trim()) : undefined;
+    const normAddr = normalizeAddressList(editCustomerAddress, editCustomerExtraAddresses);
 
     updateCustomer(editingCustomer.id, {
       name: editCustomerName.trim(),
       phone: normPhone1,
       phone2: normPhone2,
-      address: editCustomerAddress.trim(),
+      address: normAddr.address,
+      extraAddresses: normAddr.extraAddresses,
     });
     setEditingCustomer(null);
   };
@@ -668,6 +721,16 @@ export const CustomersPage: React.FC = () => {
         </div>
       )}
 
+      {/* Cloud Pending Sync Notice for extraAddresses */}
+      {cloudExtraAddressesPendingSync && (
+        <div className="bg-slate-50 border border-slate-200 rounded-xl px-3.5 py-2 text-[11px] text-slate-600 flex items-center gap-2">
+          <AlertCircle className="w-3.5 h-3.5 text-amber-600 shrink-0" />
+          <span>
+            Địa chỉ phụ đang lưu trên thiết bị này (<strong>chưa đồng bộ Cloud</strong> — cần thêm cột <code className="bg-slate-200/70 px-1 rounded">extra_addresses</code> trên Supabase để đồng bộ nhiều máy).
+          </span>
+        </div>
+      )}
+
       {/* Search Bar */}
       <div className="bg-white p-3.5 rounded-2xl border border-slate-200 shadow-xs">
         <div className="relative">
@@ -760,9 +823,17 @@ export const CustomersPage: React.FC = () => {
                       )}
                     </td>
                     <td className="py-2 px-2.5 text-slate-500">
-                      <div className="max-w-[150px] xl:max-w-[200px] truncate" title={cust.address || ''}>
+                      <div className="max-w-[150px] xl:max-w-[200px] truncate" title={getAllCustomerAddresses(cust).join(' | ')}>
                         {cust.address || <span className="text-slate-300 italic">-</span>}
                       </div>
+                      {cust.extraAddresses && cust.extraAddresses.length > 0 && (
+                        <span
+                          className="inline-block mt-0.5 px-1.5 py-0.2 bg-amber-50 text-amber-800 border border-amber-200/60 rounded text-[10px] font-semibold"
+                          title={cust.extraAddresses.join(' | ')}
+                        >
+                          +{cust.extraAddresses.length} đ/c phụ
+                        </span>
+                      )}
                     </td>
                     <td className="py-2 px-2 text-center font-bold text-slate-700 whitespace-nowrap">
                       {cust.orderCount || 0}
@@ -866,10 +937,23 @@ export const CustomersPage: React.FC = () => {
                     </div>
                   ) : null}
 
-                  {cust.address && (
-                    <div className="flex items-start gap-1.5 text-slate-500 text-[11px]">
-                      <MapPin className="w-3 h-3 text-slate-400 shrink-0 mt-0.5" />
-                      <span className="line-clamp-2">{cust.address}</span>
+                  {(cust.address || (cust.extraAddresses && cust.extraAddresses.length > 0)) && (
+                    <div className="space-y-0.5 text-slate-500 text-[11px]">
+                      {cust.address && (
+                        <div className="flex items-start gap-1.5">
+                          <MapPin className="w-3 h-3 text-slate-400 shrink-0 mt-0.5" />
+                          <span className="line-clamp-2">{cust.address}</span>
+                        </div>
+                      )}
+                      {cust.extraAddresses &&
+                        cust.extraAddresses.map((extraAddr, idx) => (
+                          <div key={idx} className="flex items-start gap-1.5 pl-4 text-amber-800">
+                            <span className="text-[10px] font-bold bg-amber-50 border border-amber-200/70 px-1 rounded shrink-0">
+                              Đ/c {idx + 2}
+                            </span>
+                            <span className="line-clamp-1">{extraAddr}</span>
+                          </div>
+                        ))}
                     </div>
                   )}
                 </div>
@@ -1075,18 +1159,13 @@ export const CustomersPage: React.FC = () => {
                 )}
               </div>
 
-              <div>
-                <label className="text-xs font-bold text-slate-700 block mb-1">
-                  Địa chỉ giao hàng
-                </label>
-                <textarea
-                  rows={2}
-                  value={editCustomerAddress}
-                  onChange={e => setEditCustomerAddress(e.target.value)}
-                  placeholder="Số nhà, ngõ, tên đường, quận huyện..."
-                  className="w-full bg-slate-50 border border-slate-200 rounded-xl px-3 py-2 text-xs font-medium focus:outline-none focus:ring-2 focus:ring-amber-500/20 focus:border-amber-500"
-                />
-              </div>
+              <AddressListEditor
+                address={editCustomerAddress}
+                extraAddresses={editCustomerExtraAddresses}
+                onChangeAddress={setEditCustomerAddress}
+                onChangeExtraAddresses={setEditCustomerExtraAddresses}
+                placeholder="Số nhà, ngõ, tên đường, quận huyện..."
+              />
 
               <div className="flex gap-2 pt-2">
                 <button
@@ -1213,11 +1292,27 @@ export const CustomersPage: React.FC = () => {
               </div>
             </div>
 
-            {/* Address */}
-            {activeCustomer.address && (
-              <div className="py-2.5 border-b border-slate-100 text-xs flex items-start gap-1.5 text-slate-600">
-                <MapPin className="w-3.5 h-3.5 text-slate-400 shrink-0 mt-0.5" />
-                <span>{activeCustomer.address}</span>
+            {/* Addresses */}
+            {(activeCustomer.address || (activeCustomer.extraAddresses && activeCustomer.extraAddresses.length > 0)) && (
+              <div className="py-2.5 border-b border-slate-100 text-xs space-y-1 text-slate-600">
+                {activeCustomer.address && (
+                  <div className="flex items-start gap-1.5">
+                    <MapPin className="w-3.5 h-3.5 text-slate-400 shrink-0 mt-0.5" />
+                    <span>
+                      <strong className="text-slate-700 mr-1">Đ/c chính:</strong>
+                      {activeCustomer.address}
+                    </span>
+                  </div>
+                )}
+                {activeCustomer.extraAddresses &&
+                  activeCustomer.extraAddresses.map((extraAddr, idx) => (
+                    <div key={idx} className="flex items-start gap-1.5 pl-5 text-amber-900">
+                      <span className="text-[10px] font-bold bg-amber-50 border border-amber-200 px-1.5 py-0.2 rounded shrink-0">
+                        Đ/c {idx + 2}
+                      </span>
+                      <span>{extraAddr}</span>
+                    </div>
+                  ))}
               </div>
             )}
 
@@ -1516,18 +1611,13 @@ export const CustomersPage: React.FC = () => {
                 )}
               </div>
 
-              <div>
-                <label className="text-xs font-bold text-slate-700 block mb-1">
-                  Địa chỉ giao hàng
-                </label>
-                <textarea
-                  rows={2}
-                  value={formAddress}
-                  onChange={e => setFormAddress(e.target.value)}
-                  placeholder="12 Đội Cấn, Ba Đình, Hà Nội"
-                  className="w-full bg-slate-50 border border-slate-200 rounded-xl px-3 py-2 text-xs font-medium focus:outline-none focus:ring-2 focus:ring-amber-500/20 focus:border-amber-500"
-                />
-              </div>
+              <AddressListEditor
+                address={formAddress}
+                extraAddresses={formExtraAddresses}
+                onChangeAddress={setFormAddress}
+                onChangeExtraAddresses={setFormExtraAddresses}
+                placeholder="12 Đội Cấn, Ba Đình, Hà Nội"
+              />
 
               <div className="flex gap-2 pt-2">
                 <button
@@ -1714,8 +1804,15 @@ export const CustomersPage: React.FC = () => {
                         <td className="py-2.5 px-3 font-mono text-slate-600">
                           {row.phone || <span className="text-slate-300 italic">-</span>}
                         </td>
-                        <td className="py-2.5 px-3 text-slate-500 max-w-[140px] truncate" title={row.address}>
-                          {row.address || <span className="text-slate-300 italic">-</span>}
+                        <td className="py-2.5 px-3 text-slate-500 max-w-[140px]" title={[row.address, ...(row.extraAddresses || [])].filter(Boolean).join(' | ')}>
+                          <div className="truncate">
+                            {row.address || <span className="text-slate-300 italic">-</span>}
+                          </div>
+                          {row.extraAddresses && row.extraAddresses.length > 0 && (
+                            <span className="inline-block mt-0.5 px-1 py-0.2 bg-amber-50 text-amber-800 border border-amber-200 rounded text-[9.5px] font-bold">
+                              +{row.extraAddresses.length} đ/c phụ
+                            </span>
+                          )}
                         </td>
                         <td className="py-2.5 px-3 text-right font-bold text-rose-600">
                           {row.debt > 0 ? formatVND(row.debt) : '0đ'}
@@ -1883,7 +1980,7 @@ export const CustomersPage: React.FC = () => {
         />
       )}
 
-      {/* MODAL: CUSTOMER DATA SENTINEL (ADR-0017 & ADR-0018) */}
+      {/* MODAL: CUSTOMER DATA SENTINEL (ADR-0017 & ADR-0018 & ADR-0020) */}
       <CustomerSentinelModal
         isOpen={isSentinelModalOpen}
         onClose={() => setIsSentinelModalOpen(false)}
@@ -1891,6 +1988,9 @@ export const CustomersPage: React.FC = () => {
         customers={customers}
         orders={orders}
         onRepairAll={() => repairCustomerData()}
+        onAcceptPhoneSplit={customerId => acceptRecoveredPhoneSplit(customerId)}
+        onConvertAddressToExtra={customerId => promoteMultiAddressToExtra(customerId)}
+        onConvertAddressesBatch={customerIds => promoteMultiAddressesBatch(customerIds)}
         onSplitCustomer={(customerId, type) => splitCustomerRecord(customerId, type)}
         onMergeCustomers={(primaryId, duplicateId) => mergeCustomerRecords(primaryId, duplicateId)}
         onRestoreFromOrder={(customerId, orderId) => {

@@ -1,6 +1,15 @@
 import type { Customer, Order } from '../types/index.ts';
 import { removeVietnameseTones } from './vietnamese.ts';
 import { normalizeSinglePhone, normalizeVietnamesePhone, isPhoneMatching } from './excel.ts';
+import { segmentFusedPhone } from './phoneRecovery.ts';
+import {
+  extractIndividualAddresses,
+  getAllCustomerAddresses,
+  normalizeAddressList,
+  convertAddressToExtraAddresses,
+} from './addressUtils.ts';
+
+export { extractIndividualAddresses, convertAddressToExtraAddresses };
 
 export interface ToneTwinGroup {
   toneCleanName: string;
@@ -100,11 +109,15 @@ export function extractIndividualPhones(phoneStr: string, phone2Str?: string): s
     } else {
       const norm = normalizeSinglePhone(part);
       if (norm) {
-        if (norm.length === 20 && norm.startsWith('0')) {
-          const p1 = normalizeSinglePhone(norm.slice(0, 10));
-          const p2 = normalizeSinglePhone(norm.slice(10));
-          if (p1 && !result.includes(p1)) result.push(p1);
-          if (p2 && !result.includes(p2)) result.push(p2);
+        if (norm.length > 11) {
+          const segmented = segmentFusedPhone(norm);
+          if (segmented && segmented.length > 0) {
+            for (const sp of segmented) {
+              if (!result.includes(sp)) result.push(sp);
+            }
+          } else if (!result.includes(norm)) {
+            result.push(norm);
+          }
         } else if (!result.includes(norm)) {
           result.push(norm);
         }
@@ -112,18 +125,6 @@ export function extractIndividualPhones(phoneStr: string, phone2Str?: string): s
     }
   }
   return result;
-}
-
-/**
- * Extract distinct addresses from a customer address field.
- */
-export function extractIndividualAddresses(addressStr: string): string[] {
-  if (!addressStr) return [];
-  const parts = addressStr
-    .split(/\s*[\/|\\;\n]\s*/)
-    .map(a => a.trim())
-    .filter(a => a.length >= 3);
-  return Array.from(new Set(parts));
 }
 
 /**
@@ -177,10 +178,10 @@ export function auditCustomerData(
 
     // 3. Check Multi-Address Anomalies
     const addresses = extractIndividualAddresses(c.address || '');
-    if (addresses.length > 1 || (c.address && c.address.includes(' / '))) {
+    if (addresses.length > 1) {
       multiAddressAnomalies.push({
         customer: c,
-        addresses: addresses.length > 0 ? addresses : [c.address],
+        addresses,
       });
     }
 
@@ -225,7 +226,7 @@ export function auditCustomerData(
 
       const cPhoneNorm = normalizeSinglePhone(c.phone || '');
       const cPhone2Norm = c.phone2 ? normalizeSinglePhone(c.phone2) : '';
-      const cAddrNorm = (c.address || '').trim().toLowerCase();
+      const knownAddrsLower = getAllCustomerAddresses(c).map(a => a.toLowerCase());
       const cNameNorm = (c.name || '').normalize('NFC').trim();
 
       for (const ord of custOrders) {
@@ -239,11 +240,11 @@ export function auditCustomerData(
         }
 
         const ordAddr = (ord.customerAddress || '').trim();
-        if (
-          ordAddr &&
-          ordAddr.length >= 3 &&
-          ((!cAddrNorm) || (cAddrNorm && !cAddrNorm.includes(ordAddr.toLowerCase()) && !ordAddr.toLowerCase().includes(cAddrNorm)))
-        ) {
+        const ordAddrLower = ordAddr.toLowerCase();
+        const matchesKnownAddr =
+          knownAddrsLower.length > 0 &&
+          knownAddrsLower.some(ka => ka.includes(ordAddrLower) || ordAddrLower.includes(ka));
+        if (ordAddr && ordAddr.length >= 3 && !matchesKnownAddr) {
           differingAddresses.add(ordAddr);
         }
 
@@ -766,9 +767,17 @@ export function mergeDuplicateCustomers(
     mergedPhone2 = duplicateCustomer.phone2;
   }
 
+  const mergedAddrs = normalizeAddressList(primaryCustomer.address || '', [
+    ...(primaryCustomer.extraAddresses || []),
+    duplicateCustomer.address || '',
+    ...(duplicateCustomer.extraAddresses || []),
+  ]);
+
   const mergedCustomer: Customer = {
     ...primaryCustomer,
     phone2: mergedPhone2,
+    address: mergedAddrs.address,
+    extraAddresses: mergedAddrs.extraAddresses,
     debt: (primaryCustomer.debt || 0) + (duplicateCustomer.debt || 0),
     totalSpent: (primaryCustomer.totalSpent || 0) + (duplicateCustomer.totalSpent || 0),
     orderCount: (primaryCustomer.orderCount || 0) + (duplicateCustomer.orderCount || 0),
@@ -807,11 +816,15 @@ export function restoreCustomerFromOrderSnapshot(
       ? order.customerName
       : customer.name;
 
+  const restoredAddress = order.customerAddress || customer.address;
+  const normalizedAddrs = normalizeAddressList(restoredAddress, customer.extraAddresses);
+
   const updatedCustomer: Customer = {
     ...customer,
     name: newName,
     phone: order.customerPhone || customer.phone,
-    address: order.customerAddress || customer.address,
+    address: normalizedAddrs.address,
+    extraAddresses: normalizedAddrs.extraAddresses,
     updatedAt: new Date().toISOString(),
   };
 

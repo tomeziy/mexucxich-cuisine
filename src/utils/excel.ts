@@ -2,6 +2,8 @@ import * as XLSX from 'xlsx';
 import type { Product, Customer, Order } from '../types/index.ts';
 import { removeVietnameseTones } from './vietnamese.ts';
 import { formatDisplayQty } from './format.ts';
+import { segmentFusedPhone } from './phoneRecovery.ts';
+import { normalizeAddressList } from './addressUtils.ts';
 
 /**
  * Normalize header string to lowercase alphanumeric without Vietnamese tones
@@ -57,7 +59,17 @@ export const CUSTOMER_HEADER_ALIASES = {
   ],
   address: [
     'diachi', 'diachigiaohang', 'address', 'noio', 'dc', 'diachinhanhang',
-    'diachinhan', 'diachigiao'
+    'diachinhan', 'diachigiao', 'diachi1', 'address1', 'dc1', 'diachichinh'
+  ],
+  address2: [
+    'diachi2', 'address2', 'dc2', 'diachiphu', 'diachiphu1',
+    'diachigiaohang2', 'secondaryaddress'
+  ],
+  address3: [
+    'diachi3', 'address3', 'dc3', 'diachiphu2', 'diachigiaohang3'
+  ],
+  address4: [
+    'diachi4', 'address4', 'dc4', 'diachiphu3', 'diachigiaohang4'
   ],
   debt: [
     'dunobandau', 'duno', 'congno', 'nocu', 'tienno', 'debt',
@@ -215,12 +227,15 @@ export function normalizeVietnamesePhone(phone: any): string {
     } else {
       const norm = normalizeSinglePhone(part);
       if (norm) {
-        // Recovery: if someone passed 20 digits like 08692291600986476328 from past concatenated imports
-        if (norm.length === 20 && norm.startsWith('0')) {
-          const p1 = normalizeSinglePhone(norm.slice(0, 10));
-          const p2 = normalizeSinglePhone(norm.slice(10));
-          if (p1 && !validPhones.includes(p1)) validPhones.push(p1);
-          if (p2 && !validPhones.includes(p2)) validPhones.push(p2);
+        if (norm.length > 11) {
+          const segmented = segmentFusedPhone(norm);
+          if (segmented && segmented.length > 0) {
+            for (const sp of segmented) {
+              if (!validPhones.includes(sp)) validPhones.push(sp);
+            }
+          } else if (!validPhones.includes(norm)) {
+            validPhones.push(norm);
+          }
         } else if (!validPhones.includes(norm)) {
           validPhones.push(norm);
         }
@@ -230,8 +245,11 @@ export function normalizeVietnamesePhone(phone: any): string {
 
   if (validPhones.length === 0) {
     const single = normalizeSinglePhone(raw);
-    if (single.length === 20 && single.startsWith('0')) {
-      return `${single.slice(0, 10)} / ${single.slice(10)}`;
+    if (single.length > 11) {
+      const segmented = segmentFusedPhone(single);
+      if (segmented && segmented.length > 0) {
+        return segmented.join(' / ');
+      }
     }
     return single;
   }
@@ -394,74 +412,125 @@ export interface ParsedCustomerRow {
   phone: string;
   phone2?: string;
   address: string;
+  extraAddresses?: string[];
   debt: number;
 }
 
 /**
- * Parse uploaded Excel file for Customers with fuzzy matching across all sheets and rows 0-10
+ * Parse a SheetJS WorkBook for Customers with fuzzy header matching across all sheets (rows 0-10).
+ * Supports dynamic `Địa chỉ 2`, `Địa chỉ 3`, `Địa chỉ 4`, ... columns.
  */
-export async function parseCustomersExcel(file: File): Promise<ParsedCustomerRow[]> {
+export function parseCustomersWorkbook(workbook: XLSX.WorkBook): ParsedCustomerRow[] {
+  const allCustomers: ParsedCustomerRow[] = [];
+
+  for (const sheetName of workbook.SheetNames) {
+    const worksheet = workbook.Sheets[sheetName];
+    if (!worksheet) continue;
+
+    const rawRows: any[][] = XLSX.utils.sheet_to_json(worksheet, { header: 1, defval: '' });
+    if (!rawRows || rawRows.length === 0) continue;
+
+    const scan = findHeaderRowInSheet(rawRows, CUSTOMER_HEADER_ALIASES, 'name');
+    if (!scan) continue;
+
+    // Detect any additional numbered address columns (e.g. "Địa chỉ 5") beyond address2/3/4
+    const headerRow = rawRows[scan.headerRowIndex] || [];
+    const extraAddrCols: Array<{ colIdx: number; order: number }> = [];
+    headerRow.forEach((cell, colIdx) => {
+      const mapped = scan.columnMap.get(colIdx);
+      if (mapped === 'address2') {
+        extraAddrCols.push({ colIdx, order: 2 });
+      } else if (mapped === 'address3') {
+        extraAddrCols.push({ colIdx, order: 3 });
+      } else if (mapped === 'address4') {
+        extraAddrCols.push({ colIdx, order: 4 });
+      } else if (!mapped) {
+        const key = normalizeHeaderKey(cell);
+        const m = key.match(/^(?:diachi|address|dc)(\d+)$/);
+        if (m && Number(m[1]) >= 2) {
+          extraAddrCols.push({ colIdx, order: Number(m[1]) });
+        }
+      }
+    });
+    extraAddrCols.sort((a, b) => a.order - b.order);
+
+    const dataRows = rawRows.slice(scan.headerRowIndex + 1);
+    for (const row of dataRows) {
+      if (!Array.isArray(row) || row.length === 0) continue;
+
+      const item: ParsedCustomerRow = {
+        name: '',
+        phone: '',
+        phone2: undefined,
+        address: '',
+        extraAddresses: undefined,
+        debt: 0,
+      };
+      const collectedExtras: string[] = [];
+
+      scan.columnMap.forEach((field, colIdx) => {
+        const val = row[colIdx];
+        if (field === 'name') {
+          item.name = String(val || '').trim();
+        } else if (field === 'phone') {
+          item.phone = normalizeVietnamesePhone(val);
+        } else if (field === 'phone2') {
+          item.phone2 = normalizeVietnamesePhone(val) || undefined;
+        } else if (field === 'address') {
+          item.address = String(val || '').trim();
+        } else if (field === 'debt') {
+          item.debt = parseVietnameseNumber(val);
+        }
+      });
+
+      for (const { colIdx } of extraAddrCols) {
+        const rawExtra = String(row[colIdx] || '').trim();
+        if (rawExtra) collectedExtras.push(rawExtra);
+      }
+
+      if (collectedExtras.length > 0 || item.address) {
+        const normAddr = normalizeAddressList(item.address, collectedExtras);
+        item.address = normAddr.address;
+        item.extraAddresses = normAddr.extraAddresses;
+      }
+
+      // Auto-split concatenated slashed phone if phone2 was not in a separate column
+      if (item.phone && item.phone.includes(' / ') && !item.phone2) {
+        const parts = item.phone.split(' / ').map(p => p.trim()).filter(Boolean);
+        if (parts.length >= 2) {
+          item.phone = parts[0];
+          item.phone2 = parts.slice(1).join(' / ');
+        }
+      }
+
+      if (item.name) {
+        allCustomers.push(item);
+      }
+    }
+  }
+
+  return allCustomers;
+}
+
+/**
+ * Parse uploaded Excel file (or binary buffer) for Customers with fuzzy matching across all sheets and rows 0-10
+ */
+export async function parseCustomersExcel(
+  file: File | ArrayBuffer | Uint8Array
+): Promise<ParsedCustomerRow[]> {
+  if (file instanceof Uint8Array) {
+    return parseCustomersWorkbook(XLSX.read(file, { type: 'array' }));
+  }
+  if (file instanceof ArrayBuffer) {
+    return parseCustomersWorkbook(XLSX.read(new Uint8Array(file), { type: 'array' }));
+  }
   return new Promise((resolve, reject) => {
     const reader = new FileReader();
     reader.onload = (e) => {
       try {
         const data = new Uint8Array(e.target?.result as ArrayBuffer);
         const workbook = XLSX.read(data, { type: 'array' });
-        const allCustomers: ParsedCustomerRow[] = [];
-
-        for (const sheetName of workbook.SheetNames) {
-          const worksheet = workbook.Sheets[sheetName];
-          if (!worksheet) continue;
-
-          const rawRows: any[][] = XLSX.utils.sheet_to_json(worksheet, { header: 1, defval: '' });
-          if (!rawRows || rawRows.length === 0) continue;
-
-          const scan = findHeaderRowInSheet(rawRows, CUSTOMER_HEADER_ALIASES, 'name');
-          if (!scan) continue;
-
-          const dataRows = rawRows.slice(scan.headerRowIndex + 1);
-          for (const row of dataRows) {
-            if (!Array.isArray(row) || row.length === 0) continue;
-
-            const item: ParsedCustomerRow = {
-              name: '',
-              phone: '',
-              phone2: undefined,
-              address: '',
-              debt: 0,
-            };
-
-            scan.columnMap.forEach((field, colIdx) => {
-              const val = row[colIdx];
-              if (field === 'name') {
-                item.name = String(val || '').trim();
-              } else if (field === 'phone') {
-                item.phone = normalizeVietnamesePhone(val);
-              } else if (field === 'phone2') {
-                item.phone2 = normalizeVietnamesePhone(val) || undefined;
-              } else if (field === 'address') {
-                item.address = String(val || '').trim();
-              } else if (field === 'debt') {
-                item.debt = parseVietnameseNumber(val);
-              }
-            });
-
-            // Auto-split concatenated slashed phone if phone2 was not in a separate column
-            if (item.phone && item.phone.includes(' / ') && !item.phone2) {
-              const parts = item.phone.split(' / ').map(p => p.trim()).filter(Boolean);
-              if (parts.length >= 2) {
-                item.phone = parts[0];
-                item.phone2 = parts.slice(1).join(' / ');
-              }
-            }
-
-            if (item.name) {
-              allCustomers.push(item);
-            }
-          }
-        }
-
-        resolve(allCustomers);
+        resolve(parseCustomersWorkbook(workbook));
       } catch (err) {
         reject(err);
       }
@@ -518,6 +587,7 @@ export function downloadCustomerTemplate(): void {
       'Số điện thoại': '0904047976',
       'Số điện thoại 2': '0988123456',
       'Địa chỉ': '12 Tràng Thi, Hoàn Kiếm, Hà Nội',
+      'Địa chỉ 2': '83 Hào Nam, Đống Đa, Hà Nội',
       'Dư nợ ban đầu': 250000,
     },
     {
@@ -525,6 +595,7 @@ export function downloadCustomerTemplate(): void {
       'Số điện thoại': '0912345678',
       'Số điện thoại 2': '',
       'Địa chỉ': 'Căn 1205 Tòa S2, Vinhomes Ocean Park',
+      'Địa chỉ 2': '',
       'Dư nợ ban đầu': 0,
     },
     {
@@ -532,6 +603,7 @@ export function downloadCustomerTemplate(): void {
       'Số điện thoại': '0988776655',
       'Số điện thoại 2': '',
       'Địa chỉ': 'Ki-ốt 15 Chợ Hôm, Hà Nội',
+      'Địa chỉ 2': '',
       'Dư nợ ban đầu': 500000,
     },
   ];
@@ -597,20 +669,35 @@ export function exportOrdersToExcel(orders: Order[]): void {
 }
 
 /**
+ * Build Excel export rows for customers, dynamically adding `Địa Chỉ 2`, `Địa Chỉ 3`, ...
+ * when any customer has additional addresses.
+ */
+export function buildCustomerExportRows(customers: Customer[]): Array<Record<string, any>> {
+  const maxExtras = Math.max(0, ...customers.map(c => (c.extraAddresses || []).length));
+  return customers.map((c, idx) => {
+    const row: Record<string, any> = {
+      'STT': idx + 1,
+      'Mã Khách Hàng': c.id,
+      'Tên Khách Hàng': c.name,
+      'Số Điện Thoại': c.phone || '',
+      'Số Điện Thoại 2': c.phone2 || '',
+      'Địa Chỉ': c.address || '',
+    };
+    for (let i = 0; i < maxExtras; i++) {
+      row[`Địa Chỉ ${i + 2}`] = c.extraAddresses?.[i] || '';
+    }
+    row['Số Đơn Đã Mua'] = c.orderCount || 0;
+    row['Tổng Tiền Đã Mua'] = c.totalSpent || 0;
+    row['Dư Nợ Hiện Tại'] = c.debt || 0;
+    return row;
+  });
+}
+
+/**
  * Export customer debt list to Excel
  */
 export function exportCustomersToExcel(customers: Customer[]): void {
-  const data = customers.map((c, idx) => ({
-    'STT': idx + 1,
-    'Mã Khách Hàng': c.id,
-    'Tên Khách Hàng': c.name,
-    'Số Điện Thoại': c.phone || '',
-    'Số Điện Thoại 2': c.phone2 || '',
-    'Địa Chỉ': c.address || '',
-    'Số Đơn Đã Mua': c.orderCount || 0,
-    'Tổng Tiền Đã Mua': c.totalSpent || 0,
-    'Dư Nợ Hiện Tại': c.debt || 0,
-  }));
+  const data = buildCustomerExportRows(customers);
 
   const worksheet = XLSX.utils.json_to_sheet(data);
   const workbook = XLSX.utils.book_new();

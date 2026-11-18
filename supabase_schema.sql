@@ -30,7 +30,9 @@ create table if not exists customers (
   id text primary key,
   name text not null,
   phone text default '',
+  phone2 text,
   address text default '',
+  extra_addresses jsonb default '[]'::jsonb,
   debt numeric default 0,
   total_spent numeric default 0,
   order_count integer default 0,
@@ -83,11 +85,15 @@ create table if not exists store_settings (
   updated_at timestamptz default now()
 );
 
--- Đảm bảo tương thích ngược: Bổ sung cột updated_at nếu bảng đã tồn tại từ trước
+-- Đảm bảo tương thích ngược: Bổ sung cột mới nếu bảng đã tồn tại từ trước
+alter table customers add column if not exists extra_addresses jsonb default '[]'::jsonb;
+alter table customers add column if not exists phone2 text;
 alter table products add column if not exists updated_at timestamptz default now();
 alter table customers add column if not exists updated_at timestamptz default now();
 alter table orders add column if not exists updated_at timestamptz default now();
 alter table debt_payments add column if not exists updated_at timestamptz default now();
+alter table store_settings add column if not exists updated_at timestamptz default now();
+notify pgrst, 'reload schema';
 
 -- ==============================================================================
 -- 6. HÀM ĐIỀU CHỈNH TỒN KHO NGUYÊN TỬ (ATOMIC STOCK ADJUSTMENT - ADR-0008)

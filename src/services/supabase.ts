@@ -1,5 +1,6 @@
 import { createClient, SupabaseClient } from '@supabase/supabase-js';
 import type { Product, Customer, Order, DebtPayment, ReceiptSettings, CloudConfig } from '../types/index.ts';
+import { normalizeAddressList } from '../utils/addressUtils.ts';
 import {
   calculateStockDelta,
   getEntityTimestamp,
@@ -139,17 +140,21 @@ export const transformProductFromDb = (row: any): Product => ({
   updatedAt: row.updated_at || row.created_at,
 });
 
-export const transformCustomerToDb = (c: Customer) => ({
-  id: c.id,
-  name: c.name,
-  phone: c.phone2 ? `${c.phone || ''} / ${c.phone2}` : (c.phone || ''),
-  address: c.address || '',
-  debt: c.debt || 0,
-  total_spent: c.totalSpent || 0,
-  order_count: c.orderCount || 0,
-  created_at: c.createdAt || new Date().toISOString(),
-  updated_at: c.updatedAt || c.createdAt || new Date().toISOString(),
-});
+export const transformCustomerToDb = (c: Customer) => {
+  const normAddr = normalizeAddressList(c.address || '', c.extraAddresses);
+  return {
+    id: c.id,
+    name: c.name,
+    phone: c.phone2 ? `${c.phone || ''} / ${c.phone2}` : (c.phone || ''),
+    address: normAddr.address,
+    extra_addresses: normAddr.extraAddresses || [],
+    debt: c.debt || 0,
+    total_spent: c.totalSpent || 0,
+    order_count: c.orderCount || 0,
+    created_at: c.createdAt || new Date().toISOString(),
+    updated_at: c.updatedAt || c.createdAt || new Date().toISOString(),
+  };
+};
 
 export const transformCustomerFromDb = (row: any): Customer => {
   let phone = row.phone || '';
@@ -161,12 +166,18 @@ export const transformCustomerFromDb = (row: any): Customer => {
     phone2 = parts.slice(1).join(' / ').trim() || undefined;
   }
 
+  const rawExtras = Array.isArray(row.extra_addresses)
+    ? row.extra_addresses.map((a: any) => String(a || '').trim()).filter(Boolean)
+    : undefined;
+  const normAddr = normalizeAddressList(row.address || '', rawExtras);
+
   return {
     id: row.id,
     name: row.name,
     phone,
     phone2,
-    address: row.address || '',
+    address: normAddr.address,
+    extraAddresses: normAddr.extraAddresses,
     debt: Number(row.debt) || 0,
     totalSpent: Number(row.total_spent) || 0,
     orderCount: Number(row.order_count) || 0,
@@ -247,21 +258,68 @@ export const transformDebtPaymentFromDb = (row: any): DebtPayment => ({
   updatedAt: row.updated_at || row.created_at,
 });
 
+let cloudExtraAddressesUnsupported = false;
+const schemaSupportListeners = new Set<(unsupported: boolean) => void>();
+
+export function isCloudExtraAddressesUnsupported(): boolean {
+  return cloudExtraAddressesUnsupported;
+}
+
+export function setCloudExtraAddressesUnsupported(unsupported: boolean): void {
+  if (cloudExtraAddressesUnsupported !== unsupported) {
+    cloudExtraAddressesUnsupported = unsupported;
+    for (const listener of schemaSupportListeners) {
+      listener(unsupported);
+    }
+  }
+}
+
+export function subscribeCloudExtraAddressesSupport(listener: (unsupported: boolean) => void): () => void {
+  schemaSupportListeners.add(listener);
+  return () => schemaSupportListeners.delete(listener);
+}
+
+/**
+ * Strip a specific column from single object or array of objects.
+ */
+export function stripColumn<T>(data: T, column: string): T {
+  if (data === null || data === undefined) return data;
+  if (Array.isArray(data)) {
+    return data.map(item => stripColumn(item, column)) as unknown as T;
+  }
+  if (typeof data === 'object') {
+    const copy: any = { ...data };
+    delete copy[column];
+    return copy as T;
+  }
+  return data;
+}
+
 /**
  * Strip 'updated_at' field recursively or from single/array objects.
  * Used as defensive fallback when production Supabase lacks 'updated_at' column (PGRST204).
  */
 export function stripUpdatedAt<T>(data: T): T {
-  if (data === null || data === undefined) return data;
-  if (Array.isArray(data)) {
-    return data.map(item => stripUpdatedAt(item)) as unknown as T;
+  return stripColumn(data, 'updated_at');
+}
+
+/**
+ * Extract missing column name from PostgREST PGRST204 or Postgres 42703 error messages.
+ */
+export function extractMissingColumnName(error: any): string | null {
+  if (!error) return null;
+  const msg = `${error.message || ''} ${error.details || ''} ${error.hint || ''}`;
+  const pgrstMatch = msg.match(/Could not find the ['"]([a-zA-Z0-9_]+)['"] column/i);
+  if (pgrstMatch) return pgrstMatch[1];
+  const pgMatch = msg.match(/column ['"]([a-zA-Z0-9_]+)['"](?:\s+of relation|\s+does not exist)/i);
+  if (pgMatch) return pgMatch[1];
+  if (error.code === 'PGRST204' || error.code === '42703') {
+    const lower = msg.toLowerCase();
+    if (lower.includes('extra_addresses')) return 'extra_addresses';
+    if (lower.includes('phone2')) return 'phone2';
+    if (lower.includes('updated_at')) return 'updated_at';
   }
-  if (typeof data === 'object') {
-    const copy: any = { ...data };
-    delete copy.updated_at;
-    return copy as T;
-  }
-  return data;
+  return null;
 }
 
 /**
@@ -276,31 +334,70 @@ export function isMissingColumnError(error: any, column = 'updated_at'): boolean
 
 /**
  * Executes a defensive upsert to Supabase.
- * If PostgREST rejects with PGRST204 (missing 'updated_at'), it immediately retries without 'updated_at'.
+ * If PostgREST/Postgres rejects with PGRST204 / 42703 for any missing column (e.g. 'extra_addresses',
+ * 'phone2', 'updated_at'), it iteratively strips the missing column(s) and retries.
  */
 export async function safeUpsert(
   client: SupabaseClient,
   table: string,
   rows: any | any[],
   onConflict = 'id'
-): Promise<{ data: any; error: any; stripped?: boolean }> {
-  const initialRes = await client.from(table).upsert(rows, { onConflict });
+): Promise<{ data: any; error: any; stripped?: boolean; strippedColumns?: string[] }> {
+  let currentRows = rows;
+  const strippedColumns: string[] = [];
 
-  if (initialRes.error && isMissingColumnError(initialRes.error, 'updated_at')) {
-    console.warn(
-      `[Defensive Supabase] Table '${table}' lacks 'updated_at' column (PGRST204). Retrying without 'updated_at'...`
-    );
-    const sanitized = stripUpdatedAt(rows);
-    const retryRes = await client.from(table).upsert(sanitized, { onConflict });
-    if (retryRes.error) {
-      console.error(`[Defensive Supabase] Retry failed for table '${table}':`, retryRes.error);
-    } else {
-      console.info(`[Defensive Supabase] Retry succeeded without 'updated_at' for table '${table}'!`);
+  for (let attempt = 0; attempt < 5; attempt++) {
+    const res = await client.from(table).upsert(currentRows, { onConflict });
+
+    if (!res.error) {
+      if (table === 'customers' && !strippedColumns.includes('extra_addresses')) {
+        const hadExtraAddr = Array.isArray(currentRows)
+          ? currentRows.some(r => r && Object.prototype.hasOwnProperty.call(r, 'extra_addresses'))
+          : Boolean(currentRows && Object.prototype.hasOwnProperty.call(currentRows, 'extra_addresses'));
+        if (hadExtraAddr) {
+          setCloudExtraAddressesUnsupported(false);
+        }
+      }
+      return {
+        data: res.data,
+        error: null,
+        stripped: strippedColumns.length > 0,
+        strippedColumns,
+      };
     }
-    return { data: retryRes.data, error: retryRes.error, stripped: true };
+
+    let missingCol = extractMissingColumnName(res.error);
+    if (!missingCol && isMissingColumnError(res.error, 'updated_at') && !strippedColumns.includes('updated_at')) {
+      missingCol = 'updated_at';
+    }
+
+    if (missingCol && !strippedColumns.includes(missingCol)) {
+      console.warn(
+        `[Defensive Supabase] Table '${table}' lacks '${missingCol}' column (${res.error.code || 'PGRST204'}). Retrying without '${missingCol}'...`
+      );
+      strippedColumns.push(missingCol);
+      if (table === 'customers' && missingCol === 'extra_addresses') {
+        setCloudExtraAddressesUnsupported(true);
+      }
+      currentRows = stripColumn(currentRows, missingCol);
+      continue;
+    }
+
+    console.error(`[Defensive Supabase] Upsert failed for table '${table}':`, res.error);
+    return {
+      data: res.data,
+      error: res.error,
+      stripped: strippedColumns.length > 0,
+      strippedColumns,
+    };
   }
 
-  return { data: initialRes.data, error: initialRes.error, stripped: false };
+  return {
+    data: null,
+    error: { message: `Exceeded max column-stripping retries for table '${table}'` },
+    stripped: strippedColumns.length > 0,
+    strippedColumns,
+  };
 }
 
 /**
@@ -460,6 +557,13 @@ export const pullAllDataFromCloud = async (localData?: {
     const cloudOrders = oData.map(transformOrderFromDb);
     const cloudDebtPayments = dpData.map(transformDebtPaymentFromDb);
 
+    // Detect if Cloud `customers` table already has `extra_addresses` column
+    const cloudHasExtraAddressesCol =
+      cData.length > 0 && Object.prototype.hasOwnProperty.call(cData[0], 'extra_addresses');
+    if (cData.length > 0) {
+      setCloudExtraAddressesUnsupported(!cloudHasExtraAddressesCol);
+    }
+
     let finalProducts = cloudProducts;
     let finalCustomers = cloudCustomers;
     let finalOrders = cloudOrders;
@@ -474,7 +578,9 @@ export const pullAllDataFromCloud = async (localData?: {
         localPreservedCount += pMerge.localPreserved.length;
       }
       if (localData.customers && localData.customers.length > 0) {
-        const cMerge = mergeCustomersWithConflictResolution(localData.customers, cloudCustomers);
+        const cMerge = mergeCustomersWithConflictResolution(localData.customers, cloudCustomers, {
+          preserveLocalExtraAddressesWhenCloudLacksColumn: !cloudHasExtraAddressesCol,
+        });
         finalCustomers = cMerge.merged;
         localPreservedCount += cMerge.localPreserved.length;
       }
@@ -735,7 +841,9 @@ create table if not exists customers (
   id text primary key,
   name text not null,
   phone text default '',
+  phone2 text,
   address text default '',
+  extra_addresses jsonb default '[]'::jsonb,
   debt numeric default 0,
   total_spent numeric default 0,
   order_count integer default 0,
@@ -785,12 +893,15 @@ create table if not exists store_settings (
   updated_at timestamptz default now()
 );
 
--- Đảm bảo tương thích ngược: Bổ sung cột updated_at nếu bảng đã tồn tại từ trước
+-- Đảm bảo tương thích ngược: Bổ sung cột mới nếu bảng đã tồn tại từ trước
+alter table customers add column if not exists extra_addresses jsonb default '[]'::jsonb;
+alter table customers add column if not exists phone2 text;
 alter table products add column if not exists updated_at timestamptz default now();
 alter table customers add column if not exists updated_at timestamptz default now();
 alter table orders add column if not exists updated_at timestamptz default now();
 alter table debt_payments add column if not exists updated_at timestamptz default now();
 alter table store_settings add column if not exists updated_at timestamptz default now();
+notify pgrst, 'reload schema';
 
 -- Hàm điều chỉnh tồn kho nguyên tử (Atomic Stock Adjustment - ADR-0008)
 create or replace function adjust_product_stock(p_id text, p_delta numeric)

@@ -18,6 +18,7 @@ import { QuickEditCustomerModal } from '../components/pos/QuickEditCustomerModal
 import { EditOrderModal } from '../components/pos/EditOrderModal';
 import { QuantityInput } from '../components/pos/QuantityInput';
 import { findToneTwinCustomers } from '../utils/customerSentinel';
+import { getAllCustomerAddresses, isAddressMatching } from '../utils/addressUtils';
 import {
   Search,
   Plus,
@@ -112,6 +113,10 @@ export const PosPage: React.FC = () => {
   });
 
   const selectedCustomer = customers.find(c => c.id === selectedCustomerId) || customers[0];
+  const selectedCustomerAddresses = React.useMemo(
+    () => getAllCustomerAddresses(selectedCustomer),
+    [selectedCustomer]
+  );
 
   // ADR-0017: Proactive Tone Twin / Name Collision Detection at POS
   const toneTwins = React.useMemo(() => {
@@ -736,8 +741,13 @@ export const PosPage: React.FC = () => {
                       <span className="font-medium text-slate-600">📞 {selectedCustomer.phone}</span>
                     )}
                     {selectedCustomer.address && (
-                      <span className="truncate max-w-[220px] text-slate-500" title={selectedCustomer.address}>
+                      <span className="truncate max-w-[220px] text-slate-500" title={selectedCustomerAddresses.join(' | ')}>
                         📍 {selectedCustomer.address}
+                        {selectedCustomer.extraAddresses && selectedCustomer.extraAddresses.length > 0 && (
+                          <span className="ml-1 text-[9.5px] font-bold text-amber-700 bg-amber-100 px-1 py-0.2 rounded">
+                            +{selectedCustomer.extraAddresses.length} đ/c
+                          </span>
+                        )}
                       </span>
                     )}
                   </div>
@@ -913,9 +923,33 @@ export const PosPage: React.FC = () => {
                       </div>
 
                       <div>
-                        <label className="text-[10px] font-bold text-slate-600 block mb-0.5">
-                          Địa chỉ giao hàng
-                        </label>
+                        <div className="flex items-center justify-between gap-1 mb-0.5 flex-wrap">
+                          <label className="text-[10px] font-bold text-slate-600 block">
+                            Địa chỉ giao hàng
+                          </label>
+                          {selectedCustomerAddresses.length > 1 && (
+                            <div className="flex items-center gap-1 flex-wrap">
+                              {selectedCustomerAddresses.map((addr, idx) => {
+                                const isActive = isAddressMatching(deliveryAddress, addr);
+                                return (
+                                  <button
+                                    key={idx}
+                                    type="button"
+                                    onClick={() => setDeliveryAddress(addr)}
+                                    className={`px-1.5 py-0.2 rounded text-[9.5px] font-bold transition ${
+                                      isActive
+                                        ? 'bg-amber-500 text-white shadow-2xs'
+                                        : 'bg-white hover:bg-amber-100 text-amber-800 border border-amber-300'
+                                    }`}
+                                    title={`Chọn Đ/c ${idx + 1}: ${addr}`}
+                                  >
+                                    Đ/c {idx + 1}
+                                  </button>
+                                );
+                              })}
+                            </div>
+                          )}
+                        </div>
                         <textarea
                           rows={2}
                           value={deliveryAddress}
