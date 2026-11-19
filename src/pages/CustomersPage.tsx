@@ -4,15 +4,20 @@ import { Customer, Order } from '../types';
 import { formatVND, formatDate, formatDisplayQty } from '../utils/format';
 import { matchesSearch, removeVietnameseTones } from '../utils/vietnamese';
 import { filterAndRankCustomers, findDuplicatePhoneCustomer } from '../utils/customerSearch';
-import { auditCustomerData } from '../utils/customerSentinel';
+import {
+  auditCustomerData,
+  filterAuditResultByAcks,
+  getSentinelAcknowledgedCount,
+  extractIndividualAddresses,
+  rankPrimaryCustomer,
+  mergeCustomerGroupHelper,
+} from '../utils/customerSentinel';
 import { getAllCustomerAddresses, normalizeAddressList } from '../utils/addressUtils';
 import { AddressListEditor } from '../components/customers/AddressListEditor';
 import { CustomerSentinelModal } from '../components/customers/CustomerSentinelModal';
 import { ReceiptModal } from '../components/pos/ReceiptModal';
 import { EditOrderModal } from '../components/pos/EditOrderModal';
 import {
-  Users,
-  DollarSign,
   Search,
   Plus,
   ArrowDownCircle,
@@ -23,9 +28,7 @@ import {
   X,
   History,
   AlertCircle,
-  CheckCircle2,
   Receipt,
-  UserCheck,
   FileSpreadsheet,
   Upload,
   Download,
@@ -33,6 +36,8 @@ import {
   AlertTriangle,
   ShieldAlert,
   Sparkles,
+  Trash2,
+  Merge,
 } from 'lucide-react';
 import {
   exportCustomersToExcel,
@@ -63,17 +68,28 @@ export const CustomersPage: React.FC = () => {
     debtPayments,
     receiptSettings,
     cloudExtraAddressesPendingSync,
+    sentinelAcks,
     addCustomer,
     addCustomersBatch,
     updateCustomer,
+    deleteCustomer,
+    deleteCustomersBatch,
     deleteOrder,
     payDebt,
     repairCustomerData,
     acceptRecoveredPhoneSplit,
+    acceptAllPhoneSplitsBatch,
     promoteMultiAddressToExtra,
     promoteMultiAddressesBatch,
     splitCustomerRecord,
     mergeCustomerRecords,
+    mergeCustomerGroup,
+    mergeDuplicateGroupsBatch,
+    addCustomerSecondaryPhone,
+    addCustomerExtraAddress,
+    applyDiscrepancyRecommendationsBatch,
+    acknowledgeSentinelItems,
+    resetSentinelAcks,
     restoreCustomerFromOrder,
     splitCustomerByHistoricalOrderRecord,
   } = useStore();
@@ -81,9 +97,26 @@ export const CustomersPage: React.FC = () => {
   const [searchQuery, setSearchQuery] = useState('');
   const [filterOnlyDebt, setFilterOnlyDebt] = useState(false);
 
-  // ADR-0017 & ADR-0018: Customer Data Sentinel State & Historical Audit
+  // ADR-0017, ADR-0018 & ADR-0021: Customer Data Sentinel State & Persistent Acknowledgments
   const [isSentinelModalOpen, setIsSentinelModalOpen] = useState(false);
-  const auditResult = useMemo(() => auditCustomerData(customers, orders), [customers, orders]);
+  const rawAuditResult = useMemo(() => auditCustomerData(customers, orders), [customers, orders]);
+  const auditResult = useMemo(
+    () => filterAuditResultByAcks(rawAuditResult, sentinelAcks),
+    [rawAuditResult, sentinelAcks]
+  );
+  const acknowledgedSentinelCount = useMemo(
+    () => getSentinelAcknowledgedCount(sentinelAcks),
+    [sentinelAcks]
+  );
+
+  // ADR-0021: Directory Multi-Select & Batch Edit States
+  const [selectedCustomerIds, setSelectedCustomerIds] = useState<Set<string>>(new Set());
+  const [isBatchMergeModalOpen, setIsBatchMergeModalOpen] = useState(false);
+  const [batchMergePrimaryId, setBatchMergePrimaryId] = useState<string>('');
+  const [deleteConfirmState, setDeleteConfirmState] = useState<{
+    customers: Customer[];
+    source: 'batch' | 'single';
+  } | null>(null);
 
   const handleAutoHealSentinel = () => {
     const res = repairCustomerData();
@@ -424,6 +457,59 @@ export const CustomersPage: React.FC = () => {
     return filteredCustomers.slice(start, start + pageSize);
   }, [filteredCustomers, currentPage, pageSize]);
 
+  const selectedCustomers = useMemo(
+    () => customers.filter(c => selectedCustomerIds.has(c.id)),
+    [customers, selectedCustomerIds]
+  );
+
+  const selectedMultiAddressIds = useMemo(
+    () =>
+      selectedCustomers
+        .filter(c => extractIndividualAddresses(c.address || '').length > 1)
+        .map(c => c.id),
+    [selectedCustomers]
+  );
+
+  const allPageSelected =
+    paginatedCustomers.length > 0 && paginatedCustomers.every(c => selectedCustomerIds.has(c.id));
+
+  const toggleSelectCustomer = (id: string) => {
+    setSelectedCustomerIds(prev => {
+      const next = new Set(prev);
+      if (next.has(id)) next.delete(id);
+      else next.add(id);
+      return next;
+    });
+  };
+
+  const toggleSelectPage = () => {
+    if (allPageSelected) {
+      setSelectedCustomerIds(prev => {
+        const next = new Set(prev);
+        paginatedCustomers.forEach(c => next.delete(c.id));
+        return next;
+      });
+    } else {
+      setSelectedCustomerIds(prev => {
+        const next = new Set(prev);
+        paginatedCustomers.forEach(c => next.add(c.id));
+        return next;
+      });
+    }
+  };
+
+  const openBatchMergeModal = () => {
+    if (selectedCustomers.length < 2) return;
+    const recommended = rankPrimaryCustomer(selectedCustomers, orders);
+    setBatchMergePrimaryId(recommended.id);
+    setIsBatchMergeModalOpen(true);
+  };
+
+  const openSafeDeleteConfirm = (targets: Customer[], source: 'batch' | 'single') => {
+    if (targets.length === 0) return;
+    setDeleteConfirmState({ customers: targets, source });
+  };
+
   const totalOutstandingDebt = customers.reduce((sum, c) => sum + (c.debt || 0), 0);
   const totalDebtorCount = customers.filter(c => c.debt > 0).length;
 
@@ -648,7 +734,7 @@ export const CustomersPage: React.FC = () => {
             </div>
           </div>
 
-          <div className="mt-3 flex items-center gap-2">
+          <div className="mt-3 flex flex-wrap items-center gap-2">
             <button
               onClick={() => setFilterOnlyDebt(!filterOnlyDebt)}
               className={`px-3 py-1.5 rounded-xl text-xs font-bold transition flex items-center gap-1.5 ${
@@ -660,6 +746,16 @@ export const CustomersPage: React.FC = () => {
               <AlertCircle className="w-3.5 h-3.5" />
               <span>Chỉ hiện khách đang nợ ({totalDebtorCount})</span>
             </button>
+            {auditResult.totalAnomalies === 0 && acknowledgedSentinelCount > 0 && (
+              <button
+                type="button"
+                onClick={() => setIsSentinelModalOpen(true)}
+                className="px-3 py-1.5 rounded-xl text-xs font-bold bg-slate-100 hover:bg-amber-50 text-slate-600 hover:text-amber-700 transition flex items-center gap-1.5"
+              >
+                <ShieldAlert className="w-3.5 h-3.5 text-amber-600" />
+                <span>Sentinel ({acknowledgedSentinelCount} đã bỏ qua)</span>
+              </button>
+            )}
           </div>
         </div>
 
@@ -697,7 +793,8 @@ export const CustomersPage: React.FC = () => {
                 {auditResult.toneTwins.length > 0 && `${auditResult.toneTwins.length} cặp trùng tên khác dấu • `}
                 {auditResult.multiPhoneAnomalies.length > 0 && `${auditResult.multiPhoneAnomalies.length} khách gộp nhiều SĐT • `}
                 {auditResult.multiAddressAnomalies.length > 0 && `${auditResult.multiAddressAnomalies.length} khách gộp nhiều Đ/c • `}
-                {auditResult.duplicatePhoneGroups.length > 0 && `${auditResult.duplicatePhoneGroups.length} nhóm trùng SĐT`}
+                {auditResult.duplicatePhoneGroups.length > 0 && `${auditResult.duplicatePhoneGroups.length} nhóm trùng SĐT • `}
+                {auditResult.orderDiscrepancies.length > 0 && `${auditResult.orderDiscrepancies.length} khách lệch đơn cũ`}
               </p>
             </div>
           </div>
@@ -753,6 +850,67 @@ export const CustomersPage: React.FC = () => {
         </div>
       </div>
 
+      {/* ADR-0021: Sticky Batch Edit Toolbar */}
+      {selectedCustomers.length > 0 && (
+        <div className="sticky top-2 z-30 bg-amber-600 text-white rounded-2xl p-3 shadow-lg border border-amber-500 flex flex-wrap items-center justify-between gap-2.5 animate-fadeIn">
+          <div className="flex items-center gap-2 flex-wrap text-xs">
+            <span className="px-2.5 py-1 bg-white/20 rounded-xl font-black">
+              Đã chọn {selectedCustomers.length} khách
+            </span>
+            <button
+              type="button"
+              onClick={toggleSelectPage}
+              className="px-2.5 py-1 bg-white/10 hover:bg-white/20 rounded-lg font-bold transition text-[11px]"
+            >
+              {allPageSelected ? 'Bỏ chọn trang này' : `Chọn trang này (${paginatedCustomers.length})`}
+            </button>
+            <button
+              type="button"
+              onClick={() => setSelectedCustomerIds(new Set())}
+              className="px-2.5 py-1 bg-white/10 hover:bg-white/20 rounded-lg font-bold transition text-[11px]"
+            >
+              Bỏ chọn tất cả
+            </button>
+          </div>
+
+          <div className="flex items-center gap-2 flex-wrap">
+            <button
+              type="button"
+              disabled={selectedCustomers.length < 2}
+              onClick={openBatchMergeModal}
+              className="px-3 py-1.5 bg-white hover:bg-amber-50 disabled:opacity-50 disabled:cursor-not-allowed text-amber-800 rounded-xl text-xs font-extrabold shadow-xs transition flex items-center gap-1.5"
+            >
+              <Merge className="w-3.5 h-3.5" />
+              <span>Gộp thành 1 khách</span>
+            </button>
+
+            {selectedMultiAddressIds.length > 0 && (
+              <button
+                type="button"
+                onClick={() => {
+                  const updated = promoteMultiAddressesBatch(selectedMultiAddressIds);
+                  setSelectedCustomerIds(new Set());
+                  alert(`Đã chuyển địa chỉ phụ thành công cho ${updated} khách hàng!`);
+                }}
+                className="px-3 py-1.5 bg-emerald-600 hover:bg-emerald-700 text-white rounded-xl text-xs font-extrabold shadow-xs transition flex items-center gap-1.5"
+              >
+                <MapPin className="w-3.5 h-3.5" />
+                <span>Chuyển Đ/C phụ hàng loạt ({selectedMultiAddressIds.length})</span>
+              </button>
+            )}
+
+            <button
+              type="button"
+              onClick={() => openSafeDeleteConfirm(selectedCustomers, 'batch')}
+              className="px-3 py-1.5 bg-rose-600 hover:bg-rose-700 text-white rounded-xl text-xs font-extrabold shadow-xs transition flex items-center gap-1.5"
+            >
+              <Trash2 className="w-3.5 h-3.5" />
+              <span>Xóa đã chọn ({selectedCustomers.length})</span>
+            </button>
+          </div>
+        </div>
+      )}
+
       {/* Customers Table & Mobile Cards */}
       <div className="bg-white rounded-2xl border border-slate-200 shadow-xs overflow-hidden">
         {/* Desktop Table View */}
@@ -760,6 +918,15 @@ export const CustomersPage: React.FC = () => {
           <table className="w-full text-left border-collapse text-xs min-w-[820px]">
             <thead>
               <tr className="bg-slate-50/80 border-b border-slate-200 text-slate-500 uppercase text-[10px] font-extrabold tracking-wider">
+                <th className="py-2.5 pl-3 pr-1 w-9">
+                  <input
+                    type="checkbox"
+                    checked={allPageSelected}
+                    onChange={toggleSelectPage}
+                    className="rounded border-slate-300 text-amber-600 focus:ring-amber-500"
+                    title="Chọn tất cả khách trên trang này"
+                  />
+                </th>
                 <th className="py-2.5 px-3 whitespace-nowrap">Khách hàng</th>
                 <th className="py-2.5 px-2.5 whitespace-nowrap">Điện thoại</th>
                 <th className="py-2.5 px-2.5 whitespace-nowrap">Địa chỉ</th>
@@ -774,13 +941,26 @@ export const CustomersPage: React.FC = () => {
             <tbody className="divide-y divide-slate-100 font-medium">
               {filteredCustomers.length === 0 ? (
                 <tr>
-                  <td colSpan={7} className="py-12 text-center text-slate-400 text-xs">
+                  <td colSpan={8} className="py-12 text-center text-slate-400 text-xs">
                     Không tìm thấy khách hàng nào
                   </td>
                 </tr>
               ) : (
-                paginatedCustomers.map(cust => (
-                  <tr key={cust.id} className="group hover:bg-amber-50/30 transition">
+                paginatedCustomers.map(cust => {
+                  const isSelected = selectedCustomerIds.has(cust.id);
+                  return (
+                  <tr
+                    key={cust.id}
+                    className={`group transition ${isSelected ? 'bg-amber-50/60' : 'hover:bg-amber-50/30'}`}
+                  >
+                    <td className="py-2 pl-3 pr-1">
+                      <input
+                        type="checkbox"
+                        checked={isSelected}
+                        onChange={() => toggleSelectCustomer(cust.id)}
+                        className="rounded border-slate-300 text-amber-600 focus:ring-amber-500"
+                      />
+                    </td>
                     <td className="py-2 px-3">
                       <div className="flex items-center gap-2">
                         <div className="w-7 h-7 rounded-full bg-slate-100 border border-slate-200 text-slate-600 font-extrabold flex items-center justify-center text-[11px] shrink-0">
@@ -870,7 +1050,7 @@ export const CustomersPage: React.FC = () => {
                           <Edit2 className="w-3.5 h-3.5" />
                         </button>
 
-                        {cust.debt > 0 && (
+                        {cust.debt > 0 ? (
                           <button
                             onClick={() => openPayDebtModal(cust)}
                             className="px-2 py-1 rounded-lg bg-emerald-600 hover:bg-emerald-700 text-white text-[11px] font-bold shadow-2xs transition flex items-center gap-1 shrink-0"
@@ -878,11 +1058,20 @@ export const CustomersPage: React.FC = () => {
                             <ArrowDownCircle className="w-3 h-3" />
                             <span>Thu nợ</span>
                           </button>
+                        ) : (
+                          <button
+                            onClick={() => openSafeDeleteConfirm([cust], 'single')}
+                            className="p-1.5 rounded-lg border border-rose-200 bg-rose-50 hover:bg-rose-100 text-rose-600 transition"
+                            title="Xóa khách hàng"
+                          >
+                            <Trash2 className="w-3.5 h-3.5" />
+                          </button>
                         )}
                       </div>
                     </td>
                   </tr>
-                ))
+                  );
+                })
               )}
             </tbody>
           </table>
@@ -890,15 +1079,48 @@ export const CustomersPage: React.FC = () => {
 
         {/* Mobile Cards View (ADR-0019) */}
         <div className="md:hidden divide-y divide-slate-100">
+          {paginatedCustomers.length > 0 && (
+            <div className="px-3.5 py-2 bg-slate-50/80 border-b border-slate-200 flex items-center justify-between text-xs">
+              <label className="flex items-center gap-2 font-bold text-slate-600 cursor-pointer">
+                <input
+                  type="checkbox"
+                  checked={allPageSelected}
+                  onChange={toggleSelectPage}
+                  className="rounded border-slate-300 text-amber-600 focus:ring-amber-500"
+                />
+                <span>Chọn tất cả trang này ({paginatedCustomers.length})</span>
+              </label>
+              {selectedCustomerIds.size > 0 && (
+                <button
+                  type="button"
+                  onClick={() => setSelectedCustomerIds(new Set())}
+                  className="text-[11px] font-bold text-amber-700 hover:underline"
+                >
+                  Bỏ chọn ({selectedCustomerIds.size})
+                </button>
+              )}
+            </div>
+          )}
           {filteredCustomers.length === 0 ? (
             <div className="py-12 text-center text-slate-400 text-xs">
               Không tìm thấy khách hàng nào
             </div>
           ) : (
-            paginatedCustomers.map(cust => (
-              <div key={cust.id} className="p-3.5 space-y-2.5 hover:bg-amber-50/20 transition">
+            paginatedCustomers.map(cust => {
+              const isSelected = selectedCustomerIds.has(cust.id);
+              return (
+              <div
+                key={cust.id}
+                className={`p-3.5 space-y-2.5 transition ${isSelected ? 'bg-amber-50/50' : 'hover:bg-amber-50/20'}`}
+              >
                 <div className="flex items-start justify-between gap-2">
                   <div className="flex items-center gap-2.5 min-w-0">
+                    <input
+                      type="checkbox"
+                      checked={isSelected}
+                      onChange={() => toggleSelectCustomer(cust.id)}
+                      className="rounded border-slate-300 text-amber-600 focus:ring-amber-500 shrink-0"
+                    />
                     <div className="w-8 h-8 rounded-full bg-slate-100 border border-slate-200 text-slate-700 font-extrabold flex items-center justify-center text-xs shrink-0">
                       {cust.name.slice(0, 1).toUpperCase()}
                     </div>
@@ -981,6 +1203,13 @@ export const CustomersPage: React.FC = () => {
                     >
                       <Edit2 className="w-3.5 h-3.5" />
                     </button>
+                    <button
+                      onClick={() => openSafeDeleteConfirm([cust], 'single')}
+                      className="p-1.5 rounded-lg border border-rose-200 bg-rose-50 hover:bg-rose-100 text-rose-600 transition"
+                      title="Xóa khách hàng"
+                    >
+                      <Trash2 className="w-3.5 h-3.5" />
+                    </button>
                     {cust.debt > 0 && (
                       <button
                         onClick={() => openPayDebtModal(cust)}
@@ -993,7 +1222,8 @@ export const CustomersPage: React.FC = () => {
                   </div>
                 </div>
               </div>
-            ))
+              );
+            })
           )}
         </div>
 
@@ -1403,8 +1633,18 @@ export const CustomersPage: React.FC = () => {
             </div>
 
             {/* Modal Footer */}
-            <div className="pt-3 border-t border-slate-100 flex items-center justify-between">
-              <span className="text-xs text-slate-400 font-mono">MXC CRM</span>
+            <div className="pt-3 border-t border-slate-100 flex items-center justify-between gap-2">
+              <div className="flex items-center gap-2">
+                <button
+                  type="button"
+                  onClick={() => openSafeDeleteConfirm([activeCustomer], 'single')}
+                  className="px-3 py-1.5 rounded-xl text-xs font-bold bg-rose-50 hover:bg-rose-100 text-rose-700 border border-rose-200 transition flex items-center gap-1"
+                >
+                  <Trash2 className="w-3.5 h-3.5" />
+                  <span>Xóa khách hàng</span>
+                </button>
+                <span className="text-xs text-slate-400 font-mono hidden sm:inline">MXC CRM</span>
+              </div>
               <button
                 onClick={() => setSelectedCustomerForDetail(null)}
                 className="px-4 py-1.5 rounded-xl text-xs font-bold bg-slate-100 hover:bg-slate-200 text-slate-700 transition"
@@ -1980,7 +2220,258 @@ export const CustomersPage: React.FC = () => {
         />
       )}
 
-      {/* MODAL: CUSTOMER DATA SENTINEL (ADR-0017 & ADR-0018 & ADR-0020) */}
+      {/* MODAL: BATCH MERGE CUSTOMERS PREVIEW (ADR-0021) */}
+      {isBatchMergeModalOpen && selectedCustomers.length >= 2 && (
+        <div className="fixed inset-0 bg-black/60 backdrop-blur-2xs z-[70] flex items-center justify-center p-3">
+          <div className="bg-white rounded-2xl max-w-lg w-full p-5 shadow-2xl space-y-4 max-h-[90vh] flex flex-col">
+            <div className="flex items-center justify-between pb-3 border-b border-slate-100">
+              <h3 className="font-extrabold text-sm text-slate-900 flex items-center gap-2">
+                <Merge className="w-4 h-4 text-amber-600" />
+                <span>Gộp {selectedCustomers.length} khách hàng thành 1 hồ sơ</span>
+              </h3>
+              <button
+                type="button"
+                onClick={() => setIsBatchMergeModalOpen(false)}
+                className="w-7 h-7 rounded-lg hover:bg-slate-100 flex items-center justify-center text-slate-400"
+              >
+                <X className="w-4 h-4" />
+              </button>
+            </div>
+
+            {(() => {
+              const recommended = rankPrimaryCustomer(selectedCustomers, orders);
+              const chosenPrimary =
+                selectedCustomers.find(c => c.id === batchMergePrimaryId) || recommended;
+              const duplicateList = selectedCustomers.filter(c => c.id !== chosenPrimary.id);
+              const preview = mergeCustomerGroupHelper(chosenPrimary, duplicateList, orders);
+
+              return (
+                <>
+                  <div className="text-xs text-slate-600">
+                    Chọn hồ sơ sẽ giữ lại làm <strong>Khách hàng Chính</strong> (dư nợ, SĐT phụ, địa chỉ phụ và đơn hàng của các hồ sơ còn lại sẽ được gộp sang):
+                  </div>
+
+                  <div className="flex-1 overflow-y-auto space-y-2 pr-1">
+                    {selectedCustomers.map(c => {
+                      const isPrimary = c.id === chosenPrimary.id;
+                      const isRec = c.id === recommended.id;
+                      const matchedOrders = orders.filter(o => o.customerId === c.id).length || c.orderCount || 0;
+                      return (
+                        <label
+                          key={c.id}
+                          className={`p-3 rounded-xl border flex items-start gap-2.5 cursor-pointer text-xs transition ${
+                            isPrimary
+                              ? 'bg-emerald-50/70 border-emerald-300 ring-1 ring-emerald-200'
+                              : 'bg-slate-50 border-slate-200 hover:bg-slate-100/70'
+                          }`}
+                        >
+                          <input
+                            type="radio"
+                            name="batchMergePrimary"
+                            checked={isPrimary}
+                            onChange={() => setBatchMergePrimaryId(c.id)}
+                            className="mt-1 text-emerald-600 focus:ring-emerald-500"
+                          />
+                          <div className="min-w-0 flex-1 space-y-0.5">
+                            <div className="flex items-center gap-1.5 flex-wrap">
+                              <strong className="text-slate-900">{c.name}</strong>
+                              <span className="text-[10px] font-mono text-slate-400">#{c.id}</span>
+                              {isRec && (
+                                <span className="px-1.5 py-0.2 bg-emerald-100 text-emerald-800 border border-emerald-200 rounded text-[10px] font-bold">
+                                  Đề xuất Chính
+                                </span>
+                              )}
+                            </div>
+                            <div className="text-[11px] text-slate-600">
+                              SĐT: <strong>{c.phone || 'Chưa có'}</strong>
+                              {c.phone2 && ` / ${c.phone2}`} • {matchedOrders} đơn • Nợ:{' '}
+                              <strong className={c.debt > 0 ? 'text-rose-600' : 'text-emerald-700'}>
+                                {formatVND(c.debt || 0)}
+                              </strong>
+                            </div>
+                            {c.address && (
+                              <div className="text-[11px] text-slate-500 truncate">{c.address}</div>
+                            )}
+                          </div>
+                        </label>
+                      );
+                    })}
+                  </div>
+
+                  <div className="p-3 bg-amber-50 border border-amber-200 rounded-xl text-xs space-y-1">
+                    <div className="font-bold text-amber-900">Kết quả sau khi gộp:</div>
+                    <div className="text-slate-700">
+                      Tên: <strong>{preview.mergedCustomer.name}</strong> • SĐT:{' '}
+                      <strong className="font-mono">{preview.mergedCustomer.phone || '-'}</strong>
+                      {preview.mergedCustomer.phone2 && (
+                        <span className="font-mono"> • SĐT 2: {preview.mergedCustomer.phone2}</span>
+                      )}
+                    </div>
+                    <div className="text-slate-700">
+                      Tổng nợ: <strong className="text-rose-600">{formatVND(preview.mergedCustomer.debt)}</strong> •{' '}
+                      Chuyển <strong>{preview.ordersToUpdate.length}</strong> đơn hàng sang hồ sơ Chính
+                    </div>
+                  </div>
+
+                  <div className="flex items-center justify-end gap-2 pt-1">
+                    <button
+                      type="button"
+                      onClick={() => setIsBatchMergeModalOpen(false)}
+                      className="px-4 py-2 rounded-xl text-xs font-bold text-slate-600 hover:bg-slate-100"
+                    >
+                      Hủy
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => {
+                        mergeCustomerGroup(
+                          chosenPrimary.id,
+                          duplicateList.map(d => d.id)
+                        );
+                        setIsBatchMergeModalOpen(false);
+                        setSelectedCustomerIds(new Set());
+                      }}
+                      className="px-4 py-2 rounded-xl text-xs font-bold bg-emerald-600 hover:bg-emerald-700 text-white shadow-sm flex items-center gap-1.5"
+                    >
+                      <Merge className="w-3.5 h-3.5" />
+                      <span>Xác nhận gộp {selectedCustomers.length} khách</span>
+                    </button>
+                  </div>
+                </>
+              );
+            })()}
+          </div>
+        </div>
+      )}
+
+      {/* MODAL: SAFE CUSTOMER DELETE CONFIRMATION (ADR-0021) */}
+      {deleteConfirmState && (() => {
+        const orderCustIds = new Set(orders.map(o => o.customerId));
+        const safeTargets: Customer[] = [];
+        const riskyTargets: Array<{ customer: Customer; orderCount: number; debt: number }> = [];
+
+        for (const c of deleteConfirmState.customers) {
+          const matchedOrders = orders.filter(o => o.customerId === c.id).length;
+          const totalOrd = matchedOrders > 0 ? matchedOrders : (c.orderCount || 0);
+          const debtVal = c.debt || 0;
+          if (debtVal > 0 || orderCustIds.has(c.id) || totalOrd > 0) {
+            riskyTargets.push({ customer: c, orderCount: totalOrd, debt: debtVal });
+          } else {
+            safeTargets.push(c);
+          }
+        }
+
+        const allIds = deleteConfirmState.customers.map(c => c.id);
+        const executeDelete = (onlySafe: boolean) => {
+          if (deleteConfirmState.source === 'single' && !onlySafe && allIds.length === 1) {
+            deleteCustomer(allIds[0]);
+            if (selectedCustomerForDetail?.id === allIds[0]) {
+              setSelectedCustomerForDetail(null);
+            }
+          } else {
+            const res = deleteCustomersBatch(allIds, { onlySafe });
+            if (
+              selectedCustomerForDetail &&
+              !res.skippedIds.includes(selectedCustomerForDetail.id) &&
+              allIds.includes(selectedCustomerForDetail.id)
+            ) {
+              setSelectedCustomerForDetail(null);
+            }
+          }
+          setSelectedCustomerIds(prev => {
+            const next = new Set(prev);
+            if (onlySafe) {
+              safeTargets.forEach(c => next.delete(c.id));
+            } else {
+              allIds.forEach(id => next.delete(id));
+            }
+            return next;
+          });
+          setDeleteConfirmState(null);
+        };
+
+        return (
+          <div className="fixed inset-0 bg-black/60 backdrop-blur-2xs z-[70] flex items-center justify-center p-3">
+            <div className="bg-white rounded-2xl max-w-md w-full p-5 shadow-2xl space-y-4 max-h-[90vh] flex flex-col">
+              <div className="flex items-center justify-between pb-3 border-b border-slate-100">
+                <h3 className="font-extrabold text-sm text-rose-700 flex items-center gap-2">
+                  <Trash2 className="w-4 h-4" />
+                  <span>Xác nhận xóa khách hàng ({deleteConfirmState.customers.length})</span>
+                </h3>
+                <button
+                  type="button"
+                  onClick={() => setDeleteConfirmState(null)}
+                  className="w-7 h-7 rounded-lg hover:bg-slate-100 flex items-center justify-center text-slate-400"
+                >
+                  <X className="w-4 h-4" />
+                </button>
+              </div>
+
+              <div className="space-y-3 overflow-y-auto text-xs">
+                {safeTargets.length > 0 && (
+                  <div className="p-3 bg-emerald-50 border border-emerald-200 rounded-xl text-emerald-900">
+                    <div className="font-bold">
+                      ✓ {safeTargets.length} hồ sơ an toàn để xóa (0 nợ, 0 đơn hàng)
+                    </div>
+                    <div className="text-[11px] text-emerald-700 mt-1 line-clamp-2">
+                      {safeTargets.map(c => c.name).join(', ')}
+                    </div>
+                  </div>
+                )}
+
+                {riskyTargets.length > 0 && (
+                  <div className="p-3 bg-rose-50 border border-rose-200 rounded-xl text-rose-900 space-y-1.5">
+                    <div className="font-bold flex items-center gap-1.5">
+                      <AlertTriangle className="w-4 h-4 text-rose-600 shrink-0" />
+                      <span>⚠️ Cảnh báo: {riskyTargets.length} khách đang có đơn hàng hoặc dư nợ!</span>
+                    </div>
+                    <ul className="space-y-1 text-[11px] max-h-36 overflow-y-auto pl-1">
+                      {riskyTargets.map(({ customer, orderCount, debt }) => (
+                        <li key={customer.id} className="flex items-center justify-between gap-2">
+                          <span className="font-semibold truncate">{customer.name}</span>
+                          <span className="shrink-0 font-mono text-rose-700">
+                            {orderCount} đơn • Nợ {formatVND(debt)}
+                          </span>
+                        </li>
+                      ))}
+                    </ul>
+                  </div>
+                )}
+              </div>
+
+              <div className="flex flex-wrap items-center justify-end gap-2 pt-1">
+                <button
+                  type="button"
+                  onClick={() => setDeleteConfirmState(null)}
+                  className="px-3.5 py-2 rounded-xl text-xs font-bold text-slate-600 hover:bg-slate-100"
+                >
+                  Hủy
+                </button>
+                {safeTargets.length > 0 && riskyTargets.length > 0 && (
+                  <button
+                    type="button"
+                    onClick={() => executeDelete(true)}
+                    className="px-3.5 py-2 rounded-xl text-xs font-bold bg-emerald-600 hover:bg-emerald-700 text-white shadow-xs"
+                  >
+                    Chỉ xóa {safeTargets.length} hồ sơ an toàn
+                  </button>
+                )}
+                <button
+                  type="button"
+                  onClick={() => executeDelete(false)}
+                  className="px-4 py-2 rounded-xl text-xs font-bold bg-rose-600 hover:bg-rose-700 text-white shadow-xs"
+                >
+                  {riskyTargets.length > 0
+                    ? `Xác nhận xóa tất cả (${deleteConfirmState.customers.length})`
+                    : `Xác nhận xóa (${safeTargets.length})`}
+                </button>
+              </div>
+            </div>
+          </div>
+        );
+      })()}
+
+      {/* MODAL: CUSTOMER DATA SENTINEL (ADR-0017, ADR-0018, ADR-0020 & ADR-0021) */}
       <CustomerSentinelModal
         isOpen={isSentinelModalOpen}
         onClose={() => setIsSentinelModalOpen(false)}
@@ -1989,10 +2480,21 @@ export const CustomersPage: React.FC = () => {
         orders={orders}
         onRepairAll={() => repairCustomerData()}
         onAcceptPhoneSplit={customerId => acceptRecoveredPhoneSplit(customerId)}
+        onAcceptAllPhoneSplits={customerIds => acceptAllPhoneSplitsBatch(customerIds)}
         onConvertAddressToExtra={customerId => promoteMultiAddressToExtra(customerId)}
         onConvertAddressesBatch={customerIds => promoteMultiAddressesBatch(customerIds)}
         onSplitCustomer={(customerId, type) => splitCustomerRecord(customerId, type)}
         onMergeCustomers={(primaryId, duplicateId) => mergeCustomerRecords(primaryId, duplicateId)}
+        onMergeCustomerGroup={(primaryId, duplicateIds) => mergeCustomerGroup(primaryId, duplicateIds)}
+        onMergeDuplicateGroupsBatch={groups => mergeDuplicateGroupsBatch(groups)}
+        onDeleteCustomer={customerId => deleteCustomer(customerId)}
+        onDeleteCustomersBatch={(customerIds, options) => deleteCustomersBatch(customerIds, options)}
+        onAddSecondaryPhone={(customerId, phone) => addCustomerSecondaryPhone(customerId, phone)}
+        onAddExtraAddress={(customerId, address) => addCustomerExtraAddress(customerId, address)}
+        onApplyDiscrepancyBatch={items => applyDiscrepancyRecommendationsBatch(items)}
+        acknowledgedCount={acknowledgedSentinelCount}
+        onAcknowledgeSentinelItems={(type, keys) => acknowledgeSentinelItems(type, keys)}
+        onResetSentinelAcks={() => resetSentinelAcks()}
         onRestoreFromOrder={(customerId, orderId) => {
           const res = restoreCustomerFromOrder(customerId, orderId);
           alert(res.message);

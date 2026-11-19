@@ -7,6 +7,7 @@ import {
   getAllCustomerAddresses,
   normalizeAddressList,
   convertAddressToExtraAddresses,
+  isAddressMatching,
 } from './addressUtils.ts';
 
 export { extractIndividualAddresses, convertAddressToExtraAddresses };
@@ -741,6 +742,133 @@ export function splitCustomerByAddresses(
 }
 
 /**
+ * Atomically merge 1+ duplicate customers into a primary customer (ADR-0021).
+ * Preserves distinct phones into phone2, merges extraAddresses, sums debt/totalSpent/orderCount,
+ * and reassigns all orders pointing to any duplicate ID.
+ */
+export function mergeCustomerGroupHelper(
+  primaryCustomer: Customer,
+  duplicateCustomers: Customer[],
+  orders: Order[] = []
+): {
+  mergedCustomer: Customer;
+  ordersToUpdate: Order[];
+} {
+  const seenDupIds = new Set<string>();
+  const validDuplicates: Customer[] = [];
+  for (const dup of duplicateCustomers || []) {
+    if (!dup || !dup.id || dup.id === primaryCustomer.id || seenDupIds.has(dup.id)) continue;
+    seenDupIds.add(dup.id);
+    validDuplicates.push(dup);
+  }
+
+  if (validDuplicates.length === 0) {
+    return { mergedCustomer: primaryCustomer, ordersToUpdate: [] };
+  }
+
+  const now = new Date().toISOString();
+
+  // Collect distinct phones preserving primary.phone first
+  const collectCustomerPhones = (cust: Customer): string[] => {
+    const extracted = extractIndividualPhones(cust.phone || '', cust.phone2);
+    if (extracted.length > 0) return extracted;
+    return [cust.phone, cust.phone2]
+      .map(p => String(p || '').trim())
+      .filter(Boolean);
+  };
+
+  const primaryRawPhone = String(primaryCustomer.phone || '').trim();
+  const distinctPhones: string[] = [];
+  const pushDistinctPhone = (candidate: string) => {
+    const trimmed = String(candidate || '').trim();
+    if (!trimmed) return;
+    const alreadyExists = distinctPhones.some(
+      existing =>
+        isPhoneMatching(existing, trimmed) ||
+        existing.toLowerCase() === trimmed.toLowerCase()
+    );
+    if (!alreadyExists) {
+      distinctPhones.push(trimmed);
+    }
+  };
+
+  if (primaryRawPhone) {
+    const p1Extracted = extractIndividualPhones(primaryRawPhone);
+    if (p1Extracted.length <= 1) {
+      pushDistinctPhone(primaryRawPhone);
+    } else {
+      for (const p of p1Extracted) pushDistinctPhone(p);
+    }
+  }
+  for (const p of extractIndividualPhones(primaryCustomer.phone2 || '')) {
+    pushDistinctPhone(p);
+  }
+  if (primaryCustomer.phone2 && !primaryCustomer.phone2.includes('/')) {
+    pushDistinctPhone(primaryCustomer.phone2);
+  }
+  for (const dup of validDuplicates) {
+    for (const p of collectCustomerPhones(dup)) {
+      pushDistinctPhone(p);
+    }
+  }
+
+  const finalPhone = distinctPhones[0] || '';
+  const secondaryList = distinctPhones.slice(1);
+  const finalPhone2 = secondaryList.length > 0 ? secondaryList.join(' / ') : undefined;
+
+  const extraAddrPool: string[] = [...(primaryCustomer.extraAddresses || [])];
+  for (const dup of validDuplicates) {
+    if (dup.address) extraAddrPool.push(dup.address);
+    if (dup.extraAddresses && dup.extraAddresses.length > 0) {
+      extraAddrPool.push(...dup.extraAddresses);
+    }
+  }
+
+  const mergedAddrs = normalizeAddressList(primaryCustomer.address || '', extraAddrPool);
+
+  let totalDebt = primaryCustomer.debt || 0;
+  let totalSpent = primaryCustomer.totalSpent || 0;
+  let totalOrderCount = primaryCustomer.orderCount || 0;
+  for (const dup of validDuplicates) {
+    totalDebt += dup.debt || 0;
+    totalSpent += dup.totalSpent || 0;
+    totalOrderCount += dup.orderCount || 0;
+  }
+
+  const mergedName =
+    primaryCustomer.name && !isGenericCustomerName(primaryCustomer.name)
+      ? primaryCustomer.name
+      : validDuplicates.find(d => d.name && !isGenericCustomerName(d.name))?.name || primaryCustomer.name;
+
+  const mergedCustomer: Customer = {
+    ...primaryCustomer,
+    name: mergedName,
+    phone: finalPhone,
+    phone2: finalPhone2,
+    address: mergedAddrs.address,
+    extraAddresses: mergedAddrs.extraAddresses,
+    debt: totalDebt,
+    totalSpent,
+    orderCount: totalOrderCount,
+    updatedAt: now,
+  };
+
+  const ordersToUpdate: Order[] = [];
+  for (const ord of orders) {
+    if (seenDupIds.has(ord.customerId)) {
+      ordersToUpdate.push({
+        ...ord,
+        customerId: primaryCustomer.id,
+        customerName: mergedCustomer.name,
+        updatedAt: now,
+      });
+    }
+  }
+
+  return { mergedCustomer, ordersToUpdate };
+}
+
+/**
  * Merge a duplicate customer into a primary customer.
  */
 export function mergeDuplicateCustomers(
@@ -751,52 +879,7 @@ export function mergeDuplicateCustomers(
   mergedCustomer: Customer;
   ordersToUpdate: Order[];
 } {
-  // If primaryCustomer lacks phone2, adopt the duplicate customer's phone if distinct
-  let mergedPhone2 = primaryCustomer.phone2;
-  if (
-    !mergedPhone2 &&
-    duplicateCustomer.phone &&
-    (!primaryCustomer.phone || !isPhoneMatching(primaryCustomer.phone, duplicateCustomer.phone))
-  ) {
-    mergedPhone2 = duplicateCustomer.phone;
-  } else if (
-    !mergedPhone2 &&
-    duplicateCustomer.phone2 &&
-    (!primaryCustomer.phone || !isPhoneMatching(primaryCustomer.phone, duplicateCustomer.phone2))
-  ) {
-    mergedPhone2 = duplicateCustomer.phone2;
-  }
-
-  const mergedAddrs = normalizeAddressList(primaryCustomer.address || '', [
-    ...(primaryCustomer.extraAddresses || []),
-    duplicateCustomer.address || '',
-    ...(duplicateCustomer.extraAddresses || []),
-  ]);
-
-  const mergedCustomer: Customer = {
-    ...primaryCustomer,
-    phone2: mergedPhone2,
-    address: mergedAddrs.address,
-    extraAddresses: mergedAddrs.extraAddresses,
-    debt: (primaryCustomer.debt || 0) + (duplicateCustomer.debt || 0),
-    totalSpent: (primaryCustomer.totalSpent || 0) + (duplicateCustomer.totalSpent || 0),
-    orderCount: (primaryCustomer.orderCount || 0) + (duplicateCustomer.orderCount || 0),
-    updatedAt: new Date().toISOString(),
-  };
-
-  const ordersToUpdate: Order[] = [];
-  for (const ord of orders) {
-    if (ord.customerId === duplicateCustomer.id) {
-      ordersToUpdate.push({
-        ...ord,
-        customerId: primaryCustomer.id,
-        customerName: primaryCustomer.name,
-        updatedAt: new Date().toISOString(),
-      });
-    }
-  }
-
-  return { mergedCustomer, ordersToUpdate };
+  return mergeCustomerGroupHelper(primaryCustomer, [duplicateCustomer], orders);
 }
 
 /**
@@ -916,4 +999,585 @@ export function splitCustomerByHistoricalOrder(
   customerB.totalSpent = ordersB.reduce((sum, o) => sum + (o.total || 0), 0);
 
   return { customerA, customerB, ordersToUpdate };
+}
+
+// ============================================================================
+// ADR-0021: Sentinel Intelligence, Ranking, Discrepancy Helpers & Persistence
+// ============================================================================
+
+export type ToneTwinRecommendation = 'delete_ghosts' | 'merge_into_primary' | 'keep_independent';
+
+export interface ToneTwinAnalysis {
+  recommendation: ToneTwinRecommendation;
+  recommendedPrimaryId: string;
+  ghostCustomerIds: string[];
+  reasonLabel: string;
+  actionLabel: string;
+}
+
+export type DiscrepancyActionType = 'add_phone2' | 'add_extra_address' | 'restore_order' | 'split_customer';
+
+export interface DiscrepancyOrderAnalysis {
+  recommendedAction: DiscrepancyActionType;
+  actionLabel: string;
+  reasonLabel: string;
+  canAddPhone2: boolean;
+  canAddExtraAddress: boolean;
+  newPhone?: string;
+  newAddress?: string;
+}
+
+export const SENTINEL_ACKS_STORAGE_KEY = 'mxc_sentinel_acks_v1';
+
+export interface SentinelAcknowledgments {
+  toneTwins: string[];
+  multiAddresses: string[];
+  discrepancies: string[];
+}
+
+/**
+ * Determine whether a customer record is an empty phantom ("Hồ sơ trống")
+ * that can be safely deleted without losing any contact info, debt, or order history.
+ */
+export function isEmptyGhostCustomer(customer: Customer, orders: Order[] = []): boolean {
+  if (!customer) return false;
+  const hasPhone = Boolean((customer.phone || '').trim() || (customer.phone2 || '').trim());
+  if (hasPhone) return false;
+
+  const hasAddress = Boolean(
+    (customer.address || '').trim() ||
+    (customer.extraAddresses && customer.extraAddresses.some(a => Boolean(a && a.trim())))
+  );
+  if (hasAddress) return false;
+
+  if (Number(customer.debt || 0) !== 0) return false;
+
+  const hasMatchingOrder = orders.some(o => o.customerId === customer.id);
+  if (hasMatchingOrder) return false;
+
+  if (orders.length === 0 && (customer.orderCount || 0) > 0) return false;
+
+  return true;
+}
+
+/**
+ * Rank candidate customers and pick the richest record as Primary:
+ * Priority: orders count -> has debt -> has phone/phone2 -> has address/extraAddresses -> oldest createdAt.
+ */
+export function rankPrimaryCustomer(customers: Customer[], orders: Order[] = []): Customer {
+  if (!customers || customers.length === 0) {
+    throw new Error('rankPrimaryCustomer requires at least one customer');
+  }
+  if (customers.length === 1) return customers[0];
+
+  const orderCountByCustId = new Map<string, number>();
+  for (const ord of orders) {
+    if (!ord.customerId) continue;
+    orderCountByCustId.set(ord.customerId, (orderCountByCustId.get(ord.customerId) || 0) + 1);
+  }
+
+  const getOrderScore = (c: Customer): number => {
+    const matched = orderCountByCustId.get(c.id) || 0;
+    if (matched > 0) return matched;
+    return orders.length === 0 ? (c.orderCount || 0) : 0;
+  };
+
+  const getCreatedTs = (c: Customer): number => {
+    if (!c.createdAt) return Number.POSITIVE_INFINITY;
+    const parsed = Date.parse(c.createdAt);
+    return Number.isNaN(parsed) ? Number.POSITIVE_INFINITY : parsed;
+  };
+
+  const sorted = [...customers].sort((a, b) => {
+    // 1. Orders count (descending)
+    const ordDiff = getOrderScore(b) - getOrderScore(a);
+    if (ordDiff !== 0) return ordDiff;
+
+    // 2. Has debt (descending)
+    const hasDebtA = (a.debt || 0) > 0 ? 1 : 0;
+    const hasDebtB = (b.debt || 0) > 0 ? 1 : 0;
+    if (hasDebtB !== hasDebtA) return hasDebtB - hasDebtA;
+
+    // 3. Has phone/phone2 (descending)
+    const hasPhoneA = (a.phone || '').trim() || (a.phone2 || '').trim() ? 1 : 0;
+    const hasPhoneB = (b.phone || '').trim() || (b.phone2 || '').trim() ? 1 : 0;
+    if (hasPhoneB !== hasPhoneA) return hasPhoneB - hasPhoneA;
+
+    // 4. Has address/extraAddresses (descending)
+    const hasAddrA =
+      (a.address || '').trim() || (a.extraAddresses && a.extraAddresses.some(x => x.trim())) ? 1 : 0;
+    const hasAddrB =
+      (b.address || '').trim() || (b.extraAddresses && b.extraAddresses.some(x => x.trim())) ? 1 : 0;
+    if (hasAddrB !== hasAddrA) return hasAddrB - hasAddrA;
+
+    // 5. Oldest createdAt (ascending)
+    const tsA = getCreatedTs(a);
+    const tsB = getCreatedTs(b);
+    if (tsA !== tsB) return tsA - tsB;
+
+    // 6. Deterministic richness tie-breakers
+    const debtDiff = (b.debt || 0) - (a.debt || 0);
+    if (debtDiff !== 0) return debtDiff;
+    const spentDiff = (b.totalSpent || 0) - (a.totalSpent || 0);
+    if (spentDiff !== 0) return spentDiff;
+    const phoneCountA = ((a.phone || '').trim() ? 1 : 0) + ((a.phone2 || '').trim() ? 1 : 0);
+    const phoneCountB = ((b.phone || '').trim() ? 1 : 0) + ((b.phone2 || '').trim() ? 1 : 0);
+    if (phoneCountB !== phoneCountA) return phoneCountB - phoneCountA;
+    return (b.orderCount || 0) - (a.orderCount || 0);
+  });
+
+  return sorted[0];
+}
+
+/**
+ * Analyze a Tone Twin collision group and recommend the safest high-leverage action.
+ */
+export function analyzeToneTwinGroup(group: ToneTwinGroup, orders: Order[] = []): ToneTwinAnalysis {
+  const customers = group.customers || [];
+  const ghosts = customers.filter(c => isEmptyGhostCustomer(c, orders));
+  const nonGhosts = customers.filter(c => !isEmptyGhostCustomer(c, orders));
+
+  const primary = rankPrimaryCustomer(nonGhosts.length > 0 ? nonGhosts : customers, orders);
+
+  // Case 1: One or more empty phantom profiles exist
+  if (ghosts.length > 0 && nonGhosts.length >= 1) {
+    const ghostCustomerIds = ghosts.map(g => g.id);
+    const actionLabel =
+      ghostCustomerIds.length === 1
+        ? `Xóa hồ sơ trống #${ghostCustomerIds[0]}`
+        : `Xóa ${ghostCustomerIds.length} hồ sơ trống`;
+    return {
+      recommendation: 'delete_ghosts',
+      recommendedPrimaryId: primary.id,
+      ghostCustomerIds,
+      reasonLabel: `Phát hiện ${ghostCustomerIds.length} hồ sơ trống (không SĐT, không địa chỉ, 0 đơn, 0 nợ) trùng tên với "${primary.name}" (#${primary.id}).`,
+      actionLabel,
+    };
+  }
+
+  if (ghosts.length > 1 && nonGhosts.length === 0) {
+    const ghostCustomerIds = ghosts.filter(g => g.id !== primary.id).map(g => g.id);
+    return {
+      recommendation: 'delete_ghosts',
+      recommendedPrimaryId: primary.id,
+      ghostCustomerIds,
+      reasonLabel: `Cả ${ghosts.length} hồ sơ đều trống dữ liệu — giữ lại #${primary.id} và xóa ${ghostCustomerIds.length} bản sao trống.`,
+      actionLabel: `Xóa ${ghostCustomerIds.length} hồ sơ trống`,
+    };
+  }
+
+  // Case 2: All profiles have some data — check phone overlap, exact name, or shared address
+  const phoneSets = customers.map(c => extractIndividualPhones(c.phone || '', c.phone2));
+  let hasOverlappingPhone = false;
+  let profilesWithPhones = 0;
+
+  for (let i = 0; i < phoneSets.length; i++) {
+    if (phoneSets[i].length > 0) profilesWithPhones++;
+    for (let j = i + 1; j < phoneSets.length; j++) {
+      if (phoneSets[i].some(pa => phoneSets[j].some(pb => isPhoneMatching(pa, pb)))) {
+        hasOverlappingPhone = true;
+      }
+    }
+  }
+
+  const normalizedNames = customers.map(c => (c.name || '').normalize('NFC').trim().toLowerCase());
+  const hasSameExactName = normalizedNames.length > 1 && normalizedNames.every(n => n === normalizedNames[0]);
+
+  let hasMatchingAddress = false;
+  for (let i = 0; i < customers.length; i++) {
+    const addrsA = getAllCustomerAddresses(customers[i]);
+    for (let j = i + 1; j < customers.length; j++) {
+      const addrsB = getAllCustomerAddresses(customers[j]);
+      if (addrsA.some(aa => addrsB.some(ab => isAddressMatching(aa, ab)))) {
+        hasMatchingAddress = true;
+      }
+    }
+  }
+
+  // If phones overlap OR (at least one lacks phone and same exact name or matching address) -> merge into primary
+  if (hasOverlappingPhone || (profilesWithPhones < customers.length && (hasSameExactName || hasMatchingAddress))) {
+    return {
+      recommendation: 'merge_into_primary',
+      recommendedPrimaryId: primary.id,
+      ghostCustomerIds: [],
+      reasonLabel: hasOverlappingPhone
+        ? `Trùng SĐT hoặc thông tin liên hệ — nên gộp vào hồ sơ đầy đủ nhất "${primary.name}" (#${primary.id}).`
+        : `Cùng tên "${primary.name}" và có hồ sơ thiếu SĐT — nên gộp vào #${primary.id} để không phân mảnh lịch sử.`,
+      actionLabel: `Gộp vào ${primary.name} (#${primary.id})`,
+    };
+  }
+
+  return {
+    recommendation: 'keep_independent',
+    recommendedPrimaryId: primary.id,
+    ghostCustomerIds: [],
+    reasonLabel: `Các hồ sơ có SĐT hoặc dấu tiếng Việt khác nhau — nhiều khả năng là ${customers.length} khách hàng độc lập.`,
+    actionLabel: `Xác nhận ${customers.length} khách độc lập`,
+  };
+}
+
+/**
+ * Classify a historical order discrepancy and recommend the best non-destructive/restorative action.
+ */
+export function analyzeDiscrepancyOrder(customer: Customer, order: Order): DiscrepancyOrderAnalysis {
+  const ordPhoneRaw = (order.customerPhone || '').trim();
+  const ordPhoneNorm = ordPhoneRaw ? normalizeSinglePhone(ordPhoneRaw) : '';
+  const ordPhoneFormatted = ordPhoneRaw ? normalizeVietnamesePhone(ordPhoneRaw) || ordPhoneNorm : '';
+  const existingPhones = extractIndividualPhones(customer.phone || '', customer.phone2);
+  const phoneKnown =
+    !ordPhoneNorm || existingPhones.some(p => isPhoneMatching(p, ordPhoneNorm));
+  const canAddPhone2 = Boolean(ordPhoneNorm && !phoneKnown);
+
+  const ordAddrRaw = (order.customerAddress || '').trim();
+  const ordAddrLower = ordAddrRaw.toLowerCase();
+  const knownAddrs = getAllCustomerAddresses(customer);
+  const knownAddrsLower = knownAddrs.map(a => a.toLowerCase());
+  const addrKnown =
+    !ordAddrRaw ||
+    ordAddrRaw.length < 3 ||
+    knownAddrs.some(ka => isAddressMatching(ka, ordAddrRaw)) ||
+    knownAddrsLower.some(ka => ka.includes(ordAddrLower) || ordAddrLower.includes(ka));
+  const canAddExtraAddress = Boolean(ordAddrRaw && ordAddrRaw.length >= 3 && !addrKnown);
+
+  const custNameNorm = (customer.name || '').normalize('NFC').trim();
+  const ordNameNorm = (order.customerName || '').normalize('NFC').trim();
+  const ordNameClean = removeVietnameseTones(ordNameNorm);
+  const custNameClean = removeVietnameseTones(custNameNorm);
+  const isDistinctNonGenericOrderName = Boolean(
+    ordNameNorm &&
+      !isGenericCustomerName(ordNameNorm) &&
+      ordNameNorm !== custNameNorm
+  );
+
+  // If order has a different person's name (or diacritic-different name) AND a different phone -> split into 2 customers
+  if (
+    canAddPhone2 &&
+    isDistinctNonGenericOrderName &&
+    (ordNameClean !== custNameClean || ordNameNorm.toLowerCase() !== custNameNorm.toLowerCase())
+  ) {
+    return {
+      recommendedAction: 'split_customer',
+      actionLabel: 'Tách thành 2 khách',
+      reasonLabel: `Đơn #${order.id} dùng tên "${ordNameNorm}" và SĐT khác (${ordPhoneFormatted}) — có thể là người mua khác.`,
+      canAddPhone2,
+      canAddExtraAddress,
+      newPhone: ordPhoneFormatted || undefined,
+      newAddress: canAddExtraAddress ? ordAddrRaw : undefined,
+    };
+  }
+
+  // If profile is missing primary phone/address that exists on the order -> restore from order
+  if ((!(customer.phone || '').trim() && ordPhoneNorm) || (!(customer.address || '').trim() && ordAddrRaw.length >= 3)) {
+    return {
+      recommendedAction: 'restore_order',
+      actionLabel: 'Khôi phục theo đơn',
+      reasonLabel: `Hồ sơ đang thiếu thông tin liên hệ gốc có trên đơn #${order.id}.`,
+      canAddPhone2,
+      canAddExtraAddress,
+      newPhone: ordPhoneFormatted || undefined,
+      newAddress: canAddExtraAddress ? ordAddrRaw : undefined,
+    };
+  }
+
+  // Same customer using a second phone number -> non-destructive + Lưu làm SĐT 2
+  if (canAddPhone2) {
+    return {
+      recommendedAction: 'add_phone2',
+      actionLabel: '+ Lưu làm SĐT 2',
+      reasonLabel: `Đơn #${order.id} dùng SĐT mới ${ordPhoneFormatted} — lưu làm SĐT 2 mà không ghi đè SĐT chính.`,
+      canAddPhone2,
+      canAddExtraAddress,
+      newPhone: ordPhoneFormatted || undefined,
+      newAddress: canAddExtraAddress ? ordAddrRaw : undefined,
+    };
+  }
+
+  // Same customer delivering to another address -> non-destructive + Thêm làm Đ/C phụ
+  if (canAddExtraAddress) {
+    return {
+      recommendedAction: 'add_extra_address',
+      actionLabel: '+ Thêm làm Đ/C phụ',
+      reasonLabel: `Đơn #${order.id} giao tới địa chỉ mới "${ordAddrRaw}" — thêm vào Địa chỉ phụ và giữ nguyên Đ/C chính.`,
+      canAddPhone2,
+      canAddExtraAddress,
+      newPhone: undefined,
+      newAddress: ordAddrRaw,
+    };
+  }
+
+  return {
+    recommendedAction: 'restore_order',
+    actionLabel: 'Khôi phục theo đơn',
+    reasonLabel: `Tên/thông tin trên đơn #${order.id} khác với hồ sơ hiện tại.`,
+    canAddPhone2,
+    canAddExtraAddress,
+  };
+}
+
+/**
+ * Non-destructively add a new secondary phone number from a historical order without overwriting primary phone.
+ */
+export function addSecondaryPhoneFromOrderHelper(
+  customer: Customer,
+  phone: string,
+  timestamp = new Date().toISOString()
+): { customer: Customer; changed: boolean } {
+  const raw = String(phone || '').trim();
+  const normSingle = normalizeSinglePhone(raw);
+  if (!normSingle) {
+    return { customer, changed: false };
+  }
+  const formatted = normalizeVietnamesePhone(raw) || normSingle;
+
+  const existingPhones = extractIndividualPhones(customer.phone || '', customer.phone2);
+  if (existingPhones.some(p => isPhoneMatching(p, normSingle))) {
+    return { customer, changed: false };
+  }
+
+  const currentPhone = (customer.phone || '').trim();
+  const currentPhone2 = (customer.phone2 || '').trim();
+
+  if (!currentPhone) {
+    return {
+      customer: {
+        ...customer,
+        phone: formatted,
+        updatedAt: timestamp,
+      },
+      changed: true,
+    };
+  }
+
+  const nextPhone2 = currentPhone2 ? `${currentPhone2} / ${formatted}` : formatted;
+  return {
+    customer: {
+      ...customer,
+      phone2: nextPhone2,
+      updatedAt: timestamp,
+    },
+    changed: true,
+  };
+}
+
+/**
+ * Non-destructively add a new extra delivery address from a historical order without overwriting primary address.
+ */
+export function addExtraAddressFromOrderHelper(
+  customer: Customer,
+  address: string,
+  timestamp = new Date().toISOString()
+): { customer: Customer; changed: boolean } {
+  const trimmed = String(address || '').trim();
+  if (trimmed.length < 3) {
+    return { customer, changed: false };
+  }
+
+  const known = getAllCustomerAddresses(customer);
+  if (known.some(ka => isAddressMatching(ka, trimmed))) {
+    return { customer, changed: false };
+  }
+
+  const normalized = normalizeAddressList(customer.address || '', [
+    ...(customer.extraAddresses || []),
+    trimmed,
+  ]);
+
+  const currentExtras = customer.extraAddresses || [];
+  const nextExtras = normalized.extraAddresses || [];
+  const samePrimary = normalized.address === (customer.address || '').trim();
+  const sameExtras =
+    currentExtras.length === nextExtras.length &&
+    currentExtras.every((val, idx) => val === nextExtras[idx]);
+
+  if (samePrimary && sameExtras) {
+    return { customer, changed: false };
+  }
+
+  return {
+    customer: {
+      ...customer,
+      address: normalized.address,
+      extraAddresses: normalized.extraAddresses,
+      updatedAt: timestamp,
+    },
+    changed: true,
+  };
+}
+
+const EMPTY_SENTINEL_ACKS: SentinelAcknowledgments = {
+  toneTwins: [],
+  multiAddresses: [],
+  discrepancies: [],
+};
+
+function sanitizeAckList(raw: unknown): string[] {
+  if (!Array.isArray(raw)) return [];
+  return Array.from(new Set(raw.map(x => String(x || '').trim()).filter(Boolean)));
+}
+
+export function loadSentinelAcks(
+  storage: Pick<Storage, 'getItem'> | null = typeof localStorage !== 'undefined' ? localStorage : null
+): SentinelAcknowledgments {
+  if (!storage) return { ...EMPTY_SENTINEL_ACKS };
+  try {
+    const raw = storage.getItem(SENTINEL_ACKS_STORAGE_KEY);
+    if (!raw) return { ...EMPTY_SENTINEL_ACKS };
+    const parsed = JSON.parse(raw);
+    return {
+      toneTwins: sanitizeAckList(parsed?.toneTwins),
+      multiAddresses: sanitizeAckList(parsed?.multiAddresses),
+      discrepancies: sanitizeAckList(parsed?.discrepancies),
+    };
+  } catch {
+    return { ...EMPTY_SENTINEL_ACKS };
+  }
+}
+
+export function saveSentinelAcks(
+  acks: SentinelAcknowledgments,
+  storage: Pick<Storage, 'setItem'> | null = typeof localStorage !== 'undefined' ? localStorage : null
+): SentinelAcknowledgments {
+  const clean: SentinelAcknowledgments = {
+    toneTwins: sanitizeAckList(acks.toneTwins),
+    multiAddresses: sanitizeAckList(acks.multiAddresses),
+    discrepancies: sanitizeAckList(acks.discrepancies),
+  };
+  if (storage) {
+    try {
+      storage.setItem(SENTINEL_ACKS_STORAGE_KEY, JSON.stringify(clean));
+    } catch {
+      // Ignore storage quota errors
+    }
+  }
+  return clean;
+}
+
+export function resetSentinelAcksStorage(
+  storage: Pick<Storage, 'removeItem' | 'setItem'> | null = typeof localStorage !== 'undefined' ? localStorage : null
+): SentinelAcknowledgments {
+  if (storage) {
+    try {
+      storage.removeItem(SENTINEL_ACKS_STORAGE_KEY);
+    } catch {
+      // Ignore storage errors
+    }
+  }
+  return { ...EMPTY_SENTINEL_ACKS };
+}
+
+export function getSentinelAcknowledgedCount(acks: SentinelAcknowledgments): number {
+  return (acks.toneTwins?.length || 0) + (acks.multiAddresses?.length || 0) + (acks.discrepancies?.length || 0);
+}
+
+/**
+ * Filter a raw audit result using persisted Sentinel acknowledgments.
+ * Keeps raw auditCustomerData untouched while honoring dismissed items across modal open/close cycles.
+ */
+export function filterAuditResultByAcks(
+  auditResult: CustomerAnomalyAuditResult,
+  acks: SentinelAcknowledgments
+): CustomerAnomalyAuditResult {
+  const toneSet = new Set(acks.toneTwins || []);
+  const addrSet = new Set(acks.multiAddresses || []);
+  const discSet = new Set(acks.discrepancies || []);
+
+  const toneTwins = auditResult.toneTwins.filter(g => !toneSet.has(g.toneCleanName));
+  const multiAddressAnomalies = auditResult.multiAddressAnomalies.filter(a => !addrSet.has(a.customer.id));
+
+  const orderDiscrepancies: CustomerOrderDiscrepancy[] = [];
+  for (const disc of auditResult.orderDiscrepancies || []) {
+    if (discSet.has(disc.customer.id)) continue;
+
+    const differingOrders = disc.historicalOrders.filter(
+      o =>
+        (o.customerPhone && disc.differingPhones.includes(o.customerPhone.trim())) ||
+        (o.customerAddress && disc.differingAddresses.includes(o.customerAddress.trim())) ||
+        (o.customerName && disc.differingNames.includes(o.customerName.trim()))
+    );
+
+    if (differingOrders.length === 0) {
+      orderDiscrepancies.push(disc);
+      continue;
+    }
+
+    const unackedOrders = differingOrders.filter(o => !discSet.has(`${disc.customer.id}::${o.id}`));
+    if (unackedOrders.length === 0) continue;
+
+    orderDiscrepancies.push({
+      ...disc,
+      historicalOrders: disc.historicalOrders.filter(o => !discSet.has(`${disc.customer.id}::${o.id}`)),
+    });
+  }
+
+  const totalAnomalies =
+    toneTwins.length +
+    auditResult.multiPhoneAnomalies.length +
+    multiAddressAnomalies.length +
+    auditResult.duplicatePhoneGroups.length +
+    orderDiscrepancies.length;
+
+  return {
+    totalAnomalies,
+    toneTwins,
+    multiPhoneAnomalies: auditResult.multiPhoneAnomalies,
+    multiAddressAnomalies,
+    duplicatePhoneGroups: auditResult.duplicatePhoneGroups,
+    orderDiscrepancies,
+  };
+}
+
+/**
+ * Safe batch deletion helper (ADR-0021).
+ * Distinguishes empty/0-debt/0-order customers from customers with debt or order history when `onlySafe` is enabled.
+ */
+export function deleteCustomersBatchHelper(
+  customers: Customer[],
+  orders: Order[],
+  ids: string[],
+  options?: { onlySafe?: boolean }
+): {
+  nextCustomers: Customer[];
+  deletedIds: string[];
+  deletedCount: number;
+  skippedIds: string[];
+} {
+  const uniqueIds = Array.from(new Set((ids || []).map(id => String(id || '').trim()).filter(Boolean)));
+  if (uniqueIds.length === 0) {
+    return { nextCustomers: customers, deletedIds: [], deletedCount: 0, skippedIds: [] };
+  }
+
+  const custById = new Map(customers.map(c => [c.id, c]));
+  const orderCustIds = new Set(orders.map(o => o.customerId));
+  const toDeleteIds = new Set<string>();
+  const skippedIds: string[] = [];
+
+  for (const id of uniqueIds) {
+    const cust = custById.get(id);
+    if (!cust) {
+      skippedIds.push(id);
+      continue;
+    }
+    if (options?.onlySafe) {
+      const hasDebt = Number(cust.debt || 0) > 0;
+      const hasOrders = orderCustIds.has(cust.id) || Number(cust.orderCount || 0) > 0;
+      if (hasDebt || hasOrders) {
+        skippedIds.push(id);
+        continue;
+      }
+    }
+    toDeleteIds.add(id);
+  }
+
+  if (toDeleteIds.size === 0) {
+    return { nextCustomers: customers, deletedIds: [], deletedCount: 0, skippedIds };
+  }
+
+  const deletedIds = Array.from(toDeleteIds);
+  const nextCustomers = customers.filter(c => !toDeleteIds.has(c.id));
+  return {
+    nextCustomers,
+    deletedIds,
+    deletedCount: deletedIds.length,
+    skippedIds,
+  };
 }

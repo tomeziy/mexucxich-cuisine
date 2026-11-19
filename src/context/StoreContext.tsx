@@ -6,9 +6,17 @@ import {
   repairAndMigrateCustomers,
   splitCustomerByPhones,
   splitCustomerByAddresses,
-  mergeDuplicateCustomers,
+  mergeCustomerGroupHelper,
   restoreCustomerFromOrderSnapshot,
   splitCustomerByHistoricalOrder,
+  addSecondaryPhoneFromOrderHelper,
+  addExtraAddressFromOrderHelper,
+  analyzeDiscrepancyOrder,
+  deleteCustomersBatchHelper,
+  SentinelAcknowledgments,
+  loadSentinelAcks,
+  saveSentinelAcks,
+  resetSentinelAcksStorage,
   MigrationRepairResult,
 } from '../utils/customerSentinel';
 import { repairFusedPhonesBatch, repairCustomerFusedPhones } from '../utils/phoneRecovery';
@@ -31,6 +39,7 @@ import {
   cloudSyncProductsBatch,
   cloudSyncCustomer,
   cloudDeleteCustomer,
+  cloudDeleteCustomersBatch,
   cloudSyncCustomersBatch,
   cloudSyncOrder,
   cloudDeleteOrder,
@@ -61,6 +70,7 @@ interface StoreContextType {
   receiptSettings: ReceiptSettings;
   cloudConfig: CloudConfig;
   cloudExtraAddressesPendingSync: boolean;
+  sentinelAcks: SentinelAcknowledgments;
   addProduct: (product: Omit<Product, 'id'>) => Product;
   addProductsBatch: (products: Array<Omit<Product, 'id'>>) => Product[];
   updateProduct: (id: string, product: Partial<Product>) => void;
@@ -69,6 +79,7 @@ interface StoreContextType {
   addCustomersBatch: (customers: Array<Omit<Customer, 'id' | 'totalSpent' | 'orderCount'>>) => Customer[];
   updateCustomer: (id: string, customer: Partial<Customer>) => void;
   deleteCustomer: (id: string) => void;
+  deleteCustomersBatch: (ids: string[], options?: { onlySafe?: boolean }) => { deletedCount: number; skippedIds: string[] };
   createOrder: (orderData: Omit<Order, 'id' | 'createdAt'>) => Order;
   updateOrderStatus: (orderId: string, status: OrderStatus) => void;
   updateOrder: (orderId: string, updatedOrder: Order) => void;
@@ -81,10 +92,18 @@ interface StoreContextType {
   syncCloudToLocal: () => Promise<{ success: boolean; message: string }>;
   repairCustomerData: () => MigrationRepairResult;
   acceptRecoveredPhoneSplit: (customerId: string) => void;
+  acceptAllPhoneSplitsBatch: (customerIds: string[]) => number;
   promoteMultiAddressToExtra: (customerId: string) => void;
   promoteMultiAddressesBatch: (customerIds: string[]) => number;
   splitCustomerRecord: (customerId: string, type: 'phone' | 'address') => void;
   mergeCustomerRecords: (primaryId: string, duplicateId: string) => void;
+  mergeCustomerGroup: (primaryId: string, duplicateIds: string[]) => void;
+  mergeDuplicateGroupsBatch: (groups: Array<{ primaryId: string; duplicateIds: string[] }>) => number;
+  addCustomerSecondaryPhone: (customerId: string, phone: string) => boolean;
+  addCustomerExtraAddress: (customerId: string, address: string) => boolean;
+  applyDiscrepancyRecommendationsBatch: (items: Array<{ customerId: string; orderId: string }>) => { updatedCount: number; splitCount: number };
+  acknowledgeSentinelItems: (type: keyof SentinelAcknowledgments, keys: string[]) => void;
+  resetSentinelAcks: () => void;
   restoreCustomerFromOrder: (customerId: string, orderId: string) => { success: boolean; message: string };
   splitCustomerByHistoricalOrderRecord: (customerId: string, targetPhone: string) => void;
   restoreFromExcelOrders: (orders: Order[]) => { restoredOrdersCount: number; restoredProductsCount: number };
@@ -112,6 +131,7 @@ export const StoreProvider: React.FC<{ children: React.ReactNode }> = ({ childre
   const [cloudExtraAddressesUnsupported, setCloudExtraAddressesUnsupported] = useState<boolean>(
     isCloudExtraAddressesUnsupported
   );
+  const [sentinelAcks, setSentinelAcks] = useState<SentinelAcknowledgments>(() => loadSentinelAcks());
 
   useEffect(() => {
     return subscribeCloudExtraAddressesSupport(setCloudExtraAddressesUnsupported);
@@ -564,8 +584,35 @@ export const StoreProvider: React.FC<{ children: React.ReactNode }> = ({ childre
   };
 
   const deleteCustomer = (id: string) => {
-    setCustomers(prev => prev.filter(c => c.id !== id));
+    const nextCustomers = stateRef.current.customers.filter(c => c.id !== id);
+    stateRef.current.customers = nextCustomers;
+    localStorage.setItem(STORAGE_KEYS.CUSTOMERS, JSON.stringify(nextCustomers));
+    setCustomers(nextCustomers);
     cloudDeleteCustomer(id);
+  };
+
+  const deleteCustomersBatch = (
+    ids: string[],
+    options?: { onlySafe?: boolean }
+  ): { deletedCount: number; skippedIds: string[] } => {
+    const res = deleteCustomersBatchHelper(
+      stateRef.current.customers,
+      stateRef.current.orders,
+      ids,
+      options
+    );
+    if (res.deletedCount === 0) {
+      return { deletedCount: 0, skippedIds: res.skippedIds };
+    }
+    stateRef.current.customers = res.nextCustomers;
+    localStorage.setItem(STORAGE_KEYS.CUSTOMERS, JSON.stringify(res.nextCustomers));
+    setCustomers(res.nextCustomers);
+    cloudDeleteCustomersBatch(res.deletedIds);
+
+    return {
+      deletedCount: res.deletedCount,
+      skippedIds: res.skippedIds,
+    };
   };
 
   // Sentinel Customer Repair & Decoupling actions (ADR-0017 & ADR-0020)
@@ -611,12 +658,38 @@ export const StoreProvider: React.FC<{ children: React.ReactNode }> = ({ childre
   };
 
   const acceptRecoveredPhoneSplit = (customerId: string) => {
-    const target = customers.find(c => c.id === customerId);
+    const target = stateRef.current.customers.find(c => c.id === customerId);
     if (!target) return;
     const res = repairCustomerFusedPhones(target);
     if (!res.changed) return;
-    setCustomers(prev => prev.map(c => (c.id === customerId ? res.customer : c)));
+    const nextCustomers = stateRef.current.customers.map(c => (c.id === customerId ? res.customer : c));
+    stateRef.current.customers = nextCustomers;
+    localStorage.setItem(STORAGE_KEYS.CUSTOMERS, JSON.stringify(nextCustomers));
+    setCustomers(nextCustomers);
     cloudSyncCustomer(res.customer);
+  };
+
+  const acceptAllPhoneSplitsBatch = (customerIds: string[]): number => {
+    if (!customerIds || customerIds.length === 0) return 0;
+    const idSet = new Set(customerIds);
+    const now = new Date().toISOString();
+    const changedCustomers: Customer[] = [];
+    const nextCustomers = stateRef.current.customers.map(c => {
+      if (!idSet.has(c.id)) return c;
+      const res = repairCustomerFusedPhones(c, now);
+      if (res.changed) {
+        changedCustomers.push(res.customer);
+        return res.customer;
+      }
+      return c;
+    });
+    if (changedCustomers.length > 0) {
+      stateRef.current.customers = nextCustomers;
+      localStorage.setItem(STORAGE_KEYS.CUSTOMERS, JSON.stringify(nextCustomers));
+      setCustomers(nextCustomers);
+      cloudSyncCustomersBatch(changedCustomers);
+    }
+    return changedCustomers.length;
   };
 
   const promoteMultiAddressToExtra = (customerId: string) => {
@@ -690,29 +763,98 @@ export const StoreProvider: React.FC<{ children: React.ReactNode }> = ({ childre
     }
   };
 
-  const mergeCustomerRecords = (primaryId: string, duplicateId: string) => {
-    const primary = customers.find(c => c.id === primaryId);
-    const duplicate = customers.find(c => c.id === duplicateId);
-    if (!primary || !duplicate) return;
+  const mergeCustomerGroup = (primaryId: string, duplicateIds: string[]) => {
+    const currentCustomers = stateRef.current.customers;
+    const currentOrders = stateRef.current.orders;
+    const primary = currentCustomers.find(c => c.id === primaryId);
+    if (!primary) return;
 
-    const { mergedCustomer, ordersToUpdate } = mergeDuplicateCustomers(primary, duplicate, orders);
-    setCustomers(prev =>
-      prev.filter(c => c.id !== duplicateId).map(c => (c.id === primaryId ? mergedCustomer : c))
-    );
+    const dupSet = new Set((duplicateIds || []).filter(id => id && id !== primaryId));
+    const duplicates = currentCustomers.filter(c => dupSet.has(c.id));
+    if (duplicates.length === 0) return;
+
+    const { mergedCustomer, ordersToUpdate } = mergeCustomerGroupHelper(primary, duplicates, currentOrders);
+    const nextCustomers = currentCustomers
+      .filter(c => !dupSet.has(c.id))
+      .map(c => (c.id === primaryId ? mergedCustomer : c));
+
+    stateRef.current.customers = nextCustomers;
+    localStorage.setItem(STORAGE_KEYS.CUSTOMERS, JSON.stringify(nextCustomers));
+    setCustomers(nextCustomers);
     cloudSyncCustomer(mergedCustomer);
-    cloudDeleteCustomer(duplicateId);
+    cloudDeleteCustomersBatch(duplicates.map(d => d.id));
 
     if (ordersToUpdate.length > 0) {
-      setOrders(prev =>
-        prev.map(o => {
-          const up = ordersToUpdate.find(u => u.id === o.id);
-          return up ? up : o;
-        })
-      );
-      for (const ord of ordersToUpdate) {
-        cloudSyncOrder(ord);
+      const updateMap = new Map(ordersToUpdate.map(u => [u.id, u]));
+      const nextOrders = currentOrders.map(o => updateMap.get(o.id) || o);
+      stateRef.current.orders = nextOrders;
+      localStorage.setItem(STORAGE_KEYS.ORDERS, JSON.stringify(nextOrders));
+      setOrders(nextOrders);
+      cloudSyncOrdersBatch(ordersToUpdate);
+    }
+  };
+
+  const mergeDuplicateGroupsBatch = (
+    groups: Array<{ primaryId: string; duplicateIds: string[] }>
+  ): number => {
+    if (!groups || groups.length === 0) return 0;
+    let workingCustomers = [...stateRef.current.customers];
+    let workingOrders = [...stateRef.current.orders];
+    const updatedPrimaryMap = new Map<string, Customer>();
+    const deletedIds = new Set<string>();
+    const updatedOrderMap = new Map<string, Order>();
+    let mergedGroupsCount = 0;
+
+    for (const grp of groups) {
+      const primary = workingCustomers.find(c => c.id === grp.primaryId);
+      if (!primary) continue;
+      const dupSet = new Set((grp.duplicateIds || []).filter(id => id && id !== grp.primaryId && !deletedIds.has(id)));
+      const duplicates = workingCustomers.filter(c => dupSet.has(c.id));
+      if (duplicates.length === 0) continue;
+
+      const { mergedCustomer, ordersToUpdate } = mergeCustomerGroupHelper(primary, duplicates, workingOrders);
+      workingCustomers = workingCustomers
+        .filter(c => !dupSet.has(c.id))
+        .map(c => (c.id === grp.primaryId ? mergedCustomer : c));
+
+      updatedPrimaryMap.set(mergedCustomer.id, mergedCustomer);
+      for (const d of duplicates) {
+        deletedIds.add(d.id);
+        updatedPrimaryMap.delete(d.id);
+      }
+
+      if (ordersToUpdate.length > 0) {
+        const grpOrderMap = new Map(ordersToUpdate.map(u => [u.id, u]));
+        workingOrders = workingOrders.map(o => grpOrderMap.get(o.id) || o);
+        for (const uo of ordersToUpdate) {
+          updatedOrderMap.set(uo.id, uo);
+        }
+      }
+      mergedGroupsCount++;
+    }
+
+    if (mergedGroupsCount > 0) {
+      stateRef.current.customers = workingCustomers;
+      localStorage.setItem(STORAGE_KEYS.CUSTOMERS, JSON.stringify(workingCustomers));
+      setCustomers(workingCustomers);
+
+      const changedPrimaries = Array.from(updatedPrimaryMap.values());
+      if (changedPrimaries.length > 0) cloudSyncCustomersBatch(changedPrimaries);
+      if (deletedIds.size > 0) cloudDeleteCustomersBatch(Array.from(deletedIds));
+
+      if (updatedOrderMap.size > 0) {
+        stateRef.current.orders = workingOrders;
+        localStorage.setItem(STORAGE_KEYS.ORDERS, JSON.stringify(workingOrders));
+        setOrders(workingOrders);
+        cloudSyncOrdersBatch(Array.from(updatedOrderMap.values()));
       }
     }
+
+    return mergedGroupsCount;
+  };
+
+  const mergeCustomerRecords = (primaryId: string, duplicateId: string) => {
+    mergeCustomerGroup(primaryId, [duplicateId]);
   };
 
   // Order actions
@@ -1196,6 +1338,7 @@ export const StoreProvider: React.FC<{ children: React.ReactNode }> = ({ childre
     setOrders([]);
     setDebtPayments([]);
     setReceiptSettings(DEFAULT_RECEIPT_SETTINGS);
+    setSentinelAcks(resetSentinelAcksStorage());
     localStorage.clear();
   };
 
@@ -1388,43 +1531,146 @@ export const StoreProvider: React.FC<{ children: React.ReactNode }> = ({ childre
     };
   };
 
-  // ADR-0018: Customer Sentinel Snapshot Tools
+  // ADR-0018 & ADR-0021: Customer Sentinel Snapshot & Discrepancy Tools
   const restoreCustomerFromOrder = (
     customerId: string,
     orderId: string
   ): { success: boolean; message: string } => {
-    const cust = customers.find(c => c.id === customerId);
-    const ord = orders.find(o => o.id === orderId);
+    const cust = stateRef.current.customers.find(c => c.id === customerId);
+    const ord = stateRef.current.orders.find(o => o.id === orderId);
     if (!cust || !ord) {
       return { success: false, message: 'Không tìm thấy khách hàng hoặc đơn hàng!' };
     }
 
     const { updatedCustomer, log } = restoreCustomerFromOrderSnapshot(cust, ord);
-    setCustomers(prev => prev.map(c => (c.id === customerId ? updatedCustomer : c)));
+    const nextCustomers = stateRef.current.customers.map(c => (c.id === customerId ? updatedCustomer : c));
+    stateRef.current.customers = nextCustomers;
+    localStorage.setItem(STORAGE_KEYS.CUSTOMERS, JSON.stringify(nextCustomers));
+    setCustomers(nextCustomers);
     cloudSyncCustomer(updatedCustomer);
     return { success: true, message: log };
   };
 
   const splitCustomerByHistoricalOrderRecord = (customerId: string, targetPhone: string) => {
-    const cust = customers.find(c => c.id === customerId);
+    const cust = stateRef.current.customers.find(c => c.id === customerId);
     if (!cust) return;
 
     const { customerA, customerB, ordersToUpdate } = splitCustomerByHistoricalOrder(
       cust,
       targetPhone,
-      orders
+      stateRef.current.orders
     );
-    setCustomers(prev => [...prev.filter(c => c.id !== customerId), customerA, customerB]);
+    const nextCustomers = [...stateRef.current.customers.filter(c => c.id !== customerId), customerA, customerB];
+    stateRef.current.customers = nextCustomers;
+    localStorage.setItem(STORAGE_KEYS.CUSTOMERS, JSON.stringify(nextCustomers));
+    setCustomers(nextCustomers);
     cloudSyncCustomer(customerA);
     cloudSyncCustomer(customerB);
 
     if (ordersToUpdate.length > 0) {
       const updateMap = new Map(ordersToUpdate.map(u => [u.id, u]));
-      setOrders(prev => prev.map(o => updateMap.get(o.id) || o));
-      for (const uo of ordersToUpdate) {
-        cloudSyncOrder(uo);
+      const nextOrders = stateRef.current.orders.map(o => updateMap.get(o.id) || o);
+      stateRef.current.orders = nextOrders;
+      localStorage.setItem(STORAGE_KEYS.ORDERS, JSON.stringify(nextOrders));
+      setOrders(nextOrders);
+      cloudSyncOrdersBatch(ordersToUpdate);
+    }
+  };
+
+  const addCustomerSecondaryPhone = (customerId: string, phone: string): boolean => {
+    const cust = stateRef.current.customers.find(c => c.id === customerId);
+    if (!cust) return false;
+    const res = addSecondaryPhoneFromOrderHelper(cust, phone);
+    if (!res.changed) return false;
+    const nextCustomers = stateRef.current.customers.map(c => (c.id === customerId ? res.customer : c));
+    stateRef.current.customers = nextCustomers;
+    localStorage.setItem(STORAGE_KEYS.CUSTOMERS, JSON.stringify(nextCustomers));
+    setCustomers(nextCustomers);
+    cloudSyncCustomer(res.customer);
+    return true;
+  };
+
+  const addCustomerExtraAddress = (customerId: string, address: string): boolean => {
+    const cust = stateRef.current.customers.find(c => c.id === customerId);
+    if (!cust) return false;
+    const res = addExtraAddressFromOrderHelper(cust, address);
+    if (!res.changed) return false;
+    const nextCustomers = stateRef.current.customers.map(c => (c.id === customerId ? res.customer : c));
+    stateRef.current.customers = nextCustomers;
+    localStorage.setItem(STORAGE_KEYS.CUSTOMERS, JSON.stringify(nextCustomers));
+    setCustomers(nextCustomers);
+    cloudSyncCustomer(res.customer);
+    return true;
+  };
+
+  const applyDiscrepancyRecommendationsBatch = (
+    items: Array<{ customerId: string; orderId: string }>
+  ): { updatedCount: number; splitCount: number } => {
+    if (!items || items.length === 0) return { updatedCount: 0, splitCount: 0 };
+    const now = new Date().toISOString();
+    const orderMap = new Map(stateRef.current.orders.map(o => [o.id, o]));
+    let workingCustomers = [...stateRef.current.customers];
+    const changedCustomerMap = new Map<string, Customer>();
+
+    for (const item of items) {
+      const custIdx = workingCustomers.findIndex(c => c.id === item.customerId);
+      const ord = orderMap.get(item.orderId);
+      if (custIdx === -1 || !ord) continue;
+
+      let cust = workingCustomers[custIdx];
+      const analysis = analyzeDiscrepancyOrder(cust, ord);
+
+      // Apply safe non-destructive additions without overwriting primary fields
+      let mutated = false;
+      if (analysis.recommendedAction === 'add_phone2' || analysis.canAddPhone2) {
+        if (analysis.recommendedAction !== 'split_customer' && analysis.recommendedAction !== 'restore_order' && ord.customerPhone) {
+          const pRes = addSecondaryPhoneFromOrderHelper(cust, ord.customerPhone, now);
+          if (pRes.changed) {
+            cust = pRes.customer;
+            mutated = true;
+          }
+        }
+      }
+      if (analysis.recommendedAction === 'add_extra_address' || analysis.canAddExtraAddress) {
+        if (analysis.recommendedAction !== 'split_customer' && analysis.recommendedAction !== 'restore_order' && ord.customerAddress) {
+          const aRes = addExtraAddressFromOrderHelper(cust, ord.customerAddress, now);
+          if (aRes.changed) {
+            cust = aRes.customer;
+            mutated = true;
+          }
+        }
+      }
+
+      if (mutated) {
+        workingCustomers[custIdx] = cust;
+        changedCustomerMap.set(cust.id, cust);
       }
     }
+
+    if (changedCustomerMap.size > 0) {
+      stateRef.current.customers = workingCustomers;
+      localStorage.setItem(STORAGE_KEYS.CUSTOMERS, JSON.stringify(workingCustomers));
+      setCustomers(workingCustomers);
+      cloudSyncCustomersBatch(Array.from(changedCustomerMap.values()));
+    }
+
+    return { updatedCount: changedCustomerMap.size, splitCount: 0 };
+  };
+
+  const acknowledgeSentinelItems = (type: keyof SentinelAcknowledgments, keys: string[]) => {
+    const cleanKeys = (keys || []).map(k => String(k || '').trim()).filter(Boolean);
+    if (cleanKeys.length === 0) return;
+    setSentinelAcks(prev => {
+      const merged = {
+        ...prev,
+        [type]: Array.from(new Set([...(prev[type] || []), ...cleanKeys])),
+      };
+      return saveSentinelAcks(merged);
+    });
+  };
+
+  const resetSentinelAcks = () => {
+    setSentinelAcks(resetSentinelAcksStorage());
   };
 
   // Import / Export all
@@ -1467,6 +1713,7 @@ export const StoreProvider: React.FC<{ children: React.ReactNode }> = ({ childre
         receiptSettings,
         cloudConfig,
         cloudExtraAddressesPendingSync,
+        sentinelAcks,
         addProduct,
         addProductsBatch,
         updateProduct,
@@ -1475,6 +1722,7 @@ export const StoreProvider: React.FC<{ children: React.ReactNode }> = ({ childre
         addCustomersBatch,
         updateCustomer,
         deleteCustomer,
+        deleteCustomersBatch,
         createOrder,
         updateOrderStatus,
         updateOrder,
@@ -1487,10 +1735,18 @@ export const StoreProvider: React.FC<{ children: React.ReactNode }> = ({ childre
         syncCloudToLocal,
         repairCustomerData,
         acceptRecoveredPhoneSplit,
+        acceptAllPhoneSplitsBatch,
         promoteMultiAddressToExtra,
         promoteMultiAddressesBatch,
         splitCustomerRecord,
         mergeCustomerRecords,
+        mergeCustomerGroup,
+        mergeDuplicateGroupsBatch,
+        addCustomerSecondaryPhone,
+        addCustomerExtraAddress,
+        applyDiscrepancyRecommendationsBatch,
+        acknowledgeSentinelItems,
+        resetSentinelAcks,
         restoreCustomerFromOrder,
         splitCustomerByHistoricalOrderRecord,
         restoreFromExcelOrders,

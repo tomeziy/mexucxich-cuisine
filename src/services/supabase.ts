@@ -736,10 +736,56 @@ export const cloudDeleteCustomer = async (id: string) => {
   const client = getSupabaseClient();
   if (!client) return;
   try {
-    await client.from('customers').delete().eq('id', id);
+    const { error } = await client.from('customers').delete().eq('id', id);
+    if (error) console.error('cloudDeleteCustomer error:', error);
   } catch (e) {
     console.error('cloudDeleteCustomer error:', e);
   }
+};
+
+export const executeChunkedCustomerDelete = async (
+  client: SupabaseClient,
+  ids: string[],
+  chunkSize = 100
+): Promise<{ success: boolean; deletedCount: number; chunksCount: number; error?: any }> => {
+  const uniqueIds = Array.from(new Set((ids || []).map(id => String(id || '').trim()).filter(Boolean)));
+  if (uniqueIds.length === 0) {
+    return { success: true, deletedCount: 0, chunksCount: 0 };
+  }
+  let deletedCount = 0;
+  let chunksCount = 0;
+  try {
+    for (let i = 0; i < uniqueIds.length; i += chunkSize) {
+      const chunk = uniqueIds.slice(i, i + chunkSize);
+      chunksCount++;
+      const { error } = await client.from('customers').delete().in('id', chunk);
+      if (error) {
+        console.error(`cloudDeleteCustomersBatch error (chunk ${i}-${i + chunk.length}):`, error);
+        return { success: false, deletedCount, chunksCount, error };
+      }
+      deletedCount += chunk.length;
+    }
+    return { success: true, deletedCount, chunksCount };
+  } catch (e) {
+    console.error('cloudDeleteCustomersBatch error:', e);
+    return { success: false, deletedCount, chunksCount, error: e };
+  }
+};
+
+export const cloudDeleteCustomersBatch = async (
+  ids: string[],
+  chunkSize = 100
+): Promise<{ success: boolean; deletedCount: number; error?: any }> => {
+  const uniqueIds = Array.from(new Set((ids || []).map(id => String(id || '').trim()).filter(Boolean)));
+  if (uniqueIds.length === 0) {
+    return { success: true, deletedCount: 0 };
+  }
+  const client = getSupabaseClient();
+  if (!client) {
+    return { success: false, deletedCount: 0 };
+  }
+  const res = await executeChunkedCustomerDelete(client, uniqueIds, chunkSize);
+  return { success: res.success, deletedCount: res.deletedCount, error: res.error };
 };
 
 // Batch items sync helpers
