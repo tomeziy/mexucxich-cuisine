@@ -1055,7 +1055,7 @@ export function isEmptyGhostCustomer(customer: Customer, orders: Order[] = []): 
   const hasMatchingOrder = orders.some(o => o.customerId === customer.id);
   if (hasMatchingOrder) return false;
 
-  if (orders.length === 0 && (customer.orderCount || 0) > 0) return false;
+  if (Number(customer.orderCount || 0) > 0 || Number(customer.totalSpent || 0) > 0) return false;
 
   return true;
 }
@@ -1134,6 +1134,15 @@ export function rankPrimaryCustomer(customers: Customer[], orders: Order[] = [])
  */
 export function analyzeToneTwinGroup(group: ToneTwinGroup, orders: Order[] = []): ToneTwinAnalysis {
   const customers = group.customers || [];
+  if (customers.length === 0) {
+    return {
+      recommendation: 'keep_independent',
+      recommendedPrimaryId: '',
+      ghostCustomerIds: [],
+      reasonLabel: 'Nhóm không có khách hàng.',
+      actionLabel: 'Xác nhận độc lập',
+    };
+  }
   const ghosts = customers.filter(c => isEmptyGhostCustomer(c, orders));
   const nonGhosts = customers.filter(c => !isEmptyGhostCustomer(c, orders));
 
@@ -1249,8 +1258,9 @@ export function analyzeDiscrepancyOrder(customer: Customer, order: Order): Discr
       ordNameNorm !== custNameNorm
   );
 
-  // If order has a different person's name (or diacritic-different name) AND a different phone -> split into 2 customers
+  // If profile already has a phone AND order has a different person's name + different phone -> split into 2 customers
   if (
+    existingPhones.length > 0 &&
     canAddPhone2 &&
     isDistinctNonGenericOrderName &&
     (ordNameClean !== custNameClean || ordNameNorm.toLowerCase() !== custNameNorm.toLowerCase())
@@ -1492,7 +1502,7 @@ export function filterAuditResultByAcks(
       o =>
         (o.customerPhone && disc.differingPhones.includes(o.customerPhone.trim())) ||
         (o.customerAddress && disc.differingAddresses.includes(o.customerAddress.trim())) ||
-        (o.customerName && disc.differingNames.includes(o.customerName.trim()))
+        (o.customerName && disc.differingNames.includes(o.customerName.normalize('NFC').trim()))
     );
 
     if (differingOrders.length === 0) {
@@ -1580,4 +1590,63 @@ export function deleteCustomersBatchHelper(
     deletedCount: deletedIds.length,
     skippedIds,
   };
+}
+
+export const PENDING_DELETED_CUSTOMERS_KEY = 'mxc_deleted_customer_ids_v1';
+
+export function loadPendingDeletedCustomerIds(
+  storage: Pick<Storage, 'getItem'> | null = typeof localStorage !== 'undefined' ? localStorage : null
+): string[] {
+  if (!storage) return [];
+  try {
+    const raw = storage.getItem(PENDING_DELETED_CUSTOMERS_KEY);
+    if (!raw) return [];
+    const parsed = JSON.parse(raw);
+    return sanitizeAckList(parsed);
+  } catch {
+    return [];
+  }
+}
+
+function savePendingDeletedCustomerIds(
+  ids: string[],
+  storage: Pick<Storage, 'setItem' | 'removeItem'> | null = typeof localStorage !== 'undefined' ? localStorage : null
+): string[] {
+  const clean = sanitizeAckList(ids);
+  if (storage) {
+    try {
+      if (clean.length === 0) {
+        storage.removeItem(PENDING_DELETED_CUSTOMERS_KEY);
+      } else {
+        storage.setItem(PENDING_DELETED_CUSTOMERS_KEY, JSON.stringify(clean));
+      }
+    } catch {
+      // Ignore storage errors
+    }
+  }
+  return clean;
+}
+
+export function addPendingDeletedCustomerIds(
+  ids: string[],
+  storage: (Pick<Storage, 'getItem' | 'setItem' | 'removeItem'>) | null = typeof localStorage !== 'undefined' ? localStorage : null
+): string[] {
+  const current = loadPendingDeletedCustomerIds(storage);
+  return savePendingDeletedCustomerIds([...current, ...(ids || [])], storage);
+}
+
+export function removePendingDeletedCustomerIds(
+  ids: string[],
+  storage: (Pick<Storage, 'getItem' | 'setItem' | 'removeItem'>) | null = typeof localStorage !== 'undefined' ? localStorage : null
+): string[] {
+  const removeSet = new Set(sanitizeAckList(ids));
+  if (removeSet.size === 0) return loadPendingDeletedCustomerIds(storage);
+  const current = loadPendingDeletedCustomerIds(storage);
+  return savePendingDeletedCustomerIds(current.filter(id => !removeSet.has(id)), storage);
+}
+
+export function filterOutDeletedCustomers(customers: Customer[], pendingDeletedIds: string[]): Customer[] {
+  if (!pendingDeletedIds || pendingDeletedIds.length === 0) return customers;
+  const tombstones = new Set(pendingDeletedIds);
+  return (customers || []).filter(c => !tombstones.has(c.id));
 }

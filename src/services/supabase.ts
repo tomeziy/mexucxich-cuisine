@@ -732,14 +732,21 @@ export const cloudSyncCustomer = async (c: Customer) => {
   }
 };
 
-export const cloudDeleteCustomer = async (id: string) => {
+export const cloudDeleteCustomer = async (id: string): Promise<{ success: boolean }> => {
+  const cleanId = String(id || '').trim();
+  if (!cleanId) return { success: true };
   const client = getSupabaseClient();
-  if (!client) return;
+  if (!client) return { success: false };
   try {
-    const { error } = await client.from('customers').delete().eq('id', id);
-    if (error) console.error('cloudDeleteCustomer error:', error);
+    const { error } = await client.from('customers').delete().eq('id', cleanId);
+    if (error) {
+      console.error('cloudDeleteCustomer error:', error);
+      return { success: false };
+    }
+    return { success: true };
   } catch (e) {
     console.error('cloudDeleteCustomer error:', e);
+    return { success: false };
   }
 };
 
@@ -752,11 +759,12 @@ export const executeChunkedCustomerDelete = async (
   if (uniqueIds.length === 0) {
     return { success: true, deletedCount: 0, chunksCount: 0 };
   }
+  const safeChunkSize = Math.max(1, Math.floor(chunkSize || 100));
   let deletedCount = 0;
   let chunksCount = 0;
   try {
-    for (let i = 0; i < uniqueIds.length; i += chunkSize) {
-      const chunk = uniqueIds.slice(i, i + chunkSize);
+    for (let i = 0; i < uniqueIds.length; i += safeChunkSize) {
+      const chunk = uniqueIds.slice(i, i + safeChunkSize);
       chunksCount++;
       const { error } = await client.from('customers').delete().in('id', chunk);
       if (error) {

@@ -452,6 +452,23 @@ export const CustomersPage: React.FC = () => {
 
   const totalPages = Math.ceil(filteredCustomers.length / pageSize) || 1;
 
+  // Clamp currentPage when deletions/merges reduce totalPages
+  useEffect(() => {
+    if (currentPage > totalPages) {
+      setCurrentPage(totalPages);
+    }
+  }, [currentPage, totalPages]);
+
+  // Prune stale IDs from selectedCustomerIds when customers are deleted or merged
+  useEffect(() => {
+    const existingIds = new Set(customers.map(c => c.id));
+    setSelectedCustomerIds(prev => {
+      if (prev.size === 0) return prev;
+      const next = new Set(Array.from(prev).filter(id => existingIds.has(id)));
+      return next.size === prev.size ? prev : next;
+    });
+  }, [customers]);
+
   const paginatedCustomers = useMemo(() => {
     const start = (currentPage - 1) * pageSize;
     return filteredCustomers.slice(start, start + pageSize);

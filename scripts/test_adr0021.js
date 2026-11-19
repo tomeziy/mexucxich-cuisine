@@ -18,6 +18,11 @@ import {
   resetSentinelAcksStorage,
   filterAuditResultByAcks,
   getSentinelAcknowledgedCount,
+  PENDING_DELETED_CUSTOMERS_KEY,
+  loadPendingDeletedCustomerIds,
+  addPendingDeletedCustomerIds,
+  removePendingDeletedCustomerIds,
+  filterOutDeletedCustomers,
 } from '../src/utils/customerSentinel.ts';
 import { executeChunkedCustomerDelete } from '../src/services/supabase.ts';
 
@@ -91,6 +96,16 @@ assert.strictEqual(
   isEmptyGhostCustomer(ayseGhost, [{ ...ayseOrders[0], customerId: ayseGhost.id }]),
   false,
   'Customer with matching order is never a ghost'
+);
+assert.strictEqual(
+  isEmptyGhostCustomer({ ...ayseGhost, orderCount: 2 }, ayseOrders),
+  false,
+  'Customer with orderCount > 0 is never a ghost even when store orders array is non-empty'
+);
+assert.strictEqual(
+  isEmptyGhostCustomer({ ...ayseGhost, totalSpent: 150000 }, ayseOrders),
+  false,
+  'Customer with totalSpent > 0 is never a ghost'
 );
 
 const ayseAudit = auditCustomerData([ayseGhost, ayseReal], ayseOrders);
@@ -303,6 +318,16 @@ const discRestoreAnalysis = analyzeDiscrepancyOrder(
 );
 assert.strictEqual(discRestoreAnalysis.recommendedAction, 'restore_order');
 
+const discBlankDiffNameAnalysis = analyzeDiscrepancyOrder(
+  { id: 'KH_BLANK', name: 'Thảo', phone: '', address: '', debt: 0 },
+  { ...ordBlankProfile, customerName: 'Nguyễn Thị Thảo' }
+);
+assert.strictEqual(
+  discBlankDiffNameAnalysis.recommendedAction,
+  'restore_order',
+  'Phone-less profile must recommend restore_order instead of split_customer'
+);
+
 // Non-destructive phone2 helper (with dedup)
 const addP2Res1 = addSecondaryPhoneFromOrderHelper(custBase, '0988.776.655');
 assert.strictEqual(addP2Res1.changed, true);
@@ -477,6 +502,45 @@ assert.strictEqual(filteredAudit.totalAnomalies, 0);
 const resetAcks = resetSentinelAcksStorage(mockStorage);
 assert.strictEqual(getSentinelAcknowledgedCount(resetAcks), 0);
 assert.strictEqual(filterAuditResultByAcks(rawAudit, resetAcks).totalAnomalies, rawAudit.totalAnomalies);
+
+// NFD Vietnamese order name discrepancy ack matching
+const nfdCust = { id: 'KH_NFD', name: 'Thanh Hang', phone: '0911000111', address: '10 Hàng Đào', debt: 0 };
+const nfdOrd = {
+  id: 'HD_NFD',
+  createdAt: '2026-11-10T10:00:00Z',
+  customerId: 'KH_NFD',
+  customerName: 'Thanh Ha\u0306\u0300ng',
+  customerPhone: '0911000111',
+  customerAddress: '10 Hàng Đào',
+  total: 100000,
+  items: [],
+};
+const nfdAudit = auditCustomerData([nfdCust], [nfdOrd]);
+assert.strictEqual(nfdAudit.orderDiscrepancies.length, 1);
+const nfdFiltered = filterAuditResultByAcks(nfdAudit, {
+  toneTwins: [],
+  multiAddresses: [],
+  discrepancies: ['KH_NFD::HD_NFD'],
+});
+assert.strictEqual(nfdFiltered.orderDiscrepancies.length, 0, 'NFD order name must be matched & acked properly');
+
+// Pending-delete tombstones prevent resurrection on cloud pull
+assert.deepStrictEqual(loadPendingDeletedCustomerIds(mockStorage), []);
+addPendingDeletedCustomerIds(['KH_DEL_1', 'KH_DEL_2', 'KH_DEL_1'], mockStorage);
+assert.deepStrictEqual(loadPendingDeletedCustomerIds(mockStorage), ['KH_DEL_1', 'KH_DEL_2']);
+const cloudPulledSample = [
+  { id: 'KH_DEL_1', name: 'Deleted 1', phone: '', address: '', debt: 0 },
+  { id: 'KH_KEEP', name: 'Keep', phone: '0901234567', address: '', debt: 0 },
+];
+const filteredCloud = filterOutDeletedCustomers(cloudPulledSample, loadPendingDeletedCustomerIds(mockStorage));
+assert.deepStrictEqual(filteredCloud.map(c => c.id), ['KH_KEEP']);
+removePendingDeletedCustomerIds(['KH_DEL_1', 'KH_DEL_2'], mockStorage);
+assert.strictEqual(mockStorage.getItem(PENDING_DELETED_CUSTOMERS_KEY), null);
+
+// ChunkSize <= 0 safety
+const zeroChunkRes = await executeChunkedCustomerDelete(mockSupabaseClient, ['KH_Z1'], 0);
+assert.strictEqual(zeroChunkRes.success, true);
+assert.strictEqual(zeroChunkRes.deletedCount, 1);
 
 console.log('✓ Persistent Sentinel acknowledgments & filtering verified.');
 

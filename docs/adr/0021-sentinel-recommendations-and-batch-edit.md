@@ -37,7 +37,8 @@ Following the rollout of Customer Sentinel (ADR-0017 / ADR-0018 / ADR-0020), fie
 
 ### 2. Cloud & Store Operations (`src/services/supabase.ts` & `src/context/StoreContext.tsx`)
 - **`executeChunkedCustomerDelete` & `cloudDeleteCustomersBatch(ids)`**: Deletes customer IDs in chunks via `.from('customers').delete().in('id', chunk)` with clean error logging.
-- **StoreContext Actions**: Added atomic state + `localStorage` + Cloud sync operations for `deleteCustomersBatch`, `mergeCustomerGroup`, `mergeDuplicateGroupsBatch`, `addCustomerSecondaryPhone`, `addCustomerExtraAddress`, `applyDiscrepancyRecommendationsBatch`, `acceptAllPhoneSplitsBatch`, `sentinelAcks`, `acknowledgeSentinelItems`, and `resetSentinelAcks`.
+- **Pending-Delete Tombstone Safeguard (`mxc_deleted_customer_ids_v1`)**: `loadPendingDeletedCustomerIds`, `addPendingDeletedCustomerIds`, `removePendingDeletedCustomerIds`, and `filterOutDeletedCustomers` ensure locally deleted/merged customer IDs are flushed to Cloud before `pullAllDataFromCloud` and cannot be resurrected by concurrent tab-focus refreshes or offline-to-online syncs.
+- **StoreContext Actions**: Added atomic state + `localStorage` + Cloud sync operations for `deleteCustomersBatch`, `mergeCustomerGroup`, `mergeDuplicateGroupsBatch`, `addCustomerSecondaryPhone`, `addCustomerExtraAddress`, `applyDiscrepancyRecommendationsBatch`, `acceptAllPhoneSplitsBatch`, `sentinelAcks`, `acknowledgeSentinelItems`, and `resetSentinelAcks` (plus `stateRef`-synchronized `promoteMultiAddressToExtra`, `promoteMultiAddressesBatch`, and `splitCustomerRecord`).
 
 ### 3. Full Sentinel UX Optimization (`src/components/customers/CustomerSentinelModal.tsx`)
 - **All 5 Tabs Upgraded** with a prominent `"Phương án Đề xuất"` callout, side-by-side alternative actions, individual safe `Xóa` buttons, and section batch toolbars:

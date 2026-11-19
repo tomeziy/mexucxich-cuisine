@@ -17,6 +17,10 @@ import {
   loadSentinelAcks,
   saveSentinelAcks,
   resetSentinelAcksStorage,
+  loadPendingDeletedCustomerIds,
+  addPendingDeletedCustomerIds,
+  removePendingDeletedCustomerIds,
+  filterOutDeletedCustomers,
   MigrationRepairResult,
 } from '../utils/customerSentinel';
 import { repairFusedPhonesBatch, repairCustomerFusedPhones } from '../utils/phoneRecovery';
@@ -346,8 +350,16 @@ export const StoreProvider: React.FC<{ children: React.ReactNode }> = ({ childre
 
   // Initial pull and auto-refresh on tab focus/visibility change from Supabase
   useEffect(() => {
-    const refreshCloud = () => {
+    const refreshCloud = async () => {
       if (cloudConfig.supabaseUrl && cloudConfig.supabaseAnonKey && cloudConfig.autoSync) {
+        const pendingDeletes = loadPendingDeletedCustomerIds();
+        if (pendingDeletes.length > 0) {
+          const delRes = await cloudDeleteCustomersBatch(pendingDeletes);
+          if (delRes.success) {
+            removePendingDeletedCustomerIds(pendingDeletes);
+          }
+        }
+
         const localData = {
           products: stateRef.current.products,
           customers: stateRef.current.customers,
@@ -360,11 +372,15 @@ export const StoreProvider: React.FC<{ children: React.ReactNode }> = ({ childre
             // ADR-0018: Catalog Anti-Shrink Guard
             const guarded = applyCatalogAntiShrinkGuard(stateRef.current.products, cloudData.products);
             setProducts(guarded.products);
+            const stillPendingDeletes = loadPendingDeletedCustomerIds();
+            const safeCloudCustomers = filterOutDeletedCustomers(cloudData.customers, stillPendingDeletes);
             const { repairedCustomers, repairedOrders } = repairAndMigrateCustomers(
-              cloudData.customers,
+              safeCloudCustomers,
               cloudData.orders
             );
             const phoneRepair = repairFusedPhonesBatch(repairedCustomers);
+            stateRef.current.customers = phoneRepair.customers;
+            stateRef.current.orders = repairedOrders;
             setCustomers(phoneRepair.customers);
             setOrders(repairedOrders);
             setDebtPayments(cloudData.debtPayments);
@@ -418,6 +434,14 @@ export const StoreProvider: React.FC<{ children: React.ReactNode }> = ({ childre
   }, [products, customers, orders, debtPayments, receiptSettings]);
 
   const syncCloudToLocal = useCallback(async (): Promise<{ success: boolean; message: string }> => {
+    const pendingDeletes = loadPendingDeletedCustomerIds();
+    if (pendingDeletes.length > 0) {
+      const delRes = await cloudDeleteCustomersBatch(pendingDeletes);
+      if (delRes.success) {
+        removePendingDeletedCustomerIds(pendingDeletes);
+      }
+    }
+
     const localData = {
       products: stateRef.current.products,
       customers: stateRef.current.customers,
@@ -433,8 +457,11 @@ export const StoreProvider: React.FC<{ children: React.ReactNode }> = ({ childre
     const guarded = applyCatalogAntiShrinkGuard(stateRef.current.products, pullRes.products);
     pullRes.products = guarded.products;
 
+    const stillPendingDeletes = loadPendingDeletedCustomerIds();
+    const safePulledCustomers = filterOutDeletedCustomers(pullRes.customers, stillPendingDeletes);
+
     const { repairedCustomers, repairedOrders } = repairAndMigrateCustomers(
-      pullRes.customers,
+      safePulledCustomers,
       pullRes.orders
     );
     const phoneRepair = repairFusedPhonesBatch(repairedCustomers);
@@ -588,7 +615,10 @@ export const StoreProvider: React.FC<{ children: React.ReactNode }> = ({ childre
     stateRef.current.customers = nextCustomers;
     localStorage.setItem(STORAGE_KEYS.CUSTOMERS, JSON.stringify(nextCustomers));
     setCustomers(nextCustomers);
-    cloudDeleteCustomer(id);
+    addPendingDeletedCustomerIds([id]);
+    cloudDeleteCustomer(id).then(res => {
+      if (res?.success) removePendingDeletedCustomerIds([id]);
+    });
   };
 
   const deleteCustomersBatch = (
@@ -607,7 +637,10 @@ export const StoreProvider: React.FC<{ children: React.ReactNode }> = ({ childre
     stateRef.current.customers = res.nextCustomers;
     localStorage.setItem(STORAGE_KEYS.CUSTOMERS, JSON.stringify(res.nextCustomers));
     setCustomers(res.nextCustomers);
-    cloudDeleteCustomersBatch(res.deletedIds);
+    addPendingDeletedCustomerIds(res.deletedIds);
+    cloudDeleteCustomersBatch(res.deletedIds).then(cloudRes => {
+      if (cloudRes?.success) removePendingDeletedCustomerIds(res.deletedIds);
+    });
 
     return {
       deletedCount: res.deletedCount,
@@ -693,11 +726,14 @@ export const StoreProvider: React.FC<{ children: React.ReactNode }> = ({ childre
   };
 
   const promoteMultiAddressToExtra = (customerId: string) => {
-    const target = customers.find(c => c.id === customerId);
+    const target = stateRef.current.customers.find(c => c.id === customerId);
     if (!target) return;
     const res = convertAddressToExtraAddresses(target);
     if (!res.changed) return;
-    setCustomers(prev => prev.map(c => (c.id === customerId ? res.customer : c)));
+    const nextCustomers = stateRef.current.customers.map(c => (c.id === customerId ? res.customer : c));
+    stateRef.current.customers = nextCustomers;
+    localStorage.setItem(STORAGE_KEYS.CUSTOMERS, JSON.stringify(nextCustomers));
+    setCustomers(nextCustomers);
     cloudSyncCustomer(res.customer);
   };
 
@@ -706,7 +742,7 @@ export const StoreProvider: React.FC<{ children: React.ReactNode }> = ({ childre
     const idSet = new Set(customerIds);
     const now = new Date().toISOString();
     const changedCustomers: Customer[] = [];
-    const nextList = customers.map(c => {
+    const nextList = stateRef.current.customers.map(c => {
       if (!idSet.has(c.id)) return c;
       const res = convertAddressToExtraAddresses(c, now);
       if (res.changed) {
@@ -716,6 +752,8 @@ export const StoreProvider: React.FC<{ children: React.ReactNode }> = ({ childre
       return c;
     });
     if (changedCustomers.length > 0) {
+      stateRef.current.customers = nextList;
+      localStorage.setItem(STORAGE_KEYS.CUSTOMERS, JSON.stringify(nextList));
       setCustomers(nextList);
       cloudSyncCustomersBatch(changedCustomers);
     }
@@ -723,43 +761,33 @@ export const StoreProvider: React.FC<{ children: React.ReactNode }> = ({ childre
   };
 
   const splitCustomerRecord = (customerId: string, type: 'phone' | 'address') => {
-    const target = customers.find(c => c.id === customerId);
+    const currentCustomers = stateRef.current.customers;
+    const currentOrders = stateRef.current.orders;
+    const target = currentCustomers.find(c => c.id === customerId);
     if (!target) return;
 
-    if (type === 'phone') {
-      const { customerA, customerB, ordersToUpdate } = splitCustomerByPhones(target, orders);
-      setCustomers(prev => prev.map(c => (c.id === customerId ? customerA : c)).concat(customerB));
-      cloudSyncCustomer(customerA);
-      cloudSyncCustomer(customerB);
+    const splitRes =
+      type === 'phone'
+        ? splitCustomerByPhones(target, currentOrders)
+        : splitCustomerByAddresses(target, currentOrders);
 
-      if (ordersToUpdate.length > 0) {
-        setOrders(prev =>
-          prev.map(o => {
-            const up = ordersToUpdate.find(u => u.id === o.id);
-            return up ? up : o;
-          })
-        );
-        for (const ord of ordersToUpdate) {
-          cloudSyncOrder(ord);
-        }
-      }
-    } else {
-      const { customerA, customerB, ordersToUpdate } = splitCustomerByAddresses(target, orders);
-      setCustomers(prev => prev.map(c => (c.id === customerId ? customerA : c)).concat(customerB));
-      cloudSyncCustomer(customerA);
-      cloudSyncCustomer(customerB);
+    const { customerA, customerB, ordersToUpdate } = splitRes;
+    const nextCustomers = currentCustomers
+      .map(c => (c.id === customerId ? customerA : c))
+      .concat(customerB);
 
-      if (ordersToUpdate.length > 0) {
-        setOrders(prev =>
-          prev.map(o => {
-            const up = ordersToUpdate.find(u => u.id === o.id);
-            return up ? up : o;
-          })
-        );
-        for (const ord of ordersToUpdate) {
-          cloudSyncOrder(ord);
-        }
-      }
+    stateRef.current.customers = nextCustomers;
+    localStorage.setItem(STORAGE_KEYS.CUSTOMERS, JSON.stringify(nextCustomers));
+    setCustomers(nextCustomers);
+    cloudSyncCustomersBatch([customerA, customerB]);
+
+    if (ordersToUpdate.length > 0) {
+      const updateMap = new Map(ordersToUpdate.map(u => [u.id, u]));
+      const nextOrders = currentOrders.map(o => updateMap.get(o.id) || o);
+      stateRef.current.orders = nextOrders;
+      localStorage.setItem(STORAGE_KEYS.ORDERS, JSON.stringify(nextOrders));
+      setOrders(nextOrders);
+      cloudSyncOrdersBatch(ordersToUpdate);
     }
   };
 
@@ -778,11 +806,15 @@ export const StoreProvider: React.FC<{ children: React.ReactNode }> = ({ childre
       .filter(c => !dupSet.has(c.id))
       .map(c => (c.id === primaryId ? mergedCustomer : c));
 
+    const dupIds = duplicates.map(d => d.id);
     stateRef.current.customers = nextCustomers;
     localStorage.setItem(STORAGE_KEYS.CUSTOMERS, JSON.stringify(nextCustomers));
     setCustomers(nextCustomers);
     cloudSyncCustomer(mergedCustomer);
-    cloudDeleteCustomersBatch(duplicates.map(d => d.id));
+    addPendingDeletedCustomerIds(dupIds);
+    cloudDeleteCustomersBatch(dupIds).then(cloudRes => {
+      if (cloudRes?.success) removePendingDeletedCustomerIds(dupIds);
+    });
 
     if (ordersToUpdate.length > 0) {
       const updateMap = new Map(ordersToUpdate.map(u => [u.id, u]));
@@ -840,7 +872,13 @@ export const StoreProvider: React.FC<{ children: React.ReactNode }> = ({ childre
 
       const changedPrimaries = Array.from(updatedPrimaryMap.values());
       if (changedPrimaries.length > 0) cloudSyncCustomersBatch(changedPrimaries);
-      if (deletedIds.size > 0) cloudDeleteCustomersBatch(Array.from(deletedIds));
+      if (deletedIds.size > 0) {
+        const delArr = Array.from(deletedIds);
+        addPendingDeletedCustomerIds(delArr);
+        cloudDeleteCustomersBatch(delArr).then(cloudRes => {
+          if (cloudRes?.success) removePendingDeletedCustomerIds(delArr);
+        });
+      }
 
       if (updatedOrderMap.size > 0) {
         stateRef.current.orders = workingOrders;
