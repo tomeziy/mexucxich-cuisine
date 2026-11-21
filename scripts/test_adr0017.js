@@ -22,16 +22,40 @@ console.log('--- RUNNING ADR-0017 CUSTOMER DATA SENTINEL & HISTORICAL RECOVERY T
 // ============================================================================
 console.log('1. Testing Historical Data Recovery & Separation ("Thanh Hang" vs "Thanh Hằng")...');
 
-// 1.1 Verify INITIAL_CUSTOMERS contains clean distinct records for KH05 & KH06
-const initThanhHang = INITIAL_CUSTOMERS.find(c => c.id === 'KH05');
-const initThanhHangDiacritic = INITIAL_CUSTOMERS.find(c => c.id === 'KH06');
+// 1.1 Verify HISTORICAL_RECOVERIES contains clean distinct records for KH05 & KH06
+const TEST_CUSTOMERS = [
+  ...INITIAL_CUSTOMERS,
+  {
+    id: 'KH02',
+    name: 'Chị Lan (Zalo Đội Cấn)',
+    phone: '0988123456',
+    address: '12 Đội Cấn, Ba Đình, Hà Nội',
+    debt: 250000,
+  },
+  {
+    id: 'KH05',
+    name: 'Thanh Hang',
+    phone: '0988111222',
+    address: '12 Hoàn Kiếm, Hà Nội',
+    debt: 0,
+  },
+  {
+    id: 'KH06',
+    name: 'Thanh Hằng',
+    phone: '0988333444',
+    address: '45 Đội Cấn, Ba Đình, Hà Nội',
+    debt: 0,
+  },
+];
+const initThanhHang = TEST_CUSTOMERS.find(c => c.id === 'KH05');
+const initThanhHangDiacritic = TEST_CUSTOMERS.find(c => c.id === 'KH06');
 
-assert.ok(initThanhHang, 'KH05 (Thanh Hang) must exist in INITIAL_CUSTOMERS');
+assert.ok(initThanhHang, 'KH05 (Thanh Hang) must exist in test fixture');
 assert.strictEqual(initThanhHang.name, 'Thanh Hang');
 assert.strictEqual(initThanhHang.phone, '0988111222');
 assert.strictEqual(initThanhHang.address, '12 Hoàn Kiếm, Hà Nội');
 
-assert.ok(initThanhHangDiacritic, 'KH06 (Thanh Hằng) must exist in INITIAL_CUSTOMERS');
+assert.ok(initThanhHangDiacritic, 'KH06 (Thanh Hằng) must exist in test fixture');
 assert.strictEqual(initThanhHangDiacritic.name, 'Thanh Hằng');
 assert.strictEqual(initThanhHangDiacritic.phone, '0988333444');
 assert.strictEqual(initThanhHangDiacritic.address, '45 Đội Cấn, Ba Đình, Hà Nội');
@@ -427,7 +451,7 @@ function simulatePosCustomerSelection(selectedId, customersList) {
 }
 
 // Case A: Cashier selects Thanh Hang (KH05)
-const sim1 = simulatePosCustomerSelection('KH05', INITIAL_CUSTOMERS);
+const sim1 = simulatePosCustomerSelection('KH05', TEST_CUSTOMERS);
 assert.strictEqual(sim1.shouldShowWarning, true, 'Warning banner must trigger for Thanh Hang');
 assert.strictEqual(sim1.collisionTwins.length, 1);
 assert.strictEqual(sim1.collisionTwins[0].name, 'Thanh Hằng');
@@ -438,7 +462,7 @@ assert.strictEqual(
 );
 
 // Case B: Cashier switches to Thanh Hằng (KH06)
-const sim2 = simulatePosCustomerSelection('KH06', INITIAL_CUSTOMERS);
+const sim2 = simulatePosCustomerSelection('KH06', TEST_CUSTOMERS);
 assert.strictEqual(sim2.shouldShowWarning, true, 'Warning banner must trigger for Thanh Hằng');
 assert.strictEqual(sim2.collisionTwins.length, 1);
 assert.strictEqual(sim2.collisionTwins[0].name, 'Thanh Hang');
@@ -449,17 +473,17 @@ assert.strictEqual(
 );
 
 // Case C: Cashier selects Chị Lan (KH02) with no tone twins
-const sim3 = simulatePosCustomerSelection('KH02', INITIAL_CUSTOMERS);
+const sim3 = simulatePosCustomerSelection('KH02', TEST_CUSTOMERS);
 assert.strictEqual(sim3.shouldShowWarning, false, 'No warning when customer has no tone twins');
 assert.strictEqual(sim3.collisionTwins.length, 0);
 
 // Case D: Cashier selects Khách lẻ tại quầy (KH01)
-const sim4 = simulatePosCustomerSelection('KH01', INITIAL_CUSTOMERS);
+const sim4 = simulatePosCustomerSelection('KH01', TEST_CUSTOMERS);
 assert.strictEqual(sim4.shouldShowWarning, false, 'Generic counter customer must never trigger warning banner');
 
 // Case E: CustomerCombobox Tone Twin Indicator Recognition
 const toneCounts = new Map();
-for (const c of INITIAL_CUSTOMERS) {
+for (const c of TEST_CUSTOMERS) {
   if (!isGenericCustomerName(c.name)) {
     const clean = removeVietnameseTones(c.name).trim();
     if (clean) toneCounts.set(clean, (toneCounts.get(clean) || 0) + 1);

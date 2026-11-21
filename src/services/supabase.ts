@@ -539,6 +539,8 @@ export const pullAllDataFromCloud = async (localData?: {
   debtPayments: DebtPayment[];
   settings?: ReceiptSettings;
   localPreservedCount?: number;
+  unsyncedLocalProducts?: Product[];
+  unsyncedLocalOrders?: Order[];
 } | null> => {
   const client = getSupabaseClient();
   if (!client) return null;
@@ -569,12 +571,15 @@ export const pullAllDataFromCloud = async (localData?: {
     let finalOrders = cloudOrders;
     let finalDebtPayments = cloudDebtPayments;
     let localPreservedCount = 0;
+    let unsyncedLocalProducts: Product[] = [];
+    let unsyncedLocalOrders: Order[] = [];
 
     if (localData) {
       if (localData.products && localData.products.length > 0) {
         const pMerge = mergeProductsWithConflictResolution(localData.products, cloudProducts);
         // Anti-shrink guard: never return a product catalog smaller than local in-memory catalog
         finalProducts = pMerge.merged.length >= localData.products.length ? pMerge.merged : localData.products;
+        unsyncedLocalProducts = pMerge.localPreserved;
         localPreservedCount += pMerge.localPreserved.length;
       }
       if (localData.customers && localData.customers.length > 0) {
@@ -585,9 +590,14 @@ export const pullAllDataFromCloud = async (localData?: {
         localPreservedCount += cMerge.localPreserved.length;
       }
       if (localData.orders && localData.orders.length > 0) {
-        const cloudOrderIds = new Set(cloudOrders.map(o => o.id));
-        const unsyncedOrders = localData.orders.filter(o => !cloudOrderIds.has(o.id));
+        const cloudOrderMap = new Map(cloudOrders.map(o => [o.id, o]));
+        const unsyncedOrders = localData.orders.filter(o => {
+          const cloudO = cloudOrderMap.get(o.id);
+          if (!cloudO) return true;
+          return getEntityTimestamp(o) > getEntityTimestamp(cloudO);
+        });
         finalOrders = mergeOrders(localData.orders, cloudOrders);
+        unsyncedLocalOrders = unsyncedOrders;
         localPreservedCount += unsyncedOrders.length;
       }
       if (localData.debtPayments && localData.debtPayments.length > 0) {
@@ -602,6 +612,8 @@ export const pullAllDataFromCloud = async (localData?: {
       debtPayments: finalDebtPayments,
       settings: sRes.data?.data as ReceiptSettings | undefined,
       localPreservedCount,
+      unsyncedLocalProducts,
+      unsyncedLocalOrders,
     };
   } catch (e) {
     console.error('Failed to pull data from Supabase:', e);
@@ -711,14 +723,32 @@ export const cloudSyncProduct = async (p: Product) => {
   }
 };
 
-export const cloudDeleteProduct = async (id: string) => {
+export const cloudDeleteProduct = async (id: string): Promise<{ success: boolean }> => {
+  const cleanId = String(id || '').trim();
+  if (!cleanId) return { success: true };
   const client = getSupabaseClient();
-  if (!client) return;
+  if (!client) return { success: false };
   try {
-    await client.from('products').delete().eq('id', id);
+    const { error } = await client.from('products').delete().eq('id', cleanId);
+    if (error) {
+      console.error('cloudDeleteProduct error:', error);
+      return { success: false };
+    }
+    return { success: true };
   } catch (e) {
     console.error('cloudDeleteProduct error:', e);
+    return { success: false };
   }
+};
+
+export const cloudDeleteProductsBatch = async (
+  ids: string[]
+): Promise<{ success: boolean; deletedCount: number; chunksCount: number; error?: any }> => {
+  const cleanIds = Array.from(new Set((ids || []).map(id => String(id || '').trim()).filter(Boolean)));
+  if (cleanIds.length === 0) return { success: true, deletedCount: 0, chunksCount: 0 };
+  const client = getSupabaseClient();
+  if (!client) return { success: false, deletedCount: 0, chunksCount: 0 };
+  return executeChunkedTableDelete(client, 'products', cleanIds, 100);
 };
 
 export const cloudSyncCustomer = async (c: Customer) => {
@@ -750,8 +780,9 @@ export const cloudDeleteCustomer = async (id: string): Promise<{ success: boolea
   }
 };
 
-export const executeChunkedCustomerDelete = async (
+export const executeChunkedTableDelete = async (
   client: SupabaseClient,
+  table: string,
   ids: string[],
   chunkSize = 100
 ): Promise<{ success: boolean; deletedCount: number; chunksCount: number; error?: any }> => {
@@ -766,18 +797,26 @@ export const executeChunkedCustomerDelete = async (
     for (let i = 0; i < uniqueIds.length; i += safeChunkSize) {
       const chunk = uniqueIds.slice(i, i + safeChunkSize);
       chunksCount++;
-      const { error } = await client.from('customers').delete().in('id', chunk);
+      const { error } = await client.from(table).delete().in('id', chunk);
       if (error) {
-        console.error(`cloudDeleteCustomersBatch error (chunk ${i}-${i + chunk.length}):`, error);
+        console.error(`cloudDeleteBatch(${table}) error (chunk ${i}-${i + chunk.length}):`, error);
         return { success: false, deletedCount, chunksCount, error };
       }
       deletedCount += chunk.length;
     }
     return { success: true, deletedCount, chunksCount };
   } catch (e) {
-    console.error('cloudDeleteCustomersBatch error:', e);
+    console.error(`cloudDeleteBatch(${table}) error:`, e);
     return { success: false, deletedCount, chunksCount, error: e };
   }
+};
+
+export const executeChunkedCustomerDelete = async (
+  client: SupabaseClient,
+  ids: string[],
+  chunkSize = 100
+): Promise<{ success: boolean; deletedCount: number; chunksCount: number; error?: any }> => {
+  return executeChunkedTableDelete(client, 'customers', ids, chunkSize);
 };
 
 export const cloudDeleteCustomersBatch = async (

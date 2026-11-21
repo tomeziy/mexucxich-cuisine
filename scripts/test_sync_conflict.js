@@ -483,8 +483,14 @@ const realCloudCustomer = {
   orderCount: 10,
   updatedAt: '2026-10-05T09:00:00.000Z',
 };
-const mockInitialCust = INITIAL_CUSTOMERS.find(c => c.id === 'KH02');
-assert(mockInitialCust, 'KH02 mock customer must exist in INITIAL_CUSTOMERS');
+const mockInitialCust = {
+  id: 'KH02',
+  name: 'Chị Lan (Zalo Đội Cấn)',
+  phone: '0988123456',
+  address: '12 Đội Cấn, Ba Đình, Hà Nội',
+  debt: 250000,
+  updatedAt: '2026-09-01T08:00:00Z',
+};
 const mockRes = resolveCustomerConflict(mockInitialCust, realCloudCustomer);
 assert.strictEqual(mockRes.source, 'cloud', 'Real cloud customer from October must beat mock customer from September');
 assert.strictEqual(mockRes.winner.name, 'Chị Lan Real Cloud Customer');
@@ -500,8 +506,14 @@ const realCloudProduct = {
   image: '🧀',
   updatedAt: '2026-10-05T09:00:00.000Z',
 };
-const mockInitialProd = INITIAL_PRODUCTS.find(p => p.id === 'SP01');
-assert(mockInitialProd, 'SP01 mock product must exist in INITIAL_PRODUCTS');
+const mockInitialProd = {
+  id: 'SP01',
+  name: 'Xúc xích Phô mai Tươi (500g)',
+  price: 145000,
+  cost: 95000,
+  stock: 18,
+  updatedAt: '2026-09-01T08:00:00Z',
+};
 const mockProdRes = resolveProductConflict(mockInitialProd, realCloudProduct);
 assert.strictEqual(mockProdRes.source, 'cloud', 'Real cloud product from October must beat mock product from September');
 assert.strictEqual(mockProdRes.winner.price, 165000);
