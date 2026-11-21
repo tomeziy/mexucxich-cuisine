@@ -252,13 +252,16 @@ export const SettingsPage: React.FC = () => {
       try {
         const json = JSON.parse(event.target?.result as string);
         if (importAllData(json)) {
-          alert('Khôi phục toàn bộ dữ liệu thành công!');
-          window.location.reload();
+          alert(
+            'Đã gộp và khôi phục dữ liệu từ file JSON an toàn!\n- Toàn bộ món ăn và đơn hàng mới hiện có vẫn được giữ nguyên.\n- Các món demo cũ (SP01–SP08) đã tự động loại bỏ và đang đồng bộ lên Cloud.'
+          );
         } else {
           alert('Tệp sao lưu không đúng cấu trúc!');
         }
       } catch {
         alert('Lỗi định dạng tệp JSON!');
+      } finally {
+        e.target.value = '';
       }
     };
     reader.readAsText(file);
@@ -282,14 +285,11 @@ export const SettingsPage: React.FC = () => {
   const handleRestoreVault = () => {
     if (
       window.confirm(
-        'Khôi phục toàn bộ danh mục sản phẩm và lịch sử đơn hàng từ Hầm Cứu Hộ Khẩn Cấp (Emergency Vault)?\nDữ liệu sẽ được hợp nhất bảo toàn nguyên vẹn.'
+        'Khôi phục toàn bộ danh mục sản phẩm và lịch sử đơn hàng từ Hầm Cứu Hộ Khẩn Cấp (Emergency Vault)?\nDữ liệu sẽ được hợp nhất bảo toàn nguyên vẹn (loại bỏ món demo) và tự đồng bộ lên Cloud.'
       )
     ) {
       const res = restoreFromVault();
       alert(res.message);
-      if (res.success) {
-        window.location.reload();
-      }
     }
   };
 

@@ -54,9 +54,12 @@ import {
   cloudSyncCustomersBatch,
   cloudSyncOrder,
   cloudDeleteOrder,
+  cloudDeleteOrdersBatch,
   cloudSyncOrdersBatch,
   cloudSyncDebtPayment,
+  cloudSyncDebtPaymentsBatch,
   cloudSyncSettings,
+  reconstructMissingProductsFromOrders,
   pushAllDataToCloud,
   pullAllDataFromCloud,
   cloudAdjustProductStock,
@@ -135,11 +138,14 @@ const STORAGE_KEYS = {
   SETTINGS: 'mxc_receipt_settings',
   ADR0020_PHONE_MIGRATION: 'mxc_adr0020_phone_repair_v1',
   DELETED_PRODUCTS: 'mxc_deleted_product_ids_v1',
+  PURGED_PRODUCTS: 'mxc_purged_product_ids_v1',
+  DELETED_ORDERS: 'mxc_deleted_order_ids_v1',
+  PURGED_ORDERS: 'mxc_purged_order_ids_v1',
 };
 
-function loadPendingDeletedProductIds(): string[] {
+function loadIdList(key: string): string[] {
   try {
-    const raw = localStorage.getItem(STORAGE_KEYS.DELETED_PRODUCTS);
+    const raw = localStorage.getItem(key);
     if (!raw) return [];
     const parsed = JSON.parse(raw);
     return Array.isArray(parsed) ? parsed.filter((x): x is string => typeof x === 'string' && x.length > 0) : [];
@@ -148,29 +154,89 @@ function loadPendingDeletedProductIds(): string[] {
   }
 }
 
-function addPendingDeletedProductIds(ids: string[]): void {
+function appendIdsToKey(key: string, ids: string[]): void {
   if (!ids || ids.length === 0) return;
-  const current = new Set(loadPendingDeletedProductIds());
+  const current = new Set(loadIdList(key));
   for (const id of ids) {
     if (id) current.add(id);
   }
-  localStorage.setItem(STORAGE_KEYS.DELETED_PRODUCTS, JSON.stringify(Array.from(current)));
+  localStorage.setItem(key, JSON.stringify(Array.from(current)));
 }
 
-function removePendingDeletedProductIds(ids: string[]): void {
+function removeIdsFromKey(key: string, ids: string[]): void {
   if (!ids || ids.length === 0) return;
   const toRemove = new Set(ids);
-  const remaining = loadPendingDeletedProductIds().filter(id => !toRemove.has(id));
+  const remaining = loadIdList(key).filter(id => !toRemove.has(id));
   if (remaining.length === 0) {
-    localStorage.removeItem(STORAGE_KEYS.DELETED_PRODUCTS);
+    localStorage.removeItem(key);
   } else {
-    localStorage.setItem(STORAGE_KEYS.DELETED_PRODUCTS, JSON.stringify(remaining));
+    localStorage.setItem(key, JSON.stringify(remaining));
   }
 }
 
+function loadPendingDeletedProductIds(): string[] {
+  return loadIdList(STORAGE_KEYS.DELETED_PRODUCTS);
+}
+
+function loadPurgedProductIds(): string[] {
+  return loadIdList(STORAGE_KEYS.PURGED_PRODUCTS);
+}
+
+function addPendingDeletedProductIds(ids: string[]): void {
+  appendIdsToKey(STORAGE_KEYS.DELETED_PRODUCTS, ids);
+  appendIdsToKey(STORAGE_KEYS.PURGED_PRODUCTS, ids);
+}
+
+function removePendingDeletedProductIds(ids: string[]): void {
+  removeIdsFromKey(STORAGE_KEYS.DELETED_PRODUCTS, ids);
+}
+
+function loadPendingDeletedOrderIds(): string[] {
+  return loadIdList(STORAGE_KEYS.DELETED_ORDERS);
+}
+
+function loadPurgedOrderIds(): string[] {
+  return loadIdList(STORAGE_KEYS.PURGED_ORDERS);
+}
+
+function addPendingDeletedOrderIds(ids: string[]): void {
+  appendIdsToKey(STORAGE_KEYS.DELETED_ORDERS, ids);
+  appendIdsToKey(STORAGE_KEYS.PURGED_ORDERS, ids);
+}
+
+function removePendingDeletedOrderIds(ids: string[]): void {
+  removeIdsFromKey(STORAGE_KEYS.DELETED_ORDERS, ids);
+}
+
 function filterOutDemoAndDeletedProducts(list: Product[], extraDeletedIds: string[] = []): Product[] {
-  const deletedSet = new Set([...loadPendingDeletedProductIds(), ...extraDeletedIds]);
+  const deletedSet = new Set([
+    ...loadPendingDeletedProductIds(),
+    ...loadPurgedProductIds(),
+    ...extraDeletedIds,
+  ]);
   return (list || []).filter(p => p && p.id && !DEMO_PRODUCT_IDS.has(p.id) && !deletedSet.has(p.id));
+}
+
+function filterOutDeletedOrders(list: Order[], extraDeletedIds: string[] = []): Order[] {
+  const deletedSet = new Set([
+    ...loadPendingDeletedOrderIds(),
+    ...loadPurgedOrderIds(),
+    ...extraDeletedIds,
+  ]);
+  return (list || []).filter(o => o && o.id && !deletedSet.has(o.id));
+}
+
+function deduplicateProductsByName(list: Product[]): Product[] {
+  const seenNames = new Set<string>();
+  const result: Product[] = [];
+  for (const p of list || []) {
+    if (!p || !p.id) continue;
+    const norm = removeVietnameseTones((p.name || '').toLowerCase()).trim();
+    if (norm && seenNames.has(norm)) continue;
+    if (norm) seenNames.add(norm);
+    result.push(p);
+  }
+  return result;
 }
 
 export const StoreProvider: React.FC<{ children: React.ReactNode }> = ({ children }) => {
@@ -278,7 +344,7 @@ export const StoreProvider: React.FC<{ children: React.ReactNode }> = ({ childre
         initial = vault.orders;
       }
     }
-    return initial;
+    return filterOutDeletedOrders(initial);
   });
 
   // Debt payments state
@@ -397,6 +463,20 @@ export const StoreProvider: React.FC<{ children: React.ReactNode }> = ({ childre
     if (localStorage.getItem(STORAGE_KEYS.ADR0020_PHONE_MIGRATION) !== '1') {
       localStorage.setItem(STORAGE_KEYS.ADR0020_PHONE_MIGRATION, '1');
     }
+
+    // One-time scrub if SP01-SP08 demo products existed in legacy storage
+    const savedProdsRaw = localStorage.getItem(STORAGE_KEYS.PRODUCTS);
+    const hadDemoInStorage =
+      typeof savedProdsRaw === 'string' &&
+      Array.from(DEMO_PRODUCT_IDS).some(demoId => savedProdsRaw.includes(`"${demoId}"`));
+    if (
+      hadDemoInStorage &&
+      cloudConfig.supabaseUrl &&
+      cloudConfig.supabaseAnonKey &&
+      cloudConfig.autoSync
+    ) {
+      cloudDeleteProductsBatch(Array.from(DEMO_PRODUCT_IDS));
+    }
   }, []);
 
   // Initial pull and auto-refresh on tab focus/visibility change from Supabase
@@ -419,11 +499,24 @@ export const StoreProvider: React.FC<{ children: React.ReactNode }> = ({ childre
           }
         }
 
+        const pendingOrderDeletes = loadPendingDeletedOrderIds();
+        if (pendingOrderDeletes.length > 0) {
+          const delOrdRes = await cloudDeleteOrdersBatch(pendingOrderDeletes);
+          if (delOrdRes.success) {
+            removePendingDeletedOrderIds(pendingOrderDeletes);
+          }
+        }
+
+        const excludedProductIds = Array.from(new Set([...loadPendingDeletedProductIds(), ...loadPurgedProductIds()]));
+        const excludedOrderIds = Array.from(new Set([...loadPendingDeletedOrderIds(), ...loadPurgedOrderIds()]));
+
         const localData = {
           products: filterOutDemoAndDeletedProducts(stateRef.current.products),
           customers: stateRef.current.customers,
-          orders: stateRef.current.orders,
+          orders: filterOutDeletedOrders(stateRef.current.orders),
           debtPayments: stateRef.current.debtPayments,
+          excludedProductIds,
+          excludedOrderIds,
         };
 
         pullAllDataFromCloud(localData).then(cloudData => {
@@ -440,27 +533,37 @@ export const StoreProvider: React.FC<{ children: React.ReactNode }> = ({ childre
             if (unsyncedProds.length > 0) {
               cloudSyncProductsBatch(unsyncedProds);
             }
-            if (cloudData.unsyncedLocalOrders && cloudData.unsyncedLocalOrders.length > 0) {
-              cloudSyncOrdersBatch(cloudData.unsyncedLocalOrders);
+            const cleanUnsyncedOrders = filterOutDeletedOrders(cloudData.unsyncedLocalOrders || []);
+            if (cleanUnsyncedOrders.length > 0) {
+              cloudSyncOrdersBatch(cleanUnsyncedOrders);
             }
 
             const stillPendingDeletes = loadPendingDeletedCustomerIds();
             const safeCloudCustomers = filterOutDeletedCustomers(cloudData.customers, stillPendingDeletes);
+            const safeCloudOrders = filterOutDeletedOrders(cloudData.orders);
             const { repairedCustomers, repairedOrders } = repairAndMigrateCustomers(
               safeCloudCustomers,
-              cloudData.orders
+              safeCloudOrders
             );
             const phoneRepair = repairFusedPhonesBatch(repairedCustomers);
             stateRef.current.customers = phoneRepair.customers;
             stateRef.current.orders = repairedOrders;
+            stateRef.current.debtPayments = cloudData.debtPayments;
+            localStorage.setItem(STORAGE_KEYS.CUSTOMERS, JSON.stringify(phoneRepair.customers));
+            localStorage.setItem(STORAGE_KEYS.ORDERS, JSON.stringify(repairedOrders));
+            localStorage.setItem(STORAGE_KEYS.DEBT_PAYMENTS, JSON.stringify(cloudData.debtPayments));
             setCustomers(phoneRepair.customers);
             setOrders(repairedOrders);
             setDebtPayments(cloudData.debtPayments);
             if (cloudData.settings) {
-              setReceiptSettings(prev => ({ ...prev, ...cloudData.settings }));
+              setReceiptSettings(prev => {
+                const nextSettings = { ...prev, ...cloudData.settings };
+                stateRef.current.receiptSettings = nextSettings;
+                localStorage.setItem(STORAGE_KEYS.SETTINGS, JSON.stringify(nextSettings));
+                return nextSettings;
+              });
             }
             if (phoneRepair.changedCustomers.length > 0) {
-              localStorage.setItem(STORAGE_KEYS.CUSTOMERS, JSON.stringify(phoneRepair.customers));
               cloudSyncCustomersBatch(phoneRepair.changedCustomers);
             }
             console.log('✅ Đã đồng bộ dữ liệu mới nhất từ Supabase Cloud kèm giải quyết xung đột & chuẩn hóa Sentinel!');
@@ -522,12 +625,25 @@ export const StoreProvider: React.FC<{ children: React.ReactNode }> = ({ childre
       }
     }
 
+    const pendingOrderDeletes = loadPendingDeletedOrderIds();
+    if (pendingOrderDeletes.length > 0) {
+      const delOrdRes = await cloudDeleteOrdersBatch(pendingOrderDeletes);
+      if (delOrdRes.success) {
+        removePendingDeletedOrderIds(pendingOrderDeletes);
+      }
+    }
+
     const cleanLocalProducts = filterOutDemoAndDeletedProducts(stateRef.current.products);
+    const cleanLocalOrders = filterOutDeletedOrders(stateRef.current.orders);
+    const excludedProductIds = Array.from(new Set([...loadPendingDeletedProductIds(), ...loadPurgedProductIds()]));
+    const excludedOrderIds = Array.from(new Set([...loadPendingDeletedOrderIds(), ...loadPurgedOrderIds()]));
     const localData = {
       products: cleanLocalProducts,
       customers: stateRef.current.customers,
-      orders: stateRef.current.orders,
+      orders: cleanLocalOrders,
       debtPayments: stateRef.current.debtPayments,
+      excludedProductIds,
+      excludedOrderIds,
     };
 
     const pullRes = await pullAllDataFromCloud(localData);
@@ -542,16 +658,18 @@ export const StoreProvider: React.FC<{ children: React.ReactNode }> = ({ childre
     if (unsyncedProds.length > 0) {
       cloudSyncProductsBatch(unsyncedProds);
     }
-    if (pullRes.unsyncedLocalOrders && pullRes.unsyncedLocalOrders.length > 0) {
-      cloudSyncOrdersBatch(pullRes.unsyncedLocalOrders);
+    const cleanUnsyncedOrders = filterOutDeletedOrders(pullRes.unsyncedLocalOrders || []);
+    if (cleanUnsyncedOrders.length > 0) {
+      cloudSyncOrdersBatch(cleanUnsyncedOrders);
     }
 
     const stillPendingDeletes = loadPendingDeletedCustomerIds();
     const safePulledCustomers = filterOutDeletedCustomers(pullRes.customers, stillPendingDeletes);
+    const safePulledOrders = filterOutDeletedOrders(pullRes.orders);
 
     const { repairedCustomers, repairedOrders } = repairAndMigrateCustomers(
       safePulledCustomers,
-      pullRes.orders
+      safePulledOrders
     );
     const phoneRepair = repairFusedPhonesBatch(repairedCustomers);
     const finalPulledCustomers = phoneRepair.customers;
@@ -1322,9 +1440,17 @@ export const StoreProvider: React.FC<{ children: React.ReactNode }> = ({ childre
       }
     }
 
-    // 3. Xóa đơn khỏi danh sách & Cloud
-    setOrders(prev => prev.filter(o => o.id !== orderId));
-    cloudDeleteOrder(orderId);
+    // 3. Xóa đơn khỏi danh sách & Cloud (kèm tombstone chống tái sinh)
+    addPendingDeletedOrderIds([orderId]);
+    const nextOrders = stateRef.current.orders.filter(o => o.id !== orderId);
+    stateRef.current.orders = nextOrders;
+    localStorage.setItem(STORAGE_KEYS.ORDERS, JSON.stringify(nextOrders));
+    setOrders(nextOrders);
+    cloudDeleteOrder(orderId).then(res => {
+      if (res.success) {
+        removePendingDeletedOrderIds([orderId]);
+      }
+    });
   };
 
   // Hủy đơn hàng (Soft-cancel với auto-restock nguyên tử - ADR-0003 & ADR-0008)
@@ -1490,6 +1616,96 @@ export const StoreProvider: React.FC<{ children: React.ReactNode }> = ({ childre
     localStorage.clear();
   };
 
+  const mergeAndRestoreSnapshot = (
+    snapshot: {
+      products?: Product[];
+      customers?: Customer[];
+      orders?: Order[];
+      debtPayments?: DebtPayment[];
+      receiptSettings?: Partial<ReceiptSettings>;
+    },
+    reason: string
+  ): { restoredProducts: number; restoredOrders: number } => {
+    const cleanCurrentOrders = filterOutDeletedOrders(stateRef.current.orders);
+    const cleanIncomingOrders = filterOutDeletedOrders(Array.isArray(snapshot.orders) ? snapshot.orders : []);
+    const mergedO = Array.isArray(snapshot.orders)
+      ? mergeOrders(cleanIncomingOrders, cleanCurrentOrders)
+      : cleanCurrentOrders;
+
+    const cleanCurrentProds = filterOutDemoAndDeletedProducts(stateRef.current.products);
+    const cleanIncomingProds = filterOutDemoAndDeletedProducts(Array.isArray(snapshot.products) ? snapshot.products : []);
+    const mergedProds = Array.isArray(snapshot.products)
+      ? mergeProductsWithConflictResolution(cleanIncomingProds, cleanCurrentProds).merged
+      : cleanCurrentProds;
+    const dedupedProds = deduplicateProductsByName(filterOutDemoAndDeletedProducts(mergedProds));
+    const excludedProdIds = new Set([...loadPendingDeletedProductIds(), ...loadPurgedProductIds()]);
+    const reconstructed = reconstructMissingProductsFromOrders(mergedO, dedupedProds, excludedProdIds);
+    const finalProds = deduplicateProductsByName([...dedupedProds, ...reconstructed]);
+
+    const pendingDeletedCusts = loadPendingDeletedCustomerIds();
+    const rawIncomingCusts = Array.isArray(snapshot.customers) ? snapshot.customers : [];
+    const safeIncomingCusts = filterOutDeletedCustomers(rawIncomingCusts, pendingDeletedCusts).filter(
+      c => c && c.id && (!DEMO_CUSTOMER_IDS.has(c.id) || rawIncomingCusts.every(x => DEMO_CUSTOMER_IDS.has(x.id) || x.id === 'KH01'))
+    );
+    const mergedCusts =
+      rawIncomingCusts.length > 0
+        ? mergeCustomersWithConflictResolution(safeIncomingCusts, stateRef.current.customers).merged
+        : stateRef.current.customers;
+    const cleanCusts = filterOutDeletedCustomers(mergedCusts, pendingDeletedCusts);
+    const hasRealCusts = cleanCusts.some(c => c.id !== 'KH01' && !DEMO_CUSTOMER_IDS.has(c.id));
+    const noDemoCusts = hasRealCusts ? cleanCusts.filter(c => !DEMO_CUSTOMER_IDS.has(c.id)) : cleanCusts;
+    const { repairedCustomers, repairedOrders } = repairAndMigrateCustomers(noDemoCusts, mergedO);
+    const phoneRepair = repairFusedPhonesBatch(repairedCustomers);
+    const finalCustomers = phoneRepair.customers;
+
+    const mergedD = Array.isArray(snapshot.debtPayments)
+      ? mergeDebtPayments(snapshot.debtPayments, stateRef.current.debtPayments)
+      : stateRef.current.debtPayments;
+
+    const nextSettings: ReceiptSettings = snapshot.receiptSettings
+      ? { ...stateRef.current.receiptSettings, ...snapshot.receiptSettings }
+      : stateRef.current.receiptSettings;
+
+    stateRef.current.products = finalProds;
+    stateRef.current.customers = finalCustomers;
+    stateRef.current.orders = repairedOrders;
+    stateRef.current.debtPayments = mergedD;
+    stateRef.current.receiptSettings = nextSettings;
+
+    localStorage.setItem(STORAGE_KEYS.PRODUCTS, JSON.stringify(finalProds));
+    localStorage.setItem(STORAGE_KEYS.CUSTOMERS, JSON.stringify(finalCustomers));
+    localStorage.setItem(STORAGE_KEYS.ORDERS, JSON.stringify(repairedOrders));
+    localStorage.setItem(STORAGE_KEYS.DEBT_PAYMENTS, JSON.stringify(mergedD));
+    localStorage.setItem(STORAGE_KEYS.SETTINGS, JSON.stringify(nextSettings));
+
+    setProducts(finalProds);
+    setCustomers(finalCustomers);
+    setOrders(repairedOrders);
+    setDebtPayments(mergedD);
+    setReceiptSettings(nextSettings);
+
+    saveVaultSnapshot(
+      {
+        timestamp: new Date().toISOString(),
+        reason,
+        products: finalProds,
+        customers: finalCustomers,
+        orders: repairedOrders,
+        debtPayments: mergedD,
+        receiptSettings: nextSettings,
+      },
+      true
+    );
+
+    if (finalProds.length > 0) cloudSyncProductsBatch(finalProds);
+    if (finalCustomers.length > 0) cloudSyncCustomersBatch(finalCustomers);
+    if (repairedOrders.length > 0) cloudSyncOrdersBatch(repairedOrders);
+    if (mergedD.length > 0) cloudSyncDebtPaymentsBatch(mergedD);
+    if (snapshot.receiptSettings) cloudSyncSettings(nextSettings);
+
+    return { restoredProducts: finalProds.length, restoredOrders: repairedOrders.length };
+  };
+
   // ADR-0018: 1-Click Vault Recovery
   const restoreFromVault = (
     targetKey = 'mxc_emergency_vault'
@@ -1510,43 +1726,13 @@ export const StoreProvider: React.FC<{ children: React.ReactNode }> = ({ childre
         };
       }
 
-      let pCount = 0;
-      let oCount = 0;
-
-      if (Array.isArray(snapshot.products) && snapshot.products.length > 0) {
-        const cleanSnapshotProducts = filterOutDemoAndDeletedProducts(snapshot.products);
-        const merged = mergeProductsWithConflictResolution(cleanSnapshotProducts, stateRef.current.products);
-        const cleanMerged = filterOutDemoAndDeletedProducts(merged.merged);
-        stateRef.current.products = cleanMerged;
-        localStorage.setItem(STORAGE_KEYS.PRODUCTS, JSON.stringify(cleanMerged));
-        setProducts(cleanMerged);
-        pCount = cleanMerged.length;
-        cloudSyncProductsBatch(cleanMerged);
-      }
-      if (Array.isArray(snapshot.customers) && snapshot.customers.length > 0) {
-        const mergedC = mergeCustomersWithConflictResolution(snapshot.customers, stateRef.current.customers);
-        setCustomers(mergedC.merged);
-        cloudSyncCustomersBatch(mergedC.merged);
-      }
-      if (Array.isArray(snapshot.orders) && snapshot.orders.length > 0) {
-        const mergedO = mergeOrders(snapshot.orders, stateRef.current.orders);
-        setOrders(mergedO);
-        oCount = mergedO.length;
-        cloudSyncOrdersBatch(mergedO);
-      }
-      if (Array.isArray(snapshot.debtPayments)) {
-        const mergedD = mergeDebtPayments(snapshot.debtPayments, stateRef.current.debtPayments);
-        setDebtPayments(mergedD);
-      }
-      if (snapshot.receiptSettings) {
-        setReceiptSettings(prev => ({ ...prev, ...snapshot.receiptSettings }));
-      }
+      const { restoredProducts, restoredOrders } = mergeAndRestoreSnapshot(snapshot, 'vault_restore');
 
       return {
         success: true,
-        message: `Đã khôi phục thành công ${pCount} món ăn và ${oCount} đơn hàng từ Hầm Cứu Hộ!`,
-        restoredProducts: pCount,
-        restoredOrders: oCount,
+        message: `Đã khôi phục và gộp an toàn ${restoredProducts} món ăn và ${restoredOrders} đơn hàng từ Hầm Cứu Hộ (đã lọc bỏ món demo)!`,
+        restoredProducts,
+        restoredOrders,
       };
     } catch (e: any) {
       return {
@@ -1841,34 +2027,16 @@ export const StoreProvider: React.FC<{ children: React.ReactNode }> = ({ childre
   const importAllData = (jsonData: any): boolean => {
     try {
       if (!jsonData || typeof jsonData !== 'object') return false;
-      if (Array.isArray(jsonData.products)) {
-        const cleanImported = filterOutDemoAndDeletedProducts(jsonData.products);
-        const merged = mergeProductsWithConflictResolution(cleanImported, stateRef.current.products);
-        const finalProds = filterOutDemoAndDeletedProducts(merged.merged);
-        stateRef.current.products = finalProds;
-        localStorage.setItem(STORAGE_KEYS.PRODUCTS, JSON.stringify(finalProds));
-        setProducts(finalProds);
-        cloudSyncProductsBatch(finalProds);
-      }
-      if (Array.isArray(jsonData.customers)) {
-        const mergedC = mergeCustomersWithConflictResolution(jsonData.customers, stateRef.current.customers);
-        stateRef.current.customers = mergedC.merged;
-        localStorage.setItem(STORAGE_KEYS.CUSTOMERS, JSON.stringify(mergedC.merged));
-        setCustomers(mergedC.merged);
-        cloudSyncCustomersBatch(mergedC.merged);
-      }
-      if (Array.isArray(jsonData.orders)) {
-        const mergedO = mergeOrders(jsonData.orders, stateRef.current.orders);
-        stateRef.current.orders = mergedO;
-        localStorage.setItem(STORAGE_KEYS.ORDERS, JSON.stringify(mergedO));
-        setOrders(mergedO);
-        cloudSyncOrdersBatch(mergedO);
-      }
-      if (Array.isArray(jsonData.debtPayments)) {
-        const mergedD = mergeDebtPayments(jsonData.debtPayments, stateRef.current.debtPayments);
-        setDebtPayments(mergedD);
-      }
-      if (jsonData.receiptSettings) setReceiptSettings(jsonData.receiptSettings);
+      mergeAndRestoreSnapshot(
+        {
+          products: Array.isArray(jsonData.products) ? jsonData.products : undefined,
+          customers: Array.isArray(jsonData.customers) ? jsonData.customers : undefined,
+          orders: Array.isArray(jsonData.orders) ? jsonData.orders : undefined,
+          debtPayments: Array.isArray(jsonData.debtPayments) ? jsonData.debtPayments : undefined,
+          receiptSettings: jsonData.receiptSettings || undefined,
+        },
+        'json_backup_merge'
+      );
       return true;
     } catch {
       return false;

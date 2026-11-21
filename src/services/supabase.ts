@@ -1,5 +1,7 @@
 import { createClient, SupabaseClient } from '@supabase/supabase-js';
 import type { Product, Customer, Order, DebtPayment, ReceiptSettings, CloudConfig } from '../types/index.ts';
+import { DEMO_PRODUCT_IDS } from '../data/initialData.ts';
+import { removeVietnameseTones } from '../utils/vietnamese.ts';
 import { normalizeAddressList } from '../utils/addressUtils.ts';
 import {
   calculateStockDelta,
@@ -524,6 +526,71 @@ export const pushAllDataToCloud = async (data: {
 };
 
 /**
+ * Reconstruct any real dishes found inside order item snapshots that are missing from the product catalog.
+ * Never resurrects legacy SP01-SP08 demo items or tombstoned product IDs.
+ */
+export function reconstructMissingProductsFromOrders(
+  orders: Order[],
+  existingProducts: Product[] = [],
+  excludedIds: Set<string> = new Set()
+): Product[] {
+  const existingIds = new Set<string>();
+  const existingNames = new Set<string>();
+  for (const p of existingProducts || []) {
+    if (!p) continue;
+    if (p.id) existingIds.add(p.id);
+    const norm = removeVietnameseTones((p.name || '').toLowerCase()).trim();
+    if (norm) existingNames.add(norm);
+  }
+
+  const reconstructed: Product[] = [];
+  const baseTs = Date.now();
+  let seq = 0;
+
+  for (const o of orders || []) {
+    for (const item of o?.items || []) {
+      if (!item || !item.name) continue;
+      const pid = String(item.productId || '').trim();
+      if (pid && (DEMO_PRODUCT_IDS.has(pid) || /^SP0[1-8]$/.test(pid) || excludedIds.has(pid))) {
+        continue;
+      }
+      const normName = removeVietnameseTones(item.name.toLowerCase()).trim();
+      if (!normName) continue;
+      if ((pid && existingIds.has(pid)) || existingNames.has(normName)) {
+        continue;
+      }
+
+      const assignedId =
+        pid && !existingIds.has(pid)
+          ? pid
+          : `SP_${baseTs}_${seq}_${Math.random().toString(36).substring(2, 6)}`;
+      seq++;
+      const price = Number(item.price) || 0;
+      const cost = Number(item.cost) || Math.round(price * 0.65);
+
+      const newProduct: Product = {
+        id: assignedId,
+        name: item.name.trim(),
+        category: 'Đặc sản tuyển chọn',
+        unit: item.unit || 'Phần',
+        price,
+        cost,
+        stock: 20,
+        image: item.image || '🌭',
+        createdAt: o.createdAt || new Date().toISOString(),
+        updatedAt: new Date().toISOString(),
+      };
+
+      existingIds.add(assignedId);
+      existingNames.add(normName);
+      reconstructed.push(newProduct);
+    }
+  }
+
+  return reconstructed;
+}
+
+/**
  * Tải toàn bộ dữ liệu từ Supabase về kèm cơ chế giải quyết xung đột (ADR-0008)
  * Sử dụng fetchTableWithPagination để vượt qua giới hạn 1000 dòng của Supabase.
  */
@@ -532,6 +599,8 @@ export const pullAllDataFromCloud = async (localData?: {
   customers?: Customer[];
   orders?: Order[];
   debtPayments?: DebtPayment[];
+  excludedProductIds?: string[];
+  excludedOrderIds?: string[];
 }): Promise<{
   products: Product[];
   customers: Customer[];
@@ -554,9 +623,16 @@ export const pullAllDataFromCloud = async (localData?: {
       client.from('store_settings').select('*').eq('id', 'default_settings').maybeSingle(),
     ]);
 
-    const cloudProducts = pData.map(transformProductFromDb);
+    const excludedProdSet = new Set(localData?.excludedProductIds || []);
+    const excludedOrdSet = new Set(localData?.excludedOrderIds || []);
+
+    const cloudProducts = pData
+      .map(transformProductFromDb)
+      .filter(p => p && p.id && !DEMO_PRODUCT_IDS.has(p.id) && !excludedProdSet.has(p.id));
     const cloudCustomers = cData.map(transformCustomerFromDb);
-    const cloudOrders = oData.map(transformOrderFromDb);
+    const cloudOrders = oData
+      .map(transformOrderFromDb)
+      .filter(o => o && o.id && !excludedOrdSet.has(o.id));
     const cloudDebtPayments = dpData.map(transformDebtPaymentFromDb);
 
     // Detect if Cloud `customers` table already has `extra_addresses` column
@@ -576,9 +652,12 @@ export const pullAllDataFromCloud = async (localData?: {
 
     if (localData) {
       if (localData.products && localData.products.length > 0) {
-        const pMerge = mergeProductsWithConflictResolution(localData.products, cloudProducts);
+        const cleanLocalProds = localData.products.filter(
+          p => p && p.id && !DEMO_PRODUCT_IDS.has(p.id) && !excludedProdSet.has(p.id)
+        );
+        const pMerge = mergeProductsWithConflictResolution(cleanLocalProds, cloudProducts);
         // Anti-shrink guard: never return a product catalog smaller than local in-memory catalog
-        finalProducts = pMerge.merged.length >= localData.products.length ? pMerge.merged : localData.products;
+        finalProducts = pMerge.merged.length >= cleanLocalProds.length ? pMerge.merged : cleanLocalProds;
         unsyncedLocalProducts = pMerge.localPreserved;
         localPreservedCount += pMerge.localPreserved.length;
       }
@@ -590,19 +669,26 @@ export const pullAllDataFromCloud = async (localData?: {
         localPreservedCount += cMerge.localPreserved.length;
       }
       if (localData.orders && localData.orders.length > 0) {
+        const cleanLocalOrders = localData.orders.filter(o => o && o.id && !excludedOrdSet.has(o.id));
         const cloudOrderMap = new Map(cloudOrders.map(o => [o.id, o]));
-        const unsyncedOrders = localData.orders.filter(o => {
+        const unsyncedOrders = cleanLocalOrders.filter(o => {
           const cloudO = cloudOrderMap.get(o.id);
           if (!cloudO) return true;
           return getEntityTimestamp(o) > getEntityTimestamp(cloudO);
         });
-        finalOrders = mergeOrders(localData.orders, cloudOrders);
+        finalOrders = mergeOrders(cleanLocalOrders, cloudOrders);
         unsyncedLocalOrders = unsyncedOrders;
         localPreservedCount += unsyncedOrders.length;
       }
       if (localData.debtPayments && localData.debtPayments.length > 0) {
         finalDebtPayments = mergeDebtPayments(localData.debtPayments, cloudDebtPayments);
       }
+    }
+
+    const reconstructed = reconstructMissingProductsFromOrders(finalOrders, finalProducts, excludedProdSet);
+    if (reconstructed.length > 0) {
+      finalProducts = [...finalProducts, ...reconstructed];
+      unsyncedLocalProducts = [...unsyncedLocalProducts, ...reconstructed];
     }
 
     return {
@@ -880,14 +966,32 @@ export const cloudSyncOrder = async (o: Order) => {
   }
 };
 
-export const cloudDeleteOrder = async (id: string) => {
+export const cloudDeleteOrder = async (id: string): Promise<{ success: boolean }> => {
+  const cleanId = String(id || '').trim();
+  if (!cleanId) return { success: true };
   const client = getSupabaseClient();
-  if (!client) return;
+  if (!client) return { success: false };
   try {
-    await client.from('orders').delete().eq('id', id);
+    const { error } = await client.from('orders').delete().eq('id', cleanId);
+    if (error) {
+      console.error('cloudDeleteOrder error:', error);
+      return { success: false };
+    }
+    return { success: true };
   } catch (e) {
     console.error('cloudDeleteOrder error:', e);
+    return { success: false };
   }
+};
+
+export const cloudDeleteOrdersBatch = async (
+  ids: string[]
+): Promise<{ success: boolean; deletedCount: number; chunksCount: number; error?: any }> => {
+  const cleanIds = Array.from(new Set((ids || []).map(id => String(id || '').trim()).filter(Boolean)));
+  if (cleanIds.length === 0) return { success: true, deletedCount: 0, chunksCount: 0 };
+  const client = getSupabaseClient();
+  if (!client) return { success: false, deletedCount: 0, chunksCount: 0 };
+  return executeChunkedTableDelete(client, 'orders', cleanIds, 100);
 };
 
 export const cloudSyncDebtPayment = async (dp: DebtPayment) => {
@@ -898,6 +1002,17 @@ export const cloudSyncDebtPayment = async (dp: DebtPayment) => {
     if (error) console.error('cloudSyncDebtPayment error:', error);
   } catch (e) {
     console.error('cloudSyncDebtPayment error:', e);
+  }
+};
+
+export const cloudSyncDebtPaymentsBatch = async (debtPayments: DebtPayment[]) => {
+  const client = getSupabaseClient();
+  if (!client || debtPayments.length === 0) return;
+  try {
+    const dpRows = debtPayments.map(transformDebtPaymentToDb);
+    await upsertInChunks(client, 'debt_payments', dpRows, 500);
+  } catch (e) {
+    console.error('cloudSyncDebtPaymentsBatch error:', e);
   }
 };
 

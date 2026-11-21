@@ -1,4 +1,10 @@
 import type { Product, Customer, Order, DebtPayment, ReceiptSettings } from '../types/index.ts';
+import { DEMO_PRODUCT_IDS } from '../data/initialData.ts';
+
+function scrubDemoProducts(products?: Product[]): Product[] {
+  if (!Array.isArray(products)) return [];
+  return products.filter(p => p && p.id && !DEMO_PRODUCT_IDS.has(p.id));
+}
 
 export interface VaultSnapshot {
   timestamp: string;
@@ -76,11 +82,15 @@ export function saveVaultSnapshot(
   let savedEmergency = false;
 
   try {
-    const serialized = JSON.stringify(snapshot);
-    const incomingProds = snapshot.products?.length || 0;
+    const scrubbedSnapshot: VaultSnapshot = {
+      ...snapshot,
+      products: scrubDemoProducts(snapshot.products),
+    };
+    const serialized = JSON.stringify(scrubbedSnapshot);
+    const incomingProds = scrubbedSnapshot.products.length;
 
     // Daily backup logic: protect against overwriting with smaller catalog unless forced
-    const dailyKey = getDailyBackupKey(new Date(snapshot.timestamp || Date.now()));
+    const dailyKey = getDailyBackupKey(new Date(scrubbedSnapshot.timestamp || Date.now()));
     let shouldUpdateDaily = forceEmergency;
     if (!shouldUpdateDaily) {
       const existingDailyRaw = storage.getItem(dailyKey);
@@ -89,7 +99,7 @@ export function saveVaultSnapshot(
       } else {
         try {
           const existingDaily = JSON.parse(existingDailyRaw);
-          const existingDailyProds = existingDaily.products?.length || 0;
+          const existingDailyProds = scrubDemoProducts(existingDaily.products).length;
           if (incomingProds >= existingDailyProds) {
             shouldUpdateDaily = true;
           }
@@ -114,9 +124,8 @@ export function saveVaultSnapshot(
       } else {
         try {
           const existing = JSON.parse(existingRaw);
-          const existingProds = existing.products?.length || 0;
-          const incomingProds = snapshot.products?.length || 0;
-          // Only auto-update emergency vault if incoming dataset has at least as many products
+          const existingProds = scrubDemoProducts(existing.products).length;
+          // Only auto-update emergency vault if incoming dataset has at least as many real products
           if (incomingProds >= existingProds) {
             shouldUpdateEmergency = true;
           }
@@ -161,7 +170,7 @@ export function listVaultBackups(storage: Storage = localStorage): BackupMetadat
             key,
             label,
             timestamp: parsed.timestamp || '',
-            productCount: Array.isArray(parsed.products) ? parsed.products.length : 0,
+            productCount: scrubDemoProducts(parsed.products).length,
             orderCount: Array.isArray(parsed.orders) ? parsed.orders.length : 0,
             customerCount: Array.isArray(parsed.customers) ? parsed.customers.length : 0,
             isEmergency,
@@ -193,7 +202,11 @@ export function loadVaultSnapshot(
   try {
     const raw = storage.getItem(key);
     if (!raw) return null;
-    return JSON.parse(raw) as VaultSnapshot;
+    const parsed = JSON.parse(raw) as VaultSnapshot;
+    return {
+      ...parsed,
+      products: scrubDemoProducts(parsed.products),
+    };
   } catch (e) {
     console.error('loadVaultSnapshot error:', e);
     return null;
