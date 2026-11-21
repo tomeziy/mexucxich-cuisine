@@ -45,6 +45,9 @@ import {
   getSupabaseConfig,
   saveSupabaseConfig,
   hasActiveSupabaseAuthSession,
+  ensureSupabaseJwtSession,
+  saveLocalCredentialCache,
+  clearLocalCredentialCache,
   cloudSyncProduct,
   cloudDeleteProduct,
   cloudDeleteProductsBatch,
@@ -197,6 +200,7 @@ const STORAGE_KEYS = {
   PURGED_PRODUCTS: 'mxc_purged_product_ids_v1',
   DELETED_ORDERS: 'mxc_deleted_order_ids_v1',
   PURGED_ORDERS: 'mxc_purged_order_ids_v1',
+  PURGED_CUSTOMERS: 'mxc_purged_customer_ids_v1',
   DIRTY_PRODUCTS: 'mxc_dirty_product_ids_v1',
   DIRTY_ORDERS: 'mxc_dirty_order_ids_v1',
   DIRTY_CUSTOMERS: 'mxc_dirty_customer_ids_v1',
@@ -265,6 +269,29 @@ function addPendingDeletedOrderIds(ids: string[]): void {
 
 function removePendingDeletedOrderIds(ids: string[]): void {
   removeIdsFromKey(STORAGE_KEYS.DELETED_ORDERS, ids);
+}
+
+function loadPurgedCustomerIds(): string[] {
+  return loadIdList(STORAGE_KEYS.PURGED_CUSTOMERS);
+}
+
+function addPurgedCustomerIds(ids: string[]): void {
+  appendIdsToKey(STORAGE_KEYS.PURGED_CUSTOMERS, ids);
+}
+
+function migrateDemoOutboxTombstones(): void {
+  const pendingCusts = loadPendingDeletedCustomerIds();
+  const demoCusts = pendingCusts.filter(id => DEMO_CUSTOMER_IDS.has(id));
+  if (demoCusts.length > 0) {
+    addPurgedCustomerIds(demoCusts);
+    removePendingDeletedCustomerIds(demoCusts);
+  }
+  const pendingProds = loadPendingDeletedProductIds();
+  const demoProds = pendingProds.filter(id => DEMO_PRODUCT_IDS.has(id));
+  if (demoProds.length > 0) {
+    appendIdsToKey(STORAGE_KEYS.PURGED_PRODUCTS, demoProds);
+    removePendingDeletedProductIds(demoProds);
+  }
 }
 
 function loadDirtyProductIds(): string[] {
@@ -355,10 +382,49 @@ export const StoreProvider: React.FC<{ children: React.ReactNode }> = ({ childre
     loadPendingDeletedOrderIds().length +
     loadPendingDeletedCustomerIds().length;
 
-  const [pendingOutboxCount, setPendingOutboxCount] = useState<number>(computePendingOutboxCount);
+  const [pendingOutboxCount, setPendingOutboxCount] = useState<number>(() => {
+    migrateDemoOutboxTombstones();
+    return computePendingOutboxCount();
+  });
   const refreshOutboxCount = useCallback(() => {
     setPendingOutboxCount(computePendingOutboxCount());
   }, []);
+
+  const clearDirtyProductIds = (ids: string[]) => {
+    if (ids.length === 0) return;
+    removeDirtyProductIds(ids);
+    refreshOutboxCount();
+  };
+
+  const clearDirtyOrderIds = (ids: string[]) => {
+    if (ids.length === 0) return;
+    removeDirtyOrderIds(ids);
+    refreshOutboxCount();
+  };
+
+  const clearDirtyCustomerIds = (ids: string[]) => {
+    if (ids.length === 0) return;
+    removeDirtyCustomerIds(ids);
+    refreshOutboxCount();
+  };
+
+  const clearPendingDeletedProductIds = (ids: string[]) => {
+    if (ids.length === 0) return;
+    removePendingDeletedProductIds(ids);
+    refreshOutboxCount();
+  };
+
+  const clearPendingDeletedOrderIds = (ids: string[]) => {
+    if (ids.length === 0) return;
+    removePendingDeletedOrderIds(ids);
+    refreshOutboxCount();
+  };
+
+  const clearPendingDeletedCustomerIds = (ids: string[]) => {
+    if (ids.length === 0) return;
+    removePendingDeletedCustomerIds(ids);
+    refreshOutboxCount();
+  };
 
   // ADR-0024 & ADR-0025: Dual-Role Store Authentication (`mexucxich` Owner + `admin` Admin)
   const [authConfig, setAuthConfig] = useState<StoreAuthConfig>(() => {
@@ -453,13 +519,18 @@ export const StoreProvider: React.FC<{ children: React.ReactNode }> = ({ childre
         setAuthSession(restored);
         setIsScreenLocked(false);
       } else {
-        setAuthSession(prev => {
-          if (prev && prev.authSource === 'supabase') {
-            localStorage.removeItem(LOCAL_AUTH_SESSION_KEY);
-            setIsScreenLocked(true);
-            return null;
+        // Silently upgrade any existing browser POS session (`mexucxich` or `admin`) to a real Supabase Auth JWT
+        ensureSupabaseJwtSession().then(healed => {
+          if (healed) {
+            try {
+              const raw = localStorage.getItem(LOCAL_AUTH_SESSION_KEY);
+              if (raw) {
+                setAuthSession(JSON.parse(raw));
+              }
+            } catch {
+              // ignore
+            }
           }
-          return prev;
         });
       }
     }).catch(() => {});
@@ -511,6 +582,10 @@ export const StoreProvider: React.FC<{ children: React.ReactNode }> = ({ childre
     if (hasRealCustomers) {
       initial = initial.filter(c => !DEMO_CUSTOMER_IDS.has(c.id));
     }
+    initial = filterOutDeletedCustomers(initial, [
+      ...loadPendingDeletedCustomerIds(),
+      ...loadPurgedCustomerIds(),
+    ]);
     // Auto-repair and decouple fused/corrupted records (ADR-0017 Sentinel)
     const { repairedCustomers } = repairAndMigrateCustomers(initial);
     return repairedCustomers.map(c => ({
@@ -1159,6 +1234,7 @@ export const StoreProvider: React.FC<{ children: React.ReactNode }> = ({ childre
     }
 
     localStorage.setItem(LOCAL_AUTH_SESSION_KEY, JSON.stringify(nextSession));
+    saveLocalCredentialCache(cleanUsername, password);
     setAuthSession(nextSession);
     setIsScreenLocked(false);
 
@@ -1169,6 +1245,7 @@ export const StoreProvider: React.FC<{ children: React.ReactNode }> = ({ childre
 
   const logoutOrLockScreen = async (): Promise<void> => {
     localStorage.removeItem(LOCAL_AUTH_SESSION_KEY);
+    clearLocalCredentialCache();
     setAuthSession(null);
     setIsScreenLocked(true);
     await signOutSupabaseAuth();

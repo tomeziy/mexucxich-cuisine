@@ -20,9 +20,12 @@ export const Navbar: React.FC = () => {
     o => o.status === 'preparing' || o.status === 'delivering'
   ).length;
 
+  const isAdmin = currentUser?.role === 'admin';
+  const showErrorBadge = Boolean(cloudSyncError && isAdmin);
+
   const syncTitle = isCloudSyncing
     ? 'Đang tải dữ liệu mới nhất từ Cloud...'
-    : cloudSyncError
+    : showErrorBadge
     ? `Lỗi đồng bộ: ${cloudSyncError}. Bấm để thử lại.`
     : pendingOutboxCount > 0
     ? `Có ${pendingOutboxCount} thay đổi đang chờ gửi lên Cloud — Bấm để đồng bộ ngay`
@@ -63,7 +66,7 @@ export const Navbar: React.FC = () => {
             className={`flex items-center gap-1.5 px-2.5 py-1.5 rounded-xl border text-xs font-bold transition active:scale-95 ${
               isCloudSyncing
                 ? 'bg-sky-50 border-sky-200 text-sky-700 cursor-wait'
-                : cloudSyncError
+                : showErrorBadge
                 ? 'bg-rose-50 border-rose-200 text-rose-700 hover:bg-rose-100'
                 : pendingOutboxCount > 0
                 ? 'bg-amber-50 border-amber-300 text-amber-800 hover:bg-amber-100'
@@ -75,7 +78,7 @@ export const Navbar: React.FC = () => {
                 <RefreshCw className="w-3.5 h-3.5 animate-spin text-sky-600 shrink-0" />
                 <span>Đang đồng bộ Cloud...</span>
               </>
-            ) : cloudSyncError ? (
+            ) : showErrorBadge ? (
               <>
                 <AlertCircle className="w-3.5 h-3.5 text-rose-600 shrink-0" />
                 <span>Lỗi Cloud • Thử lại</span>
