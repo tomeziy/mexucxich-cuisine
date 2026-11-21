@@ -286,11 +286,23 @@ function migrateDemoOutboxTombstones(): void {
     addPurgedCustomerIds(demoCusts);
     removePendingDeletedCustomerIds(demoCusts);
   }
+  const dirtyCusts = loadDirtyCustomerIds();
+  const demoDirtyCusts = dirtyCusts.filter(id => DEMO_CUSTOMER_IDS.has(id));
+  if (demoDirtyCusts.length > 0) {
+    addPurgedCustomerIds(demoDirtyCusts);
+    removeDirtyCustomerIds(demoDirtyCusts);
+  }
   const pendingProds = loadPendingDeletedProductIds();
   const demoProds = pendingProds.filter(id => DEMO_PRODUCT_IDS.has(id));
   if (demoProds.length > 0) {
     appendIdsToKey(STORAGE_KEYS.PURGED_PRODUCTS, demoProds);
     removePendingDeletedProductIds(demoProds);
+  }
+  const dirtyProds = loadDirtyProductIds();
+  const demoDirtyProds = dirtyProds.filter(id => DEMO_PRODUCT_IDS.has(id));
+  if (demoDirtyProds.length > 0) {
+    appendIdsToKey(STORAGE_KEYS.PURGED_PRODUCTS, demoDirtyProds);
+    removeDirtyProductIds(demoDirtyProds);
   }
 }
 
@@ -390,21 +402,41 @@ export const StoreProvider: React.FC<{ children: React.ReactNode }> = ({ childre
     setPendingOutboxCount(computePendingOutboxCount());
   }, []);
 
-  const clearDirtyProductIds = (ids: string[]) => {
-    if (ids.length === 0) return;
-    removeDirtyProductIds(ids);
+  const dirtyEpochRef = useRef<Map<string, number>>(new Map());
+
+  const recordDirtyEpochs = (kind: 'product' | 'order' | 'customer', ids: string[], epoch: number) => {
+    for (const id of ids) {
+      if (id) dirtyEpochRef.current.set(`${kind}:${id}`, epoch);
+    }
+  };
+
+  const filterUnmodifiedDirtyIds = (
+    kind: 'product' | 'order' | 'customer',
+    ids: string[],
+    expectedEpoch?: number
+  ): string[] => {
+    if (expectedEpoch === undefined) return ids;
+    return ids.filter(id => (dirtyEpochRef.current.get(`${kind}:${id}`) ?? 0) <= expectedEpoch);
+  };
+
+  const clearDirtyProductIds = (ids: string[], expectedEpoch?: number) => {
+    const safeIds = filterUnmodifiedDirtyIds('product', ids, expectedEpoch);
+    if (safeIds.length === 0) return;
+    removeDirtyProductIds(safeIds);
     refreshOutboxCount();
   };
 
-  const clearDirtyOrderIds = (ids: string[]) => {
-    if (ids.length === 0) return;
-    removeDirtyOrderIds(ids);
+  const clearDirtyOrderIds = (ids: string[], expectedEpoch?: number) => {
+    const safeIds = filterUnmodifiedDirtyIds('order', ids, expectedEpoch);
+    if (safeIds.length === 0) return;
+    removeDirtyOrderIds(safeIds);
     refreshOutboxCount();
   };
 
-  const clearDirtyCustomerIds = (ids: string[]) => {
-    if (ids.length === 0) return;
-    removeDirtyCustomerIds(ids);
+  const clearDirtyCustomerIds = (ids: string[], expectedEpoch?: number) => {
+    const safeIds = filterUnmodifiedDirtyIds('customer', ids, expectedEpoch);
+    if (safeIds.length === 0) return;
+    removeDirtyCustomerIds(safeIds);
     refreshOutboxCount();
   };
 
@@ -654,52 +686,68 @@ export const StoreProvider: React.FC<{ children: React.ReactNode }> = ({ childre
     stateRef.current = { products, customers, orders, debtPayments, receiptSettings };
   }, [products, customers, orders, debtPayments, receiptSettings]);
 
-  const commitProducts = (nextProducts: Product[], dirtyAddIds: string[] = [], dirtyClearIds: string[] = []) => {
-    mutationEpochRef.current += 1;
+  const commitProducts = (nextProducts: Product[], dirtyAddIds: string[] = [], dirtyClearIds: string[] = []): number => {
+    const epoch = ++mutationEpochRef.current;
     if (dirtyClearIds.length > 0) removeDirtyProductIds(dirtyClearIds);
-    if (dirtyAddIds.length > 0) addDirtyProductIds(dirtyAddIds);
+    if (dirtyAddIds.length > 0) {
+      addDirtyProductIds(dirtyAddIds);
+      recordDirtyEpochs('product', dirtyAddIds, epoch);
+    }
     stateRef.current.products = nextProducts;
     localStorage.setItem(STORAGE_KEYS.PRODUCTS, JSON.stringify(nextProducts));
     setProducts(nextProducts);
     refreshOutboxCount();
+    return epoch;
   };
 
-  const commitCustomers = (nextCustomers: Customer[], dirtyAddIds: string[] = [], dirtyClearIds: string[] = []) => {
-    mutationEpochRef.current += 1;
+  const commitCustomers = (nextCustomers: Customer[], dirtyAddIds: string[] = [], dirtyClearIds: string[] = []): number => {
+    const epoch = ++mutationEpochRef.current;
     if (dirtyClearIds.length > 0) removeDirtyCustomerIds(dirtyClearIds);
-    if (dirtyAddIds.length > 0) addDirtyCustomerIds(dirtyAddIds);
+    if (dirtyAddIds.length > 0) {
+      addDirtyCustomerIds(dirtyAddIds);
+      recordDirtyEpochs('customer', dirtyAddIds, epoch);
+    }
     stateRef.current.customers = nextCustomers;
     localStorage.setItem(STORAGE_KEYS.CUSTOMERS, JSON.stringify(nextCustomers));
     setCustomers(nextCustomers);
     refreshOutboxCount();
+    return epoch;
   };
 
-  const commitOrders = (nextOrders: Order[], dirtyAddIds: string[] = [], dirtyClearIds: string[] = []) => {
-    mutationEpochRef.current += 1;
+  const commitOrders = (nextOrders: Order[], dirtyAddIds: string[] = [], dirtyClearIds: string[] = []): number => {
+    const epoch = ++mutationEpochRef.current;
     if (dirtyClearIds.length > 0) removeDirtyOrderIds(dirtyClearIds);
-    if (dirtyAddIds.length > 0) addDirtyOrderIds(dirtyAddIds);
+    if (dirtyAddIds.length > 0) {
+      addDirtyOrderIds(dirtyAddIds);
+      recordDirtyEpochs('order', dirtyAddIds, epoch);
+    }
     stateRef.current.orders = nextOrders;
     localStorage.setItem(STORAGE_KEYS.ORDERS, JSON.stringify(nextOrders));
     setOrders(nextOrders);
     refreshOutboxCount();
+    return epoch;
   };
 
   // Sync to localStorage
   useEffect(() => {
+    if (!isAuthenticated && products.length === 0) return;
     localStorage.setItem(STORAGE_KEYS.PRODUCTS, JSON.stringify(products));
-  }, [products]);
+  }, [products, isAuthenticated]);
 
   useEffect(() => {
+    if (!isAuthenticated && customers.length === 0) return;
     localStorage.setItem(STORAGE_KEYS.CUSTOMERS, JSON.stringify(customers));
-  }, [customers]);
+  }, [customers, isAuthenticated]);
 
   useEffect(() => {
+    if (!isAuthenticated && orders.length === 0) return;
     localStorage.setItem(STORAGE_KEYS.ORDERS, JSON.stringify(orders));
-  }, [orders]);
+  }, [orders, isAuthenticated]);
 
   useEffect(() => {
+    if (!isAuthenticated && debtPayments.length === 0) return;
     localStorage.setItem(STORAGE_KEYS.DEBT_PAYMENTS, JSON.stringify(debtPayments));
-  }, [debtPayments]);
+  }, [debtPayments, isAuthenticated]);
 
   useEffect(() => {
     localStorage.setItem(STORAGE_KEYS.SETTINGS, JSON.stringify(receiptSettings));
@@ -751,6 +799,9 @@ export const StoreProvider: React.FC<{ children: React.ReactNode }> = ({ childre
       if (recentProdIds.length > 0) addDirtyProductIds(recentProdIds);
       if (recentOrderIds.length > 0) addDirtyOrderIds(recentOrderIds);
       localStorage.setItem(STORAGE_KEYS.ADR0023_CLOUD_TRUTH, '1');
+      if (recentProdIds.length > 0 || recentOrderIds.length > 0) {
+        refreshOutboxCount();
+      }
     }
 
     // One-time scrub if SP01-SP08 demo products existed in legacy storage
@@ -799,12 +850,17 @@ export const StoreProvider: React.FC<{ children: React.ReactNode }> = ({ childre
         localStorage.setItem(STORAGE_KEYS.ADR0023_CLOUD_TRUTH, '1');
       }
 
+      let outboxPushFailed = false;
+
       const pendingDeletes = loadPendingDeletedCustomerIds();
       if (pendingDeletes.length > 0) {
         const delRes = await cloudDeleteCustomersBatch(pendingDeletes);
         if (delRes.success) {
+          addPurgedCustomerIds(pendingDeletes);
           removePendingDeletedCustomerIds(pendingDeletes);
-          pushCloudTombstones({ deletedCustomerIds: pendingDeletes });
+          await pushCloudTombstones({ deletedCustomerIds: pendingDeletes });
+        } else {
+          outboxPushFailed = true;
         }
       }
 
@@ -812,8 +868,11 @@ export const StoreProvider: React.FC<{ children: React.ReactNode }> = ({ childre
       if (pendingProdDeletes.length > 0) {
         const delProdRes = await cloudDeleteProductsBatch(pendingProdDeletes);
         if (delProdRes.success) {
+          appendIdsToKey(STORAGE_KEYS.PURGED_PRODUCTS, pendingProdDeletes);
           removePendingDeletedProductIds(pendingProdDeletes);
-          pushCloudTombstones({ deletedProductIds: pendingProdDeletes });
+          await pushCloudTombstones({ deletedProductIds: pendingProdDeletes });
+        } else {
+          outboxPushFailed = true;
         }
       }
 
@@ -821,8 +880,11 @@ export const StoreProvider: React.FC<{ children: React.ReactNode }> = ({ childre
       if (pendingOrderDeletes.length > 0) {
         const delOrdRes = await cloudDeleteOrdersBatch(pendingOrderDeletes);
         if (delOrdRes.success) {
+          appendIdsToKey(STORAGE_KEYS.PURGED_ORDERS, pendingOrderDeletes);
           removePendingDeletedOrderIds(pendingOrderDeletes);
-          pushCloudTombstones({ deletedOrderIds: pendingOrderDeletes });
+          await pushCloudTombstones({ deletedOrderIds: pendingOrderDeletes });
+        } else {
+          outboxPushFailed = true;
         }
       }
 
@@ -830,7 +892,7 @@ export const StoreProvider: React.FC<{ children: React.ReactNode }> = ({ childre
       const cleanLocalOrders = filterOutDeletedOrders(stateRef.current.orders);
       const excludedProductIds = Array.from(new Set([...loadPendingDeletedProductIds(), ...loadPurgedProductIds()]));
       const excludedOrderIds = Array.from(new Set([...loadPendingDeletedOrderIds(), ...loadPurgedOrderIds()]));
-      const excludedCustomerIds = loadPendingDeletedCustomerIds();
+      const excludedCustomerIds = Array.from(new Set([...loadPendingDeletedCustomerIds(), ...loadPurgedCustomerIds()]));
       const dirtyProductIds = loadDirtyProductIds();
       const dirtyOrderIds = loadDirtyOrderIds();
       const dirtyCustomerIds = loadDirtyCustomerIds();
@@ -899,19 +961,41 @@ export const StoreProvider: React.FC<{ children: React.ReactNode }> = ({ childre
         return { success: false, message: errMsg };
       }
 
-      // Absorb shared Cloud Tombstone Ledger locally and strip deleted dirty flags
+      // Absorb shared Cloud Tombstone Ledger locally into PURGED_* (never into pending outbox) and strip stale flags
       if (pullRes.cloudTombstones) {
         if (pullRes.cloudTombstones.deletedProductIds.length > 0) {
           appendIdsToKey(STORAGE_KEYS.PURGED_PRODUCTS, pullRes.cloudTombstones.deletedProductIds);
           removeDirtyProductIds(pullRes.cloudTombstones.deletedProductIds);
+          const cloudProdIdSet = new Set((pullRes.cloudRaw?.products || []).map(p => p.id));
+          const confirmedDeletedProds = pullRes.cloudTombstones.deletedProductIds.filter(
+            id => DEMO_PRODUCT_IDS.has(id) || !cloudProdIdSet.has(id)
+          );
+          if (confirmedDeletedProds.length > 0) {
+            removePendingDeletedProductIds(confirmedDeletedProds);
+          }
         }
         if (pullRes.cloudTombstones.deletedOrderIds.length > 0) {
           appendIdsToKey(STORAGE_KEYS.PURGED_ORDERS, pullRes.cloudTombstones.deletedOrderIds);
           removeDirtyOrderIds(pullRes.cloudTombstones.deletedOrderIds);
+          const cloudOrdIdSet = new Set((pullRes.cloudRaw?.orders || []).map(o => o.id));
+          const confirmedDeletedOrds = pullRes.cloudTombstones.deletedOrderIds.filter(
+            id => !cloudOrdIdSet.has(id)
+          );
+          if (confirmedDeletedOrds.length > 0) {
+            removePendingDeletedOrderIds(confirmedDeletedOrds);
+          }
         }
         if (pullRes.cloudTombstones.deletedCustomerIds.length > 0) {
-          addPendingDeletedCustomerIds(pullRes.cloudTombstones.deletedCustomerIds);
+          addPurgedCustomerIds(pullRes.cloudTombstones.deletedCustomerIds);
           removeDirtyCustomerIds(pullRes.cloudTombstones.deletedCustomerIds);
+          const customersPulledOk = pullRes.cloudRaw?.cloudCustomersOk !== false;
+          const cloudCustIdSet = new Set((pullRes.cloudRaw?.customers || []).map(c => c.id));
+          const confirmedDeletedCusts = pullRes.cloudTombstones.deletedCustomerIds.filter(
+            id => DEMO_CUSTOMER_IDS.has(id) || (customersPulledOk && !cloudCustIdSet.has(id))
+          );
+          if (confirmedDeletedCusts.length > 0) {
+            removePendingDeletedCustomerIds(confirmedDeletedCusts);
+          }
         }
       }
 
@@ -942,7 +1026,7 @@ export const StoreProvider: React.FC<{ children: React.ReactNode }> = ({ childre
             debtPayments: stateRef.current.debtPayments,
             excludedProductIds: Array.from(new Set([...loadPendingDeletedProductIds(), ...loadPurgedProductIds()])),
             excludedOrderIds: Array.from(new Set([...loadPendingDeletedOrderIds(), ...loadPurgedOrderIds()])),
-            excludedCustomerIds: loadPendingDeletedCustomerIds(),
+            excludedCustomerIds: Array.from(new Set([...loadPendingDeletedCustomerIds(), ...loadPurgedCustomerIds()])),
             dirtyProductIds: effectiveDirtyProductIds,
             dirtyOrderIds: effectiveDirtyOrderIds,
             dirtyCustomerIds: effectiveDirtyCustomerIds,
@@ -950,16 +1034,27 @@ export const StoreProvider: React.FC<{ children: React.ReactNode }> = ({ childre
         });
       }
 
+      const reconcileEpoch = mutationEpochRef.current;
+      const pushTasks: Array<Promise<void>> = [];
+
       const unsyncedCusts = effectivePullRes.unsyncedLocalCustomers || [];
       const unsyncedCustIdSet = new Set(unsyncedCusts.map(c => c.id));
-      const confirmedSyncedCustIds = effectiveDirtyCustomerIds.filter(id => !unsyncedCustIdSet.has(id));
+      const confirmedSyncedCustIds = filterUnmodifiedDirtyIds(
+        'customer',
+        effectiveDirtyCustomerIds.filter(id => !unsyncedCustIdSet.has(id)),
+        reconcileEpoch
+      );
       if (confirmedSyncedCustIds.length > 0) {
         removeDirtyCustomerIds(confirmedSyncedCustIds);
       }
       if (unsyncedCusts.length > 0) {
-        cloudSyncCustomersBatch(unsyncedCusts).then(ok => {
-          if (ok) removeDirtyCustomerIds(unsyncedCusts.map(c => c.id));
-        });
+        const pushCustIds = unsyncedCusts.map(c => c.id);
+        pushTasks.push(
+          cloudSyncCustomersBatch(unsyncedCusts).then(ok => {
+            if (ok) clearDirtyCustomerIds(pushCustIds, reconcileEpoch);
+            else outboxPushFailed = true;
+          })
+        );
       }
 
       const latestCleanProducts = filterOutDemoAndDeletedProducts(stateRef.current.products);
@@ -972,32 +1067,50 @@ export const StoreProvider: React.FC<{ children: React.ReactNode }> = ({ childre
 
       const unsyncedProds = filterOutDemoAndDeletedProducts(effectivePullRes.unsyncedLocalProducts || []);
       const unsyncedProdIdSet = new Set(unsyncedProds.map(p => p.id));
-      const confirmedSyncedProdIds = effectiveDirtyProductIds.filter(id => !unsyncedProdIdSet.has(id));
+      const confirmedSyncedProdIds = filterUnmodifiedDirtyIds(
+        'product',
+        effectiveDirtyProductIds.filter(id => !unsyncedProdIdSet.has(id)),
+        reconcileEpoch
+      );
       if (confirmedSyncedProdIds.length > 0) {
         removeDirtyProductIds(confirmedSyncedProdIds);
       }
       if (unsyncedProds.length > 0) {
-        cloudSyncProductsBatch(unsyncedProds).then(ok => {
-          if (ok) removeDirtyProductIds(unsyncedProds.map(p => p.id));
-        });
+        const pushProdIds = unsyncedProds.map(p => p.id);
+        pushTasks.push(
+          cloudSyncProductsBatch(unsyncedProds).then(ok => {
+            if (ok) clearDirtyProductIds(pushProdIds, reconcileEpoch);
+            else outboxPushFailed = true;
+          })
+        );
       }
 
       const cleanUnsyncedOrders = filterOutDeletedOrders(effectivePullRes.unsyncedLocalOrders || []);
       const unsyncedOrdIdSet = new Set(cleanUnsyncedOrders.map(o => o.id));
-      const confirmedSyncedOrdIds = effectiveDirtyOrderIds.filter(id => !unsyncedOrdIdSet.has(id));
+      const confirmedSyncedOrdIds = filterUnmodifiedDirtyIds(
+        'order',
+        effectiveDirtyOrderIds.filter(id => !unsyncedOrdIdSet.has(id)),
+        reconcileEpoch
+      );
       if (confirmedSyncedOrdIds.length > 0) {
         removeDirtyOrderIds(confirmedSyncedOrdIds);
       }
       if (cleanUnsyncedOrders.length > 0) {
-        cloudSyncOrdersBatch(cleanUnsyncedOrders).then(ok => {
-          if (ok) removeDirtyOrderIds(cleanUnsyncedOrders.map(o => o.id));
-        });
+        const pushOrdIds = cleanUnsyncedOrders.map(o => o.id);
+        pushTasks.push(
+          cloudSyncOrdersBatch(cleanUnsyncedOrders).then(ok => {
+            if (ok) clearDirtyOrderIds(pushOrdIds, reconcileEpoch);
+            else outboxPushFailed = true;
+          })
+        );
       }
 
       const stillPendingDeletes = loadPendingDeletedCustomerIds();
+      const purgedCusts = loadPurgedCustomerIds();
       const ledgerDeletedCusts = effectivePullRes.cloudTombstones?.deletedCustomerIds || [];
       const safePulledCustomers = filterOutDeletedCustomers(effectivePullRes.customers, [
         ...stillPendingDeletes,
+        ...purgedCusts,
         ...ledgerDeletedCusts,
       ]);
       const safePulledOrders = filterOutDeletedOrders(effectivePullRes.orders);
@@ -1035,10 +1148,25 @@ export const StoreProvider: React.FC<{ children: React.ReactNode }> = ({ childre
 
       if (phoneRepair.changedCustomers.length > 0) {
         const repairedIds = phoneRepair.changedCustomers.map(c => c.id);
+        const repairEpoch = ++mutationEpochRef.current;
         addDirtyCustomerIds(repairedIds);
-        cloudSyncCustomersBatch(phoneRepair.changedCustomers).then(ok => {
-          if (ok) removeDirtyCustomerIds(repairedIds);
-        });
+        recordDirtyEpochs('customer', repairedIds, repairEpoch);
+        pushTasks.push(
+          cloudSyncCustomersBatch(phoneRepair.changedCustomers).then(ok => {
+            if (ok) clearDirtyCustomerIds(repairedIds, repairEpoch);
+            else outboxPushFailed = true;
+          })
+        );
+      }
+
+      if (pushTasks.length > 0) {
+        await Promise.all(pushTasks);
+      }
+
+      if (outboxPushFailed) {
+        const warnMsg = 'Đã tải dữ liệu Cloud nhưng một số thay đổi trên máy chưa gửi lên được. Bấm để thử lại.';
+        setCloudSyncError(warnMsg);
+        return { success: false, message: warnMsg };
       }
 
       const syncNow = new Date().toISOString();
@@ -1154,13 +1282,20 @@ export const StoreProvider: React.FC<{ children: React.ReactNode }> = ({ childre
   };
 
   const syncLocalToCloud = useCallback(async (): Promise<{ success: boolean; message: string }> => {
-    return await pushAllDataToCloud({
+    const syncEpoch = mutationEpochRef.current;
+    const res = await pushAllDataToCloud({
       products,
       customers,
       orders,
       debtPayments,
       settings: receiptSettings,
     });
+    if (res.success) {
+      clearDirtyProductIds(products.map(p => p.id), syncEpoch);
+      clearDirtyCustomerIds(customers.map(c => c.id), syncEpoch);
+      clearDirtyOrderIds(orders.map(o => o.id), syncEpoch);
+    }
+    return res;
   }, [products, customers, orders, debtPayments, receiptSettings]);
 
   const syncCloudToLocal = useCallback(async (): Promise<{ success: boolean; message: string }> => {
@@ -1248,9 +1383,8 @@ export const StoreProvider: React.FC<{ children: React.ReactNode }> = ({ childre
     clearLocalCredentialCache();
     setAuthSession(null);
     setIsScreenLocked(true);
-    await signOutSupabaseAuth();
 
-    // Clear sensitive local cache when signed out (only if Offline Outbox is clean)
+    // Clear sensitive local cache immediately when signed out (only if Offline Outbox is clean)
     if (computePendingOutboxCount() === 0) {
       stateRef.current.products = [];
       stateRef.current.customers = [];
@@ -1265,6 +1399,8 @@ export const StoreProvider: React.FC<{ children: React.ReactNode }> = ({ childre
       setOrders([]);
       setDebtPayments([]);
     }
+
+    await signOutSupabaseAuth();
   };
 
   const updateAuthConfig = async (patch: {
@@ -1407,9 +1543,9 @@ export const StoreProvider: React.FC<{ children: React.ReactNode }> = ({ childre
       updatedAt: now,
     };
     const nextProducts = [newProduct, ...stateRef.current.products];
-    commitProducts(nextProducts, [newId]);
+    const opEpoch = commitProducts(nextProducts, [newId]);
     cloudSyncProduct(newProduct).then(ok => {
-      if (ok) removeDirtyProductIds([newId]);
+      if (ok) clearDirtyProductIds([newId], opEpoch);
     });
     return newProduct;
   };
@@ -1425,9 +1561,9 @@ export const StoreProvider: React.FC<{ children: React.ReactNode }> = ({ childre
     }));
     const newIds = newProducts.map(p => p.id);
     const nextProducts = [...newProducts, ...stateRef.current.products];
-    commitProducts(nextProducts, newIds);
+    const opEpoch = commitProducts(nextProducts, newIds);
     cloudSyncProductsBatch(newProducts).then(ok => {
-      if (ok) removeDirtyProductIds(newIds);
+      if (ok) clearDirtyProductIds(newIds, opEpoch);
     });
     return newProducts;
   };
@@ -1442,10 +1578,10 @@ export const StoreProvider: React.FC<{ children: React.ReactNode }> = ({ childre
       }
       return p;
     });
-    commitProducts(nextProducts, updatedItem ? [id] : []);
+    const opEpoch = commitProducts(nextProducts, updatedItem ? [id] : []);
     if (updatedItem) {
       cloudSyncProduct(updatedItem).then(ok => {
-        if (ok) removeDirtyProductIds([id]);
+        if (ok) clearDirtyProductIds([id], opEpoch);
       });
     }
   };
@@ -1457,7 +1593,7 @@ export const StoreProvider: React.FC<{ children: React.ReactNode }> = ({ childre
     pushCloudTombstones({ deletedProductIds: [id] });
     cloudDeleteProduct(id).then(res => {
       if (res.success) {
-        removePendingDeletedProductIds([id]);
+        clearPendingDeletedProductIds([id]);
       }
     });
   };
@@ -1482,9 +1618,9 @@ export const StoreProvider: React.FC<{ children: React.ReactNode }> = ({ childre
     if (changedProducts.length === 0) return 0;
 
     const changedIds = changedProducts.map(p => p.id);
-    commitProducts(nextProducts, changedIds);
+    const opEpoch = commitProducts(nextProducts, changedIds);
     cloudSyncProductsBatch(changedProducts).then(ok => {
-      if (ok) removeDirtyProductIds(changedIds);
+      if (ok) clearDirtyProductIds(changedIds, opEpoch);
     });
     return changedProducts.length;
   };
@@ -1502,7 +1638,7 @@ export const StoreProvider: React.FC<{ children: React.ReactNode }> = ({ childre
     pushCloudTombstones({ deletedProductIds: cleanIds });
     cloudDeleteProductsBatch(cleanIds).then(res => {
       if (res.success) {
-        removePendingDeletedProductIds(cleanIds);
+        clearPendingDeletedProductIds(cleanIds);
       }
     });
     return removedCount;
@@ -1525,9 +1661,9 @@ export const StoreProvider: React.FC<{ children: React.ReactNode }> = ({ childre
       updatedAt: now,
     };
     const nextCustomers = [newCustomer, ...stateRef.current.customers];
-    commitCustomers(nextCustomers, [newId]);
+    const opEpoch = commitCustomers(nextCustomers, [newId]);
     cloudSyncCustomer(newCustomer).then(ok => {
-      if (ok) removeDirtyCustomerIds([newId]);
+      if (ok) clearDirtyCustomerIds([newId], opEpoch);
     });
     return newCustomer;
   };
@@ -1551,9 +1687,9 @@ export const StoreProvider: React.FC<{ children: React.ReactNode }> = ({ childre
     });
     const nextCustomers = [...newCustomers, ...stateRef.current.customers];
     const newIds = newCustomers.map(c => c.id);
-    commitCustomers(nextCustomers, newIds);
+    const opEpoch = commitCustomers(nextCustomers, newIds);
     cloudSyncCustomersBatch(newCustomers).then(ok => {
-      if (ok) removeDirtyCustomerIds(newIds);
+      if (ok) clearDirtyCustomerIds(newIds, opEpoch);
     });
     return newCustomers;
   };
@@ -1574,10 +1710,10 @@ export const StoreProvider: React.FC<{ children: React.ReactNode }> = ({ childre
       }
       return c;
     });
-    commitCustomers(nextCustomers, updatedItem ? [id] : []);
+    const opEpoch = commitCustomers(nextCustomers, updatedItem ? [id] : []);
     if (updatedItem) {
       cloudSyncCustomer(updatedItem).then(ok => {
-        if (ok) removeDirtyCustomerIds([id]);
+        if (ok) clearDirtyCustomerIds([id], opEpoch);
       });
     }
   };
@@ -1607,9 +1743,9 @@ export const StoreProvider: React.FC<{ children: React.ReactNode }> = ({ childre
     if (changedCustomers.length === 0) return 0;
 
     const changedIds = changedCustomers.map(c => c.id);
-    commitCustomers(nextCustomers, changedIds);
+    const opEpoch = commitCustomers(nextCustomers, changedIds);
     cloudSyncCustomersBatch(changedCustomers).then(ok => {
-      if (ok) removeDirtyCustomerIds(changedIds);
+      if (ok) clearDirtyCustomerIds(changedIds, opEpoch);
     });
     return changedCustomers.length;
   };
@@ -1617,10 +1753,11 @@ export const StoreProvider: React.FC<{ children: React.ReactNode }> = ({ childre
   const deleteCustomer = (id: string) => {
     const nextCustomers = stateRef.current.customers.filter(c => c.id !== id);
     addPendingDeletedCustomerIds([id]);
+    addPurgedCustomerIds([id]);
     commitCustomers(nextCustomers, [], [id]);
     pushCloudTombstones({ deletedCustomerIds: [id] });
     cloudDeleteCustomer(id).then(res => {
-      if (res?.success) removePendingDeletedCustomerIds([id]);
+      if (res?.success) clearPendingDeletedCustomerIds([id]);
     });
   };
 
@@ -1638,10 +1775,11 @@ export const StoreProvider: React.FC<{ children: React.ReactNode }> = ({ childre
       return { deletedCount: 0, skippedIds: res.skippedIds };
     }
     addPendingDeletedCustomerIds(res.deletedIds);
+    addPurgedCustomerIds(res.deletedIds);
     commitCustomers(res.nextCustomers, [], res.deletedIds);
     pushCloudTombstones({ deletedCustomerIds: res.deletedIds });
     cloudDeleteCustomersBatch(res.deletedIds).then(cloudRes => {
-      if (cloudRes?.success) removePendingDeletedCustomerIds(res.deletedIds);
+      if (cloudRes?.success) clearPendingDeletedCustomerIds(res.deletedIds);
     });
 
     return {
@@ -1685,17 +1823,17 @@ export const StoreProvider: React.FC<{ children: React.ReactNode }> = ({ childre
         : [];
       const changedOrdIds = changedOrders.map(o => o.id);
 
-      commitCustomers(phoneRepair.customers, toSyncIds);
-      commitOrders(result.repairedOrders, changedOrdIds);
+      const custEpoch = commitCustomers(phoneRepair.customers, toSyncIds);
+      const ordEpoch = commitOrders(result.repairedOrders, changedOrdIds);
 
       if (toSync.length > 0) {
         cloudSyncCustomersBatch(toSync).then(ok => {
-          if (ok) removeDirtyCustomerIds(toSyncIds);
+          if (ok) clearDirtyCustomerIds(toSyncIds, custEpoch);
         });
       }
       if (changedOrders.length > 0) {
         cloudSyncOrdersBatch(changedOrders).then(ok => {
-          if (ok) removeDirtyOrderIds(changedOrdIds);
+          if (ok) clearDirtyOrderIds(changedOrdIds, ordEpoch);
         });
       }
     }
@@ -1714,9 +1852,9 @@ export const StoreProvider: React.FC<{ children: React.ReactNode }> = ({ childre
     const res = repairCustomerFusedPhones(target);
     if (!res.changed) return;
     const nextCustomers = stateRef.current.customers.map(c => (c.id === customerId ? res.customer : c));
-    commitCustomers(nextCustomers, [customerId]);
+    const opEpoch = commitCustomers(nextCustomers, [customerId]);
     cloudSyncCustomer(res.customer).then(ok => {
-      if (ok) removeDirtyCustomerIds([customerId]);
+      if (ok) clearDirtyCustomerIds([customerId], opEpoch);
     });
   };
 
@@ -1736,9 +1874,9 @@ export const StoreProvider: React.FC<{ children: React.ReactNode }> = ({ childre
     });
     if (changedCustomers.length > 0) {
       const changedIds = changedCustomers.map(c => c.id);
-      commitCustomers(nextCustomers, changedIds);
+      const opEpoch = commitCustomers(nextCustomers, changedIds);
       cloudSyncCustomersBatch(changedCustomers).then(ok => {
-        if (ok) removeDirtyCustomerIds(changedIds);
+        if (ok) clearDirtyCustomerIds(changedIds, opEpoch);
       });
     }
     return changedCustomers.length;
@@ -1750,9 +1888,9 @@ export const StoreProvider: React.FC<{ children: React.ReactNode }> = ({ childre
     const res = convertAddressToExtraAddresses(target);
     if (!res.changed) return;
     const nextCustomers = stateRef.current.customers.map(c => (c.id === customerId ? res.customer : c));
-    commitCustomers(nextCustomers, [customerId]);
+    const opEpoch = commitCustomers(nextCustomers, [customerId]);
     cloudSyncCustomer(res.customer).then(ok => {
-      if (ok) removeDirtyCustomerIds([customerId]);
+      if (ok) clearDirtyCustomerIds([customerId], opEpoch);
     });
   };
 
@@ -1772,9 +1910,9 @@ export const StoreProvider: React.FC<{ children: React.ReactNode }> = ({ childre
     });
     if (changedCustomers.length > 0) {
       const changedIds = changedCustomers.map(c => c.id);
-      commitCustomers(nextList, changedIds);
+      const opEpoch = commitCustomers(nextList, changedIds);
       cloudSyncCustomersBatch(changedCustomers).then(ok => {
-        if (ok) removeDirtyCustomerIds(changedIds);
+        if (ok) clearDirtyCustomerIds(changedIds, opEpoch);
       });
     }
     return changedCustomers.length;
@@ -1797,18 +1935,18 @@ export const StoreProvider: React.FC<{ children: React.ReactNode }> = ({ childre
       .concat(customerB);
 
     const changedCustIds = [customerA.id, customerB.id];
-    commitCustomers(nextCustomers, changedCustIds);
+    const custEpoch = commitCustomers(nextCustomers, changedCustIds);
     cloudSyncCustomersBatch([customerA, customerB]).then(ok => {
-      if (ok) removeDirtyCustomerIds(changedCustIds);
+      if (ok) clearDirtyCustomerIds(changedCustIds, custEpoch);
     });
 
     if (ordersToUpdate.length > 0) {
       const updateMap = new Map(ordersToUpdate.map(u => [u.id, u]));
       const nextOrders = currentOrders.map(o => updateMap.get(o.id) || o);
       const changedOrdIds = ordersToUpdate.map(o => o.id);
-      commitOrders(nextOrders, changedOrdIds);
+      const ordEpoch = commitOrders(nextOrders, changedOrdIds);
       cloudSyncOrdersBatch(ordersToUpdate).then(ok => {
-        if (ok) removeDirtyOrderIds(changedOrdIds);
+        if (ok) clearDirtyOrderIds(changedOrdIds, ordEpoch);
       });
     }
   };
@@ -1830,22 +1968,23 @@ export const StoreProvider: React.FC<{ children: React.ReactNode }> = ({ childre
 
     const dupIds = duplicates.map(d => d.id);
     addPendingDeletedCustomerIds(dupIds);
-    commitCustomers(nextCustomers, [primaryId], dupIds);
+    addPurgedCustomerIds(dupIds);
+    const custEpoch = commitCustomers(nextCustomers, [primaryId], dupIds);
     cloudSyncCustomer(mergedCustomer).then(ok => {
-      if (ok) removeDirtyCustomerIds([primaryId]);
+      if (ok) clearDirtyCustomerIds([primaryId], custEpoch);
     });
     pushCloudTombstones({ deletedCustomerIds: dupIds });
     cloudDeleteCustomersBatch(dupIds).then(cloudRes => {
-      if (cloudRes?.success) removePendingDeletedCustomerIds(dupIds);
+      if (cloudRes?.success) clearPendingDeletedCustomerIds(dupIds);
     });
 
     if (ordersToUpdate.length > 0) {
       const updateMap = new Map(ordersToUpdate.map(u => [u.id, u]));
       const nextOrders = currentOrders.map(o => updateMap.get(o.id) || o);
       const changedOrdIds = ordersToUpdate.map(o => o.id);
-      commitOrders(nextOrders, changedOrdIds);
+      const ordEpoch = commitOrders(nextOrders, changedOrdIds);
       cloudSyncOrdersBatch(ordersToUpdate).then(ok => {
-        if (ok) removeDirtyOrderIds(changedOrdIds);
+        if (ok) clearDirtyOrderIds(changedOrdIds, ordEpoch);
       });
     }
   };
@@ -1896,27 +2035,28 @@ export const StoreProvider: React.FC<{ children: React.ReactNode }> = ({ childre
 
       if (delArr.length > 0) {
         addPendingDeletedCustomerIds(delArr);
+        addPurgedCustomerIds(delArr);
       }
-      commitCustomers(workingCustomers, changedPrimaryIds, delArr);
+      const custEpoch = commitCustomers(workingCustomers, changedPrimaryIds, delArr);
 
       if (changedPrimaries.length > 0) {
         cloudSyncCustomersBatch(changedPrimaries).then(ok => {
-          if (ok) removeDirtyCustomerIds(changedPrimaryIds);
+          if (ok) clearDirtyCustomerIds(changedPrimaryIds, custEpoch);
         });
       }
       if (delArr.length > 0) {
         pushCloudTombstones({ deletedCustomerIds: delArr });
         cloudDeleteCustomersBatch(delArr).then(cloudRes => {
-          if (cloudRes?.success) removePendingDeletedCustomerIds(delArr);
+          if (cloudRes?.success) clearPendingDeletedCustomerIds(delArr);
         });
       }
 
       if (updatedOrderMap.size > 0) {
         const changedOrds = Array.from(updatedOrderMap.values());
         const changedOrdIds = changedOrds.map(o => o.id);
-        commitOrders(workingOrders, changedOrdIds);
+        const ordEpoch = commitOrders(workingOrders, changedOrdIds);
         cloudSyncOrdersBatch(changedOrds).then(ok => {
-          if (ok) removeDirtyOrderIds(changedOrdIds);
+          if (ok) clearDirtyOrderIds(changedOrdIds, ordEpoch);
         });
       }
     }
@@ -1930,9 +2070,13 @@ export const StoreProvider: React.FC<{ children: React.ReactNode }> = ({ childre
 
   // Order actions
   const applyStockAdjustments = (adjustments: Array<{ productId: string; delta: number }>, now: string) => {
-    if (adjustments.length === 0) return;
-    const deltaMap = new Map(adjustments.map(a => [a.productId, a.delta]));
-    const touchedIds = adjustments.map(a => a.productId);
+    const existingProdIds = new Set(stateRef.current.products.map(p => p.id));
+    const validAdjustments = adjustments.filter(
+      a => a && a.productId && a.delta !== 0 && existingProdIds.has(a.productId)
+    );
+    if (validAdjustments.length === 0) return;
+    const deltaMap = new Map(validAdjustments.map(a => [a.productId, a.delta]));
+    const touchedIds = validAdjustments.map(a => a.productId);
     const nextProducts = stateRef.current.products.map(prod => {
       const delta = deltaMap.get(prod.id);
       if (delta !== undefined && delta !== 0) {
@@ -1940,14 +2084,19 @@ export const StoreProvider: React.FC<{ children: React.ReactNode }> = ({ childre
       }
       return prod;
     });
-    commitProducts(nextProducts, touchedIds);
+    const opEpoch = commitProducts(nextProducts, touchedIds);
 
-    cloudAdjustProductsStockBatch(adjustments).then(results => {
+    cloudAdjustProductsStockBatch(validAdjustments).then(results => {
       if (!results || results.length === 0) return;
-      const syncedIds = results.filter(r => r.success).map(r => r.productId);
+      const syncedIds = filterUnmodifiedDirtyIds(
+        'product',
+        results.filter(r => r.success).map(r => r.productId),
+        opEpoch
+      );
+      const syncedSet = new Set(syncedIds);
       const stockPatch = new Map<string, number>();
       for (const r of results) {
-        if (r.success && typeof r.newStock === 'number') {
+        if (r.success && syncedSet.has(r.productId) && typeof r.newStock === 'number') {
           stockPatch.set(r.productId, Math.round(r.newStock * 10000) / 10000);
         }
       }
@@ -1957,7 +2106,7 @@ export const StoreProvider: React.FC<{ children: React.ReactNode }> = ({ childre
         );
         commitProducts(reconciled, [], syncedIds);
       } else if (syncedIds.length > 0) {
-        removeDirtyProductIds(syncedIds);
+        clearDirtyProductIds(syncedIds, opEpoch);
       }
     });
   };
@@ -2009,18 +2158,18 @@ export const StoreProvider: React.FC<{ children: React.ReactNode }> = ({ childre
       });
       if (updatedCust) {
         const custId = newOrder.customerId;
-        commitCustomers(nextCustomers, [custId]);
+        const custEpoch = commitCustomers(nextCustomers, [custId]);
         cloudSyncCustomer(updatedCust).then(ok => {
-          if (ok) removeDirtyCustomerIds([custId]);
+          if (ok) clearDirtyCustomerIds([custId], custEpoch);
         });
       }
     }
 
     // 3. Save order to list & Cloud
     const nextOrders = [newOrder, ...stateRef.current.orders];
-    commitOrders(nextOrders, [newOrder.id]);
+    const orderEpoch = commitOrders(nextOrders, [newOrder.id]);
     cloudSyncOrder(newOrder).then(ok => {
-      if (ok) removeDirtyOrderIds([newOrder.id]);
+      if (ok) clearDirtyOrderIds([newOrder.id], orderEpoch);
     });
     return newOrder;
   };
@@ -2037,9 +2186,9 @@ export const StoreProvider: React.FC<{ children: React.ReactNode }> = ({ childre
       return order;
     });
     if (updatedOrder) {
-      commitOrders(nextOrders, [orderId]);
+      const opEpoch = commitOrders(nextOrders, [orderId]);
       cloudSyncOrder(updatedOrder).then(ok => {
-        if (ok) removeDirtyOrderIds([orderId]);
+        if (ok) clearDirtyOrderIds([orderId], opEpoch);
       });
     }
   };
@@ -2138,18 +2287,18 @@ export const StoreProvider: React.FC<{ children: React.ReactNode }> = ({ childre
     }
     if (customersToSync.length > 0) {
       const syncIds = customersToSync.map(c => c.id);
-      commitCustomers(nextCustomers, syncIds);
+      const custEpoch = commitCustomers(nextCustomers, syncIds);
       cloudSyncCustomersBatch(customersToSync).then(ok => {
-        if (ok) removeDirtyCustomerIds(syncIds);
+        if (ok) clearDirtyCustomerIds(syncIds, custEpoch);
       });
     }
 
     // 3. CẬP NHẬT ĐƠN HÀNG TRONG DANH SÁCH & CLOUD
     const orderToSave: Order = { ...updatedOrder, updatedAt: now };
     const nextOrders = stateRef.current.orders.map(o => (o.id === orderId ? orderToSave : o));
-    commitOrders(nextOrders, [orderId]);
+    const orderEpoch = commitOrders(nextOrders, [orderId]);
     cloudSyncOrder(orderToSave).then(ok => {
-      if (ok) removeDirtyOrderIds([orderId]);
+      if (ok) clearDirtyOrderIds([orderId], orderEpoch);
     });
   };
 
@@ -2198,9 +2347,9 @@ export const StoreProvider: React.FC<{ children: React.ReactNode }> = ({ childre
         });
         if (updatedCust) {
           const custId = orderToDelete.customerId;
-          commitCustomers(nextCustomers, [custId]);
+          const custEpoch = commitCustomers(nextCustomers, [custId]);
           cloudSyncCustomer(updatedCust).then(ok => {
-            if (ok) removeDirtyCustomerIds([custId]);
+            if (ok) clearDirtyCustomerIds([custId], custEpoch);
           });
         }
       }
@@ -2213,7 +2362,7 @@ export const StoreProvider: React.FC<{ children: React.ReactNode }> = ({ childre
     pushCloudTombstones({ deletedOrderIds: [orderId] });
     cloudDeleteOrder(orderId).then(res => {
       if (res.success) {
-        removePendingDeletedOrderIds([orderId]);
+        clearPendingDeletedOrderIds([orderId]);
       }
     });
   };
@@ -2262,9 +2411,9 @@ export const StoreProvider: React.FC<{ children: React.ReactNode }> = ({ childre
       });
       if (updatedCust) {
         const custId = orderToCancel.customerId;
-        commitCustomers(nextCustomers, [custId]);
+        const custEpoch = commitCustomers(nextCustomers, [custId]);
         cloudSyncCustomer(updatedCust).then(ok => {
-          if (ok) removeDirtyCustomerIds([custId]);
+          if (ok) clearDirtyCustomerIds([custId], custEpoch);
         });
       }
     }
@@ -2279,9 +2428,9 @@ export const StoreProvider: React.FC<{ children: React.ReactNode }> = ({ childre
       return o;
     });
     if (cancelledOrder) {
-      commitOrders(nextOrders, [orderId]);
+      const orderEpoch = commitOrders(nextOrders, [orderId]);
       cloudSyncOrder(cancelledOrder).then(ok => {
-        if (ok) removeDirtyOrderIds([orderId]);
+        if (ok) clearDirtyOrderIds([orderId], orderEpoch);
       });
     }
   };
@@ -2323,10 +2472,10 @@ export const StoreProvider: React.FC<{ children: React.ReactNode }> = ({ childre
       }
       return c;
     });
-    commitCustomers(nextCustomers, updatedCust ? [customerId] : []);
+    const opEpoch = commitCustomers(nextCustomers, updatedCust ? [customerId] : []);
     if (updatedCust) {
       cloudSyncCustomer(updatedCust).then(ok => {
-        if (ok) removeDirtyCustomerIds([customerId]);
+        if (ok) clearDirtyCustomerIds([customerId], opEpoch);
       });
     }
   };
@@ -2390,7 +2539,9 @@ export const StoreProvider: React.FC<{ children: React.ReactNode }> = ({ childre
     const reconstructed = reconstructMissingProductsFromOrders(mergedO, dedupedProds, excludedProdIds);
     const finalProds = deduplicateProductsByName([...dedupedProds, ...reconstructed]);
 
-    const pendingDeletedCusts = loadPendingDeletedCustomerIds();
+    const pendingDeletedCusts = Array.from(
+      new Set([...loadPendingDeletedCustomerIds(), ...loadPurgedCustomerIds()])
+    );
     const rawIncomingCusts = Array.isArray(snapshot.customers) ? snapshot.customers : [];
     const safeIncomingCusts = filterOutDeletedCustomers(rawIncomingCusts, pendingDeletedCusts).filter(
       c => c && c.id && (!DEMO_CUSTOMER_IDS.has(c.id) || rawIncomingCusts.every(x => DEMO_CUSTOMER_IDS.has(x.id) || x.id === 'KH01'))
@@ -2414,7 +2565,7 @@ export const StoreProvider: React.FC<{ children: React.ReactNode }> = ({ childre
       ? { ...stateRef.current.receiptSettings, ...snapshot.receiptSettings }
       : stateRef.current.receiptSettings;
 
-    mutationEpochRef.current += 1;
+    const restoreEpoch = ++mutationEpochRef.current;
     stateRef.current.products = finalProds;
     stateRef.current.customers = finalCustomers;
     stateRef.current.orders = repairedOrders;
@@ -2449,24 +2600,28 @@ export const StoreProvider: React.FC<{ children: React.ReactNode }> = ({ childre
     if (finalProds.length > 0) {
       const pIds = finalProds.map(p => p.id);
       addDirtyProductIds(pIds);
+      recordDirtyEpochs('product', pIds, restoreEpoch);
       cloudSyncProductsBatch(finalProds).then(ok => {
-        if (ok) removeDirtyProductIds(pIds);
+        if (ok) clearDirtyProductIds(pIds, restoreEpoch);
       });
     }
     if (finalCustomers.length > 0) {
       const cIds = finalCustomers.map(c => c.id);
       addDirtyCustomerIds(cIds);
+      recordDirtyEpochs('customer', cIds, restoreEpoch);
       cloudSyncCustomersBatch(finalCustomers).then(ok => {
-        if (ok) removeDirtyCustomerIds(cIds);
+        if (ok) clearDirtyCustomerIds(cIds, restoreEpoch);
       });
     }
     if (repairedOrders.length > 0) {
       const oIds = repairedOrders.map(o => o.id);
       addDirtyOrderIds(oIds);
+      recordDirtyEpochs('order', oIds, restoreEpoch);
       cloudSyncOrdersBatch(repairedOrders).then(ok => {
-        if (ok) removeDirtyOrderIds(oIds);
+        if (ok) clearDirtyOrderIds(oIds, restoreEpoch);
       });
     }
+    refreshOutboxCount();
     if (mergedD.length > 0) cloudSyncDebtPaymentsBatch(mergedD);
     if (snapshot.receiptSettings) cloudSyncSettings(nextSettings);
 
@@ -2541,9 +2696,9 @@ export const StoreProvider: React.FC<{ children: React.ReactNode }> = ({ childre
     const nextProducts = createdProducts.length > 0 ? [...createdProducts, ...currentProds] : currentProds;
     if (createdProducts.length > 0) {
       const createdIds = createdProducts.map(p => p.id);
-      commitProducts(nextProducts, createdIds);
+      const prodEpoch = commitProducts(nextProducts, createdIds);
       cloudSyncProductsBatch(createdProducts).then(ok => {
-        if (ok) removeDirtyProductIds(createdIds);
+        if (ok) clearDirtyProductIds(createdIds, prodEpoch);
       });
     }
 
@@ -2592,9 +2747,9 @@ export const StoreProvider: React.FC<{ children: React.ReactNode }> = ({ childre
 
     if (changedOrders.length > 0) {
       const changedOrdIds = changedOrders.map(o => o.id);
-      commitOrders(nextOrders, changedOrdIds);
+      const ordEpoch = commitOrders(nextOrders, changedOrdIds);
       cloudSyncOrdersBatch(changedOrders).then(ok => {
-        if (ok) removeDirtyOrderIds(changedOrdIds);
+        if (ok) clearDirtyOrderIds(changedOrdIds, ordEpoch);
       });
     }
 
@@ -2636,9 +2791,9 @@ export const StoreProvider: React.FC<{ children: React.ReactNode }> = ({ childre
     if (newCustomersToAdd.length > 0) {
       nextCustomers = [...newCustomersToAdd, ...stateRef.current.customers];
       const newCustIds = newCustomersToAdd.map(c => c.id);
-      commitCustomers(nextCustomers, newCustIds);
+      const custEpoch = commitCustomers(nextCustomers, newCustIds);
       cloudSyncCustomersBatch(newCustomersToAdd).then(ok => {
-        if (ok) removeDirtyCustomerIds(newCustIds);
+        if (ok) clearDirtyCustomerIds(newCustIds, custEpoch);
       });
     }
 
@@ -2676,9 +2831,9 @@ export const StoreProvider: React.FC<{ children: React.ReactNode }> = ({ childre
 
     const { updatedCustomer, log } = restoreCustomerFromOrderSnapshot(cust, ord);
     const nextCustomers = stateRef.current.customers.map(c => (c.id === customerId ? updatedCustomer : c));
-    commitCustomers(nextCustomers, [customerId]);
+    const opEpoch = commitCustomers(nextCustomers, [customerId]);
     cloudSyncCustomer(updatedCustomer).then(ok => {
-      if (ok) removeDirtyCustomerIds([customerId]);
+      if (ok) clearDirtyCustomerIds([customerId], opEpoch);
     });
     return { success: true, message: log };
   };
@@ -2694,18 +2849,18 @@ export const StoreProvider: React.FC<{ children: React.ReactNode }> = ({ childre
     );
     const nextCustomers = [...stateRef.current.customers.filter(c => c.id !== customerId), customerA, customerB];
     const changedCustIds = [customerA.id, customerB.id];
-    commitCustomers(nextCustomers, changedCustIds);
+    const custEpoch = commitCustomers(nextCustomers, changedCustIds);
     cloudSyncCustomersBatch([customerA, customerB]).then(ok => {
-      if (ok) removeDirtyCustomerIds(changedCustIds);
+      if (ok) clearDirtyCustomerIds(changedCustIds, custEpoch);
     });
 
     if (ordersToUpdate.length > 0) {
       const updateMap = new Map(ordersToUpdate.map(u => [u.id, u]));
       const nextOrders = stateRef.current.orders.map(o => updateMap.get(o.id) || o);
       const changedOrdIds = ordersToUpdate.map(o => o.id);
-      commitOrders(nextOrders, changedOrdIds);
+      const ordEpoch = commitOrders(nextOrders, changedOrdIds);
       cloudSyncOrdersBatch(ordersToUpdate).then(ok => {
-        if (ok) removeDirtyOrderIds(changedOrdIds);
+        if (ok) clearDirtyOrderIds(changedOrdIds, ordEpoch);
       });
     }
   };
@@ -2716,9 +2871,9 @@ export const StoreProvider: React.FC<{ children: React.ReactNode }> = ({ childre
     const res = addSecondaryPhoneFromOrderHelper(cust, phone);
     if (!res.changed) return false;
     const nextCustomers = stateRef.current.customers.map(c => (c.id === customerId ? res.customer : c));
-    commitCustomers(nextCustomers, [customerId]);
+    const opEpoch = commitCustomers(nextCustomers, [customerId]);
     cloudSyncCustomer(res.customer).then(ok => {
-      if (ok) removeDirtyCustomerIds([customerId]);
+      if (ok) clearDirtyCustomerIds([customerId], opEpoch);
     });
     return true;
   };
@@ -2729,9 +2884,9 @@ export const StoreProvider: React.FC<{ children: React.ReactNode }> = ({ childre
     const res = addExtraAddressFromOrderHelper(cust, address);
     if (!res.changed) return false;
     const nextCustomers = stateRef.current.customers.map(c => (c.id === customerId ? res.customer : c));
-    commitCustomers(nextCustomers, [customerId]);
+    const opEpoch = commitCustomers(nextCustomers, [customerId]);
     cloudSyncCustomer(res.customer).then(ok => {
-      if (ok) removeDirtyCustomerIds([customerId]);
+      if (ok) clearDirtyCustomerIds([customerId], opEpoch);
     });
     return true;
   };
@@ -2783,9 +2938,9 @@ export const StoreProvider: React.FC<{ children: React.ReactNode }> = ({ childre
     if (changedCustomerMap.size > 0) {
       const changedArr = Array.from(changedCustomerMap.values());
       const changedIds = changedArr.map(c => c.id);
-      commitCustomers(workingCustomers, changedIds);
+      const opEpoch = commitCustomers(workingCustomers, changedIds);
       cloudSyncCustomersBatch(changedArr).then(ok => {
-        if (ok) removeDirtyCustomerIds(changedIds);
+        if (ok) clearDirtyCustomerIds(changedIds, opEpoch);
       });
     }
 

@@ -215,4 +215,53 @@ const PROJECT_ROOT = path.resolve(__dirname, '..');
   console.log('PASS Block 3: Zero-config Settings UI, Layout auth lock, Edge Function, SQL & Docs verified.');
 }
 
+// =========================================================================
+// Block 4: Outbox & Cloud Tombstone Ledger Regression Guards
+// =========================================================================
+{
+  const storeSrc = fs.readFileSync(path.join(PROJECT_ROOT, 'src/context/StoreContext.tsx'), 'utf8');
+
+  // Regression guard: CloudTombstoneLedger customer IDs must NEVER be added to pending-delete outbox
+  assert.ok(
+    !storeSrc.includes('addPendingDeletedCustomerIds(pullRes.cloudTombstones.deletedCustomerIds)'),
+    'StoreContext must NOT put pullRes.cloudTombstones.deletedCustomerIds into pending delete outbox'
+  );
+  assert.ok(
+    storeSrc.includes("PURGED_CUSTOMERS: 'mxc_purged_customer_ids_v1'"),
+    'StoreContext must track absorbed Cloud customer tombstones in PURGED_CUSTOMERS separately from pending outbox'
+  );
+  assert.ok(
+    storeSrc.includes('addPurgedCustomerIds(pullRes.cloudTombstones.deletedCustomerIds)'),
+    'StoreContext must store absorbed Cloud customer tombstones in PURGED_CUSTOMERS'
+  );
+  assert.ok(
+    storeSrc.includes('migrateDemoOutboxTombstones()'),
+    'StoreContext must migrate legacy demo customer IDs (KH02-KH04) out of pending delete outbox on startup'
+  );
+  assert.ok(
+    storeSrc.includes('await Promise.all(pushTasks)'),
+    'StoreContext runPull must await all outbox pushTasks before clearing isCloudSyncing and refreshing outbox count'
+  );
+  assert.ok(
+    storeSrc.includes('clearDirtyProductIds(') &&
+      storeSrc.includes('clearDirtyOrderIds(') &&
+      storeSrc.includes('clearDirtyCustomerIds(') &&
+      storeSrc.includes('clearPendingDeletedCustomerIds('),
+    'StoreContext must refresh outbox count whenever async Cloud syncs/deletes clear dirty or pending-delete IDs'
+  );
+  assert.ok(
+    storeSrc.includes('removeDirtyCustomerIds(demoDirtyCusts)') &&
+      storeSrc.includes('removeDirtyProductIds(demoDirtyProds)'),
+    'migrateDemoOutboxTombstones() must also scrub demo IDs from DIRTY_CUSTOMERS and DIRTY_PRODUCTS'
+  );
+  assert.ok(
+    storeSrc.includes("pullRes.cloudRaw?.cloudCustomersOk !== false") &&
+      storeSrc.includes('existingProdIds.has(a.productId)') &&
+      storeSrc.includes('filterUnmodifiedDirtyIds('),
+    'StoreContext must guard tombstone confirmation on cloudCustomersOk, skip unknown products in applyStockAdjustments, and protect newer dirty epochs from stale async clears'
+  );
+
+  console.log('PASS Block 4: Outbox & Cloud Tombstone Ledger regression guards verified.');
+}
+
 console.log('ALL ADR-0025 TESTS PASSED.');
