@@ -398,6 +398,35 @@ function normalizeCustomerNameKey(name: string): string {
   return removeVietnameseTones(String(name || '')).trim().toLowerCase();
 }
 
+export interface CustomerImportIndex {
+  byPhone: Map<string, { customer: Customer; idx: number }>;
+  byName: Map<string, Customer>;
+}
+
+/**
+ * Build O(1) phone & normalized-name lookup indexes for fast batch customer reconciliation
+ * without changing first-match semantics on 3,000+ directory records.
+ */
+export function buildCustomerImportIndex(existingCustomers: Customer[]): CustomerImportIndex {
+  const byPhone = new Map<string, { customer: Customer; idx: number }>();
+  const byName = new Map<string, Customer>();
+
+  (existingCustomers || []).forEach((c, idx) => {
+    const phones = collectNormalizedPhones(c.phone, c.phone2);
+    for (const p of phones) {
+      if (p && !byPhone.has(p)) {
+        byPhone.set(p, { customer: c, idx });
+      }
+    }
+    const nameKey = normalizeCustomerNameKey(c.name);
+    if (nameKey && !byName.has(nameKey)) {
+      byName.set(nameKey, c);
+    }
+  });
+
+  return { byPhone, byName };
+}
+
 /**
  * Re-evaluate a single customer row against existing directory (used both in batch analysis
  * and after inline cell edits inside the preview modal).
@@ -407,7 +436,8 @@ export function classifySingleCustomerImportRow(
     ParsedCustomerRow,
     never
   > & { id: string },
-  existingCustomers: Customer[]
+  existingCustomers: Customer[],
+  index?: CustomerImportIndex
 ): AnalyzedCustomerImportRow {
   let normPPhone = normalizeVietnamesePhone(rawRow.phone || '');
   let normPPhone2 = rawRow.phone2 ? normalizeVietnamesePhone(rawRow.phone2) : undefined;
@@ -429,26 +459,42 @@ export function classifySingleCustomerImportRow(
   let existing: Customer | undefined;
 
   if (normPPhone || normPPhone2) {
-    existing = (existingCustomers || []).find(c => {
-      const p1Match =
-        !!normPPhone &&
-        ((c.phone && isPhoneMatching(c.phone, normPPhone)) ||
-          (c.phone2 && isPhoneMatching(c.phone2, normPPhone)));
-      const p2Match =
-        !!normPPhone2 &&
-        ((c.phone && isPhoneMatching(c.phone, normPPhone2)) ||
-          (c.phone2 && isPhoneMatching(c.phone2, normPPhone2)));
-      return p1Match || p2Match;
-    });
+    if (index) {
+      const incomingTokens = collectNormalizedPhones(normPPhone, normPPhone2);
+      let bestIdx = Infinity;
+      for (const tok of incomingTokens) {
+        const hit = index.byPhone.get(tok);
+        if (hit && hit.idx < bestIdx) {
+          bestIdx = hit.idx;
+          existing = hit.customer;
+        }
+      }
+    } else {
+      existing = (existingCustomers || []).find(c => {
+        const p1Match =
+          !!normPPhone &&
+          ((c.phone && isPhoneMatching(c.phone, normPPhone)) ||
+            (c.phone2 && isPhoneMatching(c.phone2, normPPhone)));
+        const p2Match =
+          !!normPPhone2 &&
+          ((c.phone && isPhoneMatching(c.phone, normPPhone2)) ||
+            (c.phone2 && isPhoneMatching(c.phone2, normPPhone2)));
+        return p1Match || p2Match;
+      });
+    }
     if (existing) matchType = 'phone';
   }
 
   // Secondary match: exact tone-insensitive name when phone did not match
   if (!existing && rowName) {
     const targetNameKey = normalizeCustomerNameKey(rowName);
-    existing = (existingCustomers || []).find(
-      c => normalizeCustomerNameKey(c.name) === targetNameKey
-    );
+    if (index) {
+      existing = index.byName.get(targetNameKey);
+    } else {
+      existing = (existingCustomers || []).find(
+        c => normalizeCustomerNameKey(c.name) === targetNameKey
+      );
+    }
     if (existing) matchType = 'name_only';
   }
 
@@ -473,6 +519,19 @@ export function classifySingleCustomerImportRow(
   const diffs: ImportFieldDiff[] = [];
 
   if (matchType === 'name_only') {
+    if (
+      rowName &&
+      rowName !== String(existing.name || '').trim() &&
+      hasVietnameseDiacritics(rowName) &&
+      !hasVietnameseDiacritics(existing.name || '')
+    ) {
+      diffs.push({
+        field: 'name',
+        label: 'Tên (bổ sung dấu)',
+        oldValue: existing.name,
+        newValue: rowName,
+      });
+    }
     if (normPPhone && normPPhone !== normalizeVietnamesePhone(existing.phone || '')) {
       diffs.push({
         field: 'phone',
@@ -511,6 +570,25 @@ export function classifySingleCustomerImportRow(
         oldValue: Number(existing.debt) || 0,
         newValue: rowDebt,
       });
+    }
+
+    if (diffs.length === 0) {
+      return {
+        id: rawRow.id,
+        name: rowName,
+        phone: normPPhone,
+        phone2: normPPhone2,
+        address: normAddr.address,
+        extraAddresses: normAddr.extraAddresses,
+        debt: rowDebt,
+        isDuplicate: true,
+        matchType: 'name_only',
+        existingCustomer: existing,
+        diffStatus: 'identical',
+        diffs: [],
+        recommendedAction: 'skip',
+        action: 'skip',
+      };
     }
 
     const canSafelyMerge = !normPPhone || !existing.phone;
@@ -658,13 +736,15 @@ export function analyzeCustomerImportRows(
   existingCustomers: Customer[],
   nowTs = Date.now()
 ): AnalyzedCustomerImportRow[] {
+  const index = buildCustomerImportIndex(existingCustomers);
   return (parsedRows || []).map((row, idx) =>
     classifySingleCustomerImportRow(
       {
         ...row,
         id: `cust_row_${nowTs}_${idx}`,
       },
-      existingCustomers
+      existingCustomers,
+      index
     )
   );
 }

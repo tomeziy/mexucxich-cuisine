@@ -14,6 +14,11 @@ import {
   analyzeOrderImportRows,
 } from '../src/utils/importReconciler.ts';
 import {
+  PRODUCT_HEADER_ALIASES,
+  normalizeHeaderKey,
+  parseOrderItemsString,
+} from '../src/utils/excel.ts';
+import {
   hashStorePassword,
   createDefaultStoreAuthConfig,
   verifyStoreCredentials,
@@ -436,7 +441,11 @@ const PROJECT_ROOT = path.resolve(__dirname, '..');
     ],
     [
       'src/context/StoreContext.tsx',
-      ['subscribeToCloudRealtimeChanges', 'fetchStoreAuthConfig', 'pushStoreAuthConfig', 'updateProductsBatch', 'deleteProductsBatch', 'updateCustomersBatch'],
+      ['subscribeToCloudRealtimeChanges', 'fetchStoreAuthConfig', 'pushStoreAuthConfig', 'updateProductsBatch', 'deleteProductsBatch', 'updateCustomersBatch', 'mutationEpochRef', 'commitCustomers', 'commitOrders', 'commitProducts'],
+    ],
+    [
+      'src/components/pos/EditOrderModal.tsx',
+      ['}, [order, isOpen]);'],
     ],
     [
       'src/services/supabase.ts',
@@ -454,6 +463,66 @@ const PROJECT_ROOT = path.resolve(__dirname, '..');
   }
 
   console.log('PASS Block 5: All static integration contracts verified.');
+}
+
+// =========================================================================
+// Block 6: Regression Tests for Export/Import Round-Trip & Indexed Scale
+// =========================================================================
+{
+  // 1. Product export header aliases ('Giá Vốn (VNĐ)' & 'Giá Bán (VNĐ)') must resolve cleanly
+  assert.ok(PRODUCT_HEADER_ALIASES.cost.includes(normalizeHeaderKey('Giá Vốn (VNĐ)')));
+  assert.ok(PRODUCT_HEADER_ALIASES.price.includes(normalizeHeaderKey('Giá Bán (VNĐ)')));
+
+  // 2. Identical phoneless customers (name_only match with 0 diffs) must classify as identical + skip
+  const phonelessDirectory = [
+    { id: 'KH_NL1', name: 'Nguyen thuy moj', phone: '', address: '12 Hàng Bông', debt: 0 },
+    { id: 'KH_NL2', name: 'Khách lẻ tại quầy', phone: '', address: '', debt: 0 },
+  ];
+  const phonelessReimport = [
+    { name: 'Nguyen thuy moj', phone: '', address: '12 Hàng Bông', debt: 0 },
+    { name: 'Khách lẻ tại quầy', phone: '', address: '', debt: 0 },
+  ];
+  const phonelessAnalyzed = analyzeCustomerImportRows(phonelessReimport, phonelessDirectory, 3000);
+  assert.equal(phonelessAnalyzed[0].diffStatus, 'identical');
+  assert.equal(phonelessAnalyzed[0].recommendedAction, 'skip');
+  assert.equal(phonelessAnalyzed[0].action, 'skip');
+  assert.equal(phonelessAnalyzed[1].diffStatus, 'identical');
+  assert.equal(phonelessAnalyzed[1].recommendedAction, 'skip');
+
+  // 3. Scale performance benchmark: 3,200 customers vs 3,200 rows must finish well under 500ms
+  const largeDir = Array.from({ length: 3200 }, (_, i) => ({
+    id: `KH_${i}`,
+    name: `Khách hàng ${i}`,
+    phone: i % 5 === 0 ? '' : `09${String(10000000 + i).slice(0, 8)}`,
+    address: `Số ${i} Phố Huế`,
+    debt: i % 10 === 0 ? 50000 : 0,
+  }));
+  const largeImport = largeDir.map(c => ({
+    name: c.name,
+    phone: c.phone,
+    address: c.address,
+    debt: c.debt,
+  }));
+  const tStart = Date.now();
+  const largeAnalyzed = analyzeCustomerImportRows(largeImport, largeDir, 4000);
+  const elapsedMs = Date.now() - tStart;
+  assert.equal(largeAnalyzed.length, 3200);
+  assert.ok(largeAnalyzed.every(r => r.diffStatus === 'identical' && r.action === 'skip'));
+  assert.ok(elapsedMs < 500, `Expected indexed 3200x3200 analysis < 500ms, got ${elapsedMs}ms`);
+
+  // 4. Order items with commas or '+' inside dish names must NOT split prematurely
+  const trickyItems =
+    'Canh măng khô sườn, móng giò (x1 - 250.000đ), BB mix 2 bánh cút + 2 bánh muối (x1 - 80.000đ), Nem rán ăn vã (hộp 10c) (x2 - 100.000đ)';
+  const parsedTricky = parseOrderItemsString(trickyItems);
+  assert.equal(parsedTricky.length, 3, 'Must preserve commas and plus signs inside dish names');
+  assert.equal(parsedTricky[0].name, 'Canh măng khô sườn, móng giò');
+  assert.equal(parsedTricky[0].price, 250000);
+  assert.equal(parsedTricky[1].name, 'BB mix 2 bánh cút + 2 bánh muối');
+  assert.equal(parsedTricky[1].price, 80000);
+  assert.equal(parsedTricky[2].name, 'Nem rán ăn vã (hộp 10c)');
+  assert.equal(parsedTricky[2].qty, 2);
+
+  console.log(`PASS Block 6: Excel round-trip & 3,200-customer indexed reconciliation (${elapsedMs}ms) verified.`);
 }
 
 console.log('ALL ADR-0024 TESTS PASSED.');

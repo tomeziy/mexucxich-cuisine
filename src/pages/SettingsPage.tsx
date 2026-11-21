@@ -130,6 +130,17 @@ export const SettingsPage: React.FC = () => {
 
   const [settings, setSettings] = useState<ReceiptSettings>(receiptSettings);
   const [savedSuccess, setSavedSuccess] = useState(false);
+  const lastAppliedReceiptSettingsRef = React.useRef(JSON.stringify(receiptSettings));
+
+  React.useEffect(() => {
+    const incomingJson = JSON.stringify(receiptSettings);
+    if (incomingJson !== lastAppliedReceiptSettingsRef.current) {
+      setSettings(prev =>
+        JSON.stringify(prev) === lastAppliedReceiptSettingsRef.current ? receiptSettings : prev
+      );
+      lastAppliedReceiptSettingsRef.current = incomingJson;
+    }
+  }, [receiptSettings]);
 
   // Security & Fast Username+Password Sign-In states (ADR-0024)
   const [secRequireSignIn, setSecRequireSignIn] = useState<boolean>(authConfig.requireSignIn);
@@ -286,6 +297,7 @@ export const SettingsPage: React.FC = () => {
 
   const handleSave = (e: React.FormEvent) => {
     e.preventDefault();
+    lastAppliedReceiptSettingsRef.current = JSON.stringify(settings);
     updateReceiptSettings(settings);
     setSavedSuccess(true);
     setTimeout(() => setSavedSuccess(false), 3000);

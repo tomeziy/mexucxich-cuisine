@@ -207,6 +207,63 @@ export const CustomerSentinelModal: React.FC<CustomerSentinelModalProps> = ({
     return map;
   }, [orders]);
 
+  // Batch counts (must remain above early return to satisfy Rules of Hooks)
+  const toneGhostIds = useMemo(() => {
+    if (!isOpen) return [];
+    const groupsToScan =
+      selectedToneGroups.size > 0
+        ? visibleToneTwins.filter(g => selectedToneGroups.has(g.toneCleanName))
+        : visibleToneTwins;
+    const ids: string[] = [];
+    for (const g of groupsToScan) {
+      const analysis = analyzeToneTwinGroup(g, orders);
+      for (const gid of analysis.ghostCustomerIds) {
+        if (!ids.includes(gid)) ids.push(gid);
+      }
+    }
+    return ids;
+  }, [isOpen, visibleToneTwins, selectedToneGroups, orders]);
+
+  const validMultiPhoneIds = useMemo(() => {
+    if (!isOpen) return [];
+    return auditResult.multiPhoneAnomalies
+      .filter(({ customer }) => {
+        const a1 = analyzeFusedPhone(customer.phone || '');
+        const a2 = analyzeFusedPhone(customer.phone2 || '');
+        const unresolvable = (a1.isFused && a1.status !== 'ok') || (a2.isFused && a2.status !== 'ok');
+        return !unresolvable && repairCustomerFusedPhones(customer).changed;
+      })
+      .map(a => a.customer.id);
+  }, [isOpen, auditResult.multiPhoneAnomalies]);
+
+  const targetMultiPhoneBatchIds = useMemo(() => {
+    if (!isOpen) return [];
+    if (selectedMultiPhoneIds.size > 0) {
+      return validMultiPhoneIds.filter(id => selectedMultiPhoneIds.has(id));
+    }
+    return validMultiPhoneIds;
+  }, [isOpen, validMultiPhoneIds, selectedMultiPhoneIds]);
+
+  const discrepancySafeItems = useMemo(() => {
+    if (!isOpen) return [];
+    const items: Array<{ customerId: string; orderId: string }> = [];
+    for (const disc of visibleDiscrepancies) {
+      const differing = disc.historicalOrders.filter(
+        o =>
+          (o.customerPhone && disc.differingPhones.includes(o.customerPhone.trim())) ||
+          (o.customerAddress && disc.differingAddresses.includes(o.customerAddress.trim())) ||
+          (o.customerName && disc.differingNames.includes(o.customerName.normalize('NFC').trim()))
+      );
+      for (const ord of differing) {
+        const analysis = analyzeDiscrepancyOrder(disc.customer, ord);
+        if (analysis.recommendedAction === 'add_phone2' || analysis.recommendedAction === 'add_extra_address') {
+          items.push({ customerId: disc.customer.id, orderId: ord.id });
+        }
+      }
+    }
+    return items;
+  }, [isOpen, visibleDiscrepancies]);
+
   if (!isOpen) return null;
 
   const getCustomerOrderCount = (c: Customer): number => {
@@ -316,59 +373,6 @@ export const CustomerSentinelModal: React.FC<CustomerSentinelModalProps> = ({
       alert('Tất cả các lỗi đã được sửa hoặc dữ liệu danh bạ đã đạt chuẩn!');
     }
   };
-
-  // Batch counts
-  const toneGhostIds = useMemo(() => {
-    const groupsToScan =
-      selectedToneGroups.size > 0
-        ? visibleToneTwins.filter(g => selectedToneGroups.has(g.toneCleanName))
-        : visibleToneTwins;
-    const ids: string[] = [];
-    for (const g of groupsToScan) {
-      const analysis = analyzeToneTwinGroup(g, orders);
-      for (const gid of analysis.ghostCustomerIds) {
-        if (!ids.includes(gid)) ids.push(gid);
-      }
-    }
-    return ids;
-  }, [visibleToneTwins, selectedToneGroups, orders]);
-
-  const validMultiPhoneIds = useMemo(() => {
-    return auditResult.multiPhoneAnomalies
-      .filter(({ customer }) => {
-        const a1 = analyzeFusedPhone(customer.phone || '');
-        const a2 = analyzeFusedPhone(customer.phone2 || '');
-        const unresolvable = (a1.isFused && a1.status !== 'ok') || (a2.isFused && a2.status !== 'ok');
-        return !unresolvable && repairCustomerFusedPhones(customer).changed;
-      })
-      .map(a => a.customer.id);
-  }, [auditResult.multiPhoneAnomalies]);
-
-  const targetMultiPhoneBatchIds = useMemo(() => {
-    if (selectedMultiPhoneIds.size > 0) {
-      return validMultiPhoneIds.filter(id => selectedMultiPhoneIds.has(id));
-    }
-    return validMultiPhoneIds;
-  }, [validMultiPhoneIds, selectedMultiPhoneIds]);
-
-  const discrepancySafeItems = useMemo(() => {
-    const items: Array<{ customerId: string; orderId: string }> = [];
-    for (const disc of visibleDiscrepancies) {
-      const differing = disc.historicalOrders.filter(
-        o =>
-          (o.customerPhone && disc.differingPhones.includes(o.customerPhone.trim())) ||
-          (o.customerAddress && disc.differingAddresses.includes(o.customerAddress.trim())) ||
-          (o.customerName && disc.differingNames.includes(o.customerName.normalize('NFC').trim()))
-      );
-      for (const ord of differing) {
-        const analysis = analyzeDiscrepancyOrder(disc.customer, ord);
-        if (analysis.recommendedAction === 'add_phone2' || analysis.recommendedAction === 'add_extra_address') {
-          items.push({ customerId: disc.customer.id, orderId: ord.id });
-        }
-      }
-    }
-    return items;
-  }, [visibleDiscrepancies]);
 
   const effectiveAckCount = Math.max(
     acknowledgedCount,

@@ -607,6 +607,14 @@ for (const token of requiredStoreStrings) {
   assert.ok(storeContextSrc.includes(token), `StoreContext.tsx must expose "${token}"`);
 }
 
+const earlyReturnIdx = sentinelModalSrc.indexOf('if (!isOpen) return null;');
+assert.ok(earlyReturnIdx !== -1, 'CustomerSentinelModal.tsx must guard on !isOpen');
+const codeAfterEarlyReturn = sentinelModalSrc.slice(earlyReturnIdx);
+assert.ok(
+  !/\buse(Memo|Effect|State|Callback|Ref|Context)\s*\(/.test(codeAfterEarlyReturn),
+  'CustomerSentinelModal.tsx must NOT call React hooks after early return (prevents React Error #310)'
+);
+
 console.log('✓ UI & StoreContext integration contracts verified.');
 console.log('================================================================');
 console.log('🎉 ALL ADR-0021 SENTINEL & BATCH-EDIT TESTS PASSED!');

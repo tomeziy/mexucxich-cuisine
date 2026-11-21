@@ -40,10 +40,13 @@ export const EditOrderModal: React.FC<EditOrderModalProps> = ({ order, isOpen, o
   const [partialPaidAmount, setPartialPaidAmount] = useState<number>(0);
   const [selectedProductIdToAdd, setSelectedProductIdToAdd] = useState<string>('');
 
+  const customersRef = React.useRef(customers);
+  customersRef.current = customers;
+
   useEffect(() => {
-    if (order) {
+    if (order && isOpen) {
       setItems(JSON.parse(JSON.stringify(order.items || [])));
-      setCustomerId(order.customerId || (customers[0]?.id || 'KH01'));
+      setCustomerId(order.customerId || (customersRef.current[0]?.id || 'KH01'));
       setOrderType(order.orderType || 'direct');
       setStatus(order.status || 'completed');
       setDiscountType(order.discountType || 'cash');
@@ -54,7 +57,7 @@ export const EditOrderModal: React.FC<EditOrderModalProps> = ({ order, isOpen, o
       setPartialPaidAmount(order.paidAmount || 0);
       setSelectedProductIdToAdd('');
     }
-  }, [order, customers]);
+  }, [order, isOpen]);
 
   if (!isOpen || !order) return null;
 

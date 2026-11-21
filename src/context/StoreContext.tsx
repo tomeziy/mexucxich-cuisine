@@ -62,6 +62,7 @@ import {
   reconstructMissingProductsFromOrders,
   pushAllDataToCloud,
   pullAllDataFromCloud,
+  reconcileCloudAndLocalPullData,
   pushCloudTombstones,
   cloudAdjustProductStock,
   cloudAdjustProductsStockBatch,
@@ -499,9 +500,37 @@ export const StoreProvider: React.FC<{ children: React.ReactNode }> = ({ childre
 
   // Đồng bộ ref lưu giữ state mới nhất phục vụ pullAllDataFromCloud chống stale closure
   const stateRef = useRef({ products, customers, orders, debtPayments, receiptSettings });
+  const mutationEpochRef = useRef(0);
   useEffect(() => {
     stateRef.current = { products, customers, orders, debtPayments, receiptSettings };
   }, [products, customers, orders, debtPayments, receiptSettings]);
+
+  const commitProducts = (nextProducts: Product[], dirtyAddIds: string[] = [], dirtyClearIds: string[] = []) => {
+    mutationEpochRef.current += 1;
+    if (dirtyClearIds.length > 0) removeDirtyProductIds(dirtyClearIds);
+    if (dirtyAddIds.length > 0) addDirtyProductIds(dirtyAddIds);
+    stateRef.current.products = nextProducts;
+    localStorage.setItem(STORAGE_KEYS.PRODUCTS, JSON.stringify(nextProducts));
+    setProducts(nextProducts);
+  };
+
+  const commitCustomers = (nextCustomers: Customer[], dirtyAddIds: string[] = [], dirtyClearIds: string[] = []) => {
+    mutationEpochRef.current += 1;
+    if (dirtyClearIds.length > 0) removeDirtyCustomerIds(dirtyClearIds);
+    if (dirtyAddIds.length > 0) addDirtyCustomerIds(dirtyAddIds);
+    stateRef.current.customers = nextCustomers;
+    localStorage.setItem(STORAGE_KEYS.CUSTOMERS, JSON.stringify(nextCustomers));
+    setCustomers(nextCustomers);
+  };
+
+  const commitOrders = (nextOrders: Order[], dirtyAddIds: string[] = [], dirtyClearIds: string[] = []) => {
+    mutationEpochRef.current += 1;
+    if (dirtyClearIds.length > 0) removeDirtyOrderIds(dirtyClearIds);
+    if (dirtyAddIds.length > 0) addDirtyOrderIds(dirtyAddIds);
+    stateRef.current.orders = nextOrders;
+    localStorage.setItem(STORAGE_KEYS.ORDERS, JSON.stringify(nextOrders));
+    setOrders(nextOrders);
+  };
 
   // Sync to localStorage
   useEffect(() => {
@@ -685,6 +714,7 @@ export const StoreProvider: React.FC<{ children: React.ReactNode }> = ({ childre
         dirtyCustomerIds,
       };
 
+      const startEpoch = mutationEpochRef.current;
       const [pullRes, cloudAuth] = await Promise.all([
         pullAllDataFromCloud(localData),
         fetchStoreAuthConfig().catch(() => null),
@@ -724,9 +754,44 @@ export const StoreProvider: React.FC<{ children: React.ReactNode }> = ({ childre
         }
       }
 
-      const unsyncedCusts = pullRes.unsyncedLocalCustomers || [];
+      // If a local mutation occurred while the network pull was in flight, re-reconcile
+      // against the latest stateRef & dirty queues so fresh local edits are never clobbered.
+      let effectivePullRes = pullRes;
+      let effectiveDirtyProductIds = dirtyProductIds;
+      let effectiveDirtyOrderIds = dirtyOrderIds;
+      let effectiveDirtyCustomerIds = dirtyCustomerIds;
+      if (mutationEpochRef.current !== startEpoch && pullRes.cloudRaw) {
+        effectiveDirtyProductIds = loadDirtyProductIds();
+        effectiveDirtyOrderIds = loadDirtyOrderIds();
+        effectiveDirtyCustomerIds = loadDirtyCustomerIds();
+        effectivePullRes = reconcileCloudAndLocalPullData({
+          cloudProductsRaw: pullRes.cloudRaw.products,
+          cloudCustomersRaw: pullRes.cloudRaw.customers,
+          cloudOrdersRaw: pullRes.cloudRaw.orders,
+          cloudDebtPaymentsRaw: pullRes.cloudRaw.debtPayments,
+          cloudHasExtraAddressesCol: pullRes.cloudRaw.cloudHasExtraAddressesCol,
+          cloudTombstones: pullRes.cloudTombstones,
+          cloudCustomersOk: pullRes.cloudRaw.cloudCustomersOk,
+          cloudDebtPaymentsOk: pullRes.cloudRaw.cloudDebtPaymentsOk,
+          settings: pullRes.settings,
+          localData: {
+            products: filterOutDemoAndDeletedProducts(stateRef.current.products),
+            customers: stateRef.current.customers,
+            orders: filterOutDeletedOrders(stateRef.current.orders),
+            debtPayments: stateRef.current.debtPayments,
+            excludedProductIds: Array.from(new Set([...loadPendingDeletedProductIds(), ...loadPurgedProductIds()])),
+            excludedOrderIds: Array.from(new Set([...loadPendingDeletedOrderIds(), ...loadPurgedOrderIds()])),
+            excludedCustomerIds: loadPendingDeletedCustomerIds(),
+            dirtyProductIds: effectiveDirtyProductIds,
+            dirtyOrderIds: effectiveDirtyOrderIds,
+            dirtyCustomerIds: effectiveDirtyCustomerIds,
+          },
+        });
+      }
+
+      const unsyncedCusts = effectivePullRes.unsyncedLocalCustomers || [];
       const unsyncedCustIdSet = new Set(unsyncedCusts.map(c => c.id));
-      const confirmedSyncedCustIds = dirtyCustomerIds.filter(id => !unsyncedCustIdSet.has(id));
+      const confirmedSyncedCustIds = effectiveDirtyCustomerIds.filter(id => !unsyncedCustIdSet.has(id));
       if (confirmedSyncedCustIds.length > 0) {
         removeDirtyCustomerIds(confirmedSyncedCustIds);
       }
@@ -736,16 +801,17 @@ export const StoreProvider: React.FC<{ children: React.ReactNode }> = ({ childre
         });
       }
 
+      const latestCleanProducts = filterOutDemoAndDeletedProducts(stateRef.current.products);
       const reconciledProducts =
-        pullRes.products.length > 0
-          ? filterOutDemoAndDeletedProducts(pullRes.products)
+        effectivePullRes.products.length > 0
+          ? filterOutDemoAndDeletedProducts(effectivePullRes.products)
           : filterOutDemoAndDeletedProducts(
-              applyCatalogAntiShrinkGuard(cleanLocalProducts, pullRes.products).products
+              applyCatalogAntiShrinkGuard(latestCleanProducts, effectivePullRes.products).products
             );
 
-      const unsyncedProds = filterOutDemoAndDeletedProducts(pullRes.unsyncedLocalProducts || []);
+      const unsyncedProds = filterOutDemoAndDeletedProducts(effectivePullRes.unsyncedLocalProducts || []);
       const unsyncedProdIdSet = new Set(unsyncedProds.map(p => p.id));
-      const confirmedSyncedProdIds = dirtyProductIds.filter(id => !unsyncedProdIdSet.has(id));
+      const confirmedSyncedProdIds = effectiveDirtyProductIds.filter(id => !unsyncedProdIdSet.has(id));
       if (confirmedSyncedProdIds.length > 0) {
         removeDirtyProductIds(confirmedSyncedProdIds);
       }
@@ -755,9 +821,9 @@ export const StoreProvider: React.FC<{ children: React.ReactNode }> = ({ childre
         });
       }
 
-      const cleanUnsyncedOrders = filterOutDeletedOrders(pullRes.unsyncedLocalOrders || []);
+      const cleanUnsyncedOrders = filterOutDeletedOrders(effectivePullRes.unsyncedLocalOrders || []);
       const unsyncedOrdIdSet = new Set(cleanUnsyncedOrders.map(o => o.id));
-      const confirmedSyncedOrdIds = dirtyOrderIds.filter(id => !unsyncedOrdIdSet.has(id));
+      const confirmedSyncedOrdIds = effectiveDirtyOrderIds.filter(id => !unsyncedOrdIdSet.has(id));
       if (confirmedSyncedOrdIds.length > 0) {
         removeDirtyOrderIds(confirmedSyncedOrdIds);
       }
@@ -768,12 +834,12 @@ export const StoreProvider: React.FC<{ children: React.ReactNode }> = ({ childre
       }
 
       const stillPendingDeletes = loadPendingDeletedCustomerIds();
-      const ledgerDeletedCusts = pullRes.cloudTombstones?.deletedCustomerIds || [];
-      const safePulledCustomers = filterOutDeletedCustomers(pullRes.customers, [
+      const ledgerDeletedCusts = effectivePullRes.cloudTombstones?.deletedCustomerIds || [];
+      const safePulledCustomers = filterOutDeletedCustomers(effectivePullRes.customers, [
         ...stillPendingDeletes,
         ...ledgerDeletedCusts,
       ]);
-      const safePulledOrders = filterOutDeletedOrders(pullRes.orders);
+      const safePulledOrders = filterOutDeletedOrders(effectivePullRes.orders);
 
       const { repairedCustomers, repairedOrders } = repairAndMigrateCustomers(
         safePulledCustomers,
@@ -785,21 +851,21 @@ export const StoreProvider: React.FC<{ children: React.ReactNode }> = ({ childre
       stateRef.current.products = reconciledProducts;
       stateRef.current.customers = finalPulledCustomers;
       stateRef.current.orders = repairedOrders;
-      stateRef.current.debtPayments = pullRes.debtPayments;
+      stateRef.current.debtPayments = effectivePullRes.debtPayments;
 
       localStorage.setItem(STORAGE_KEYS.PRODUCTS, JSON.stringify(reconciledProducts));
       localStorage.setItem(STORAGE_KEYS.CUSTOMERS, JSON.stringify(finalPulledCustomers));
       localStorage.setItem(STORAGE_KEYS.ORDERS, JSON.stringify(repairedOrders));
-      localStorage.setItem(STORAGE_KEYS.DEBT_PAYMENTS, JSON.stringify(pullRes.debtPayments));
+      localStorage.setItem(STORAGE_KEYS.DEBT_PAYMENTS, JSON.stringify(effectivePullRes.debtPayments));
 
       setProducts(reconciledProducts);
       setCustomers(finalPulledCustomers);
       setOrders(repairedOrders);
-      setDebtPayments(pullRes.debtPayments);
+      setDebtPayments(effectivePullRes.debtPayments);
 
-      if (pullRes.settings) {
+      if (effectivePullRes.settings) {
         setReceiptSettings(prev => {
-          const nextSettings = { ...prev, ...pullRes.settings };
+          const nextSettings = { ...prev, ...effectivePullRes.settings };
           stateRef.current.receiptSettings = nextSettings;
           localStorage.setItem(STORAGE_KEYS.SETTINGS, JSON.stringify(nextSettings));
           return nextSettings;
@@ -807,7 +873,11 @@ export const StoreProvider: React.FC<{ children: React.ReactNode }> = ({ childre
       }
 
       if (phoneRepair.changedCustomers.length > 0) {
-        cloudSyncCustomersBatch(phoneRepair.changedCustomers);
+        const repairedIds = phoneRepair.changedCustomers.map(c => c.id);
+        addDirtyCustomerIds(repairedIds);
+        cloudSyncCustomersBatch(phoneRepair.changedCustomers).then(ok => {
+          if (ok) removeDirtyCustomerIds(repairedIds);
+        });
       }
 
       const syncNow = new Date().toISOString();
@@ -815,7 +885,7 @@ export const StoreProvider: React.FC<{ children: React.ReactNode }> = ({ childre
       setCloudSyncError(null);
       saveSupabaseConfig({ ...activeConfig, autoSync: true, lastSyncedAt: syncNow });
 
-      const preservedCount = pullRes.localPreservedCount || 0;
+      const preservedCount = effectivePullRes.localPreservedCount || 0;
       const note =
         preservedCount > 0 ? ` (Đã bảo toàn ${preservedCount} bản ghi có cập nhật mới hơn trên máy)` : '';
 
@@ -845,28 +915,46 @@ export const StoreProvider: React.FC<{ children: React.ReactNode }> = ({ childre
 
   // Initial pull, focus/visibility/online triggers, and 45s periodic foreground polling (ADR-0023)
   useEffect(() => {
-    const refreshCloud = () => {
-      if (cloudConfig.supabaseUrl && cloudConfig.supabaseAnonKey && cloudConfig.autoSync !== false) {
-        executeCloudPullRef.current?.();
+    let lastPassivePullAt = 0;
+
+    const refreshCloud = (passive = false) => {
+      if (!(cloudConfig.supabaseUrl && cloudConfig.supabaseAnonKey && cloudConfig.autoSync !== false)) {
+        return;
       }
+      if (passive) {
+        const now = Date.now();
+        if (now - lastPassivePullAt < 10000) return;
+        lastPassivePullAt = now;
+      } else {
+        lastPassivePullAt = Date.now();
+      }
+      executeCloudPullRef.current?.();
     };
 
-    refreshCloud();
+    refreshCloud(false);
 
     const handleVisibility = () => {
       if (document.visibilityState === 'visible') {
-        refreshCloud();
+        refreshCloud(true);
       }
+    };
+
+    const handleFocus = () => {
+      refreshCloud(true);
+    };
+
+    const handleOnline = () => {
+      refreshCloud(false);
     };
 
     const intervalId = window.setInterval(() => {
       if (document.visibilityState === 'visible') {
-        refreshCloud();
+        refreshCloud(false);
       }
     }, 45000);
 
-    window.addEventListener('focus', refreshCloud);
-    window.addEventListener('online', refreshCloud);
+    window.addEventListener('focus', handleFocus);
+    window.addEventListener('online', handleOnline);
     document.addEventListener('visibilitychange', handleVisibility);
 
     // ADR-0024 Layer 1: Debounced WebSocket Realtime push wakeup when another device writes
@@ -879,15 +967,15 @@ export const StoreProvider: React.FC<{ children: React.ReactNode }> = ({ childre
       realtimeTimer = window.setTimeout(() => {
         realtimeTimer = null;
         if (document.visibilityState === 'visible' && !isCloudSyncingRef.current) {
-          refreshCloud();
+          refreshCloud(false);
         }
       }, 1500);
     });
 
     return () => {
       window.clearInterval(intervalId);
-      window.removeEventListener('focus', refreshCloud);
-      window.removeEventListener('online', refreshCloud);
+      window.removeEventListener('focus', handleFocus);
+      window.removeEventListener('online', handleOnline);
       document.removeEventListener('visibilitychange', handleVisibility);
       if (realtimeTimer !== null) {
         window.clearTimeout(realtimeTimer);
@@ -983,11 +1071,8 @@ export const StoreProvider: React.FC<{ children: React.ReactNode }> = ({ childre
       createdAt: now,
       updatedAt: now,
     };
-    addDirtyProductIds([newId]);
     const nextProducts = [newProduct, ...stateRef.current.products];
-    stateRef.current.products = nextProducts;
-    localStorage.setItem(STORAGE_KEYS.PRODUCTS, JSON.stringify(nextProducts));
-    setProducts(nextProducts);
+    commitProducts(nextProducts, [newId]);
     cloudSyncProduct(newProduct).then(ok => {
       if (ok) removeDirtyProductIds([newId]);
     });
@@ -1004,11 +1089,8 @@ export const StoreProvider: React.FC<{ children: React.ReactNode }> = ({ childre
       updatedAt: now,
     }));
     const newIds = newProducts.map(p => p.id);
-    addDirtyProductIds(newIds);
     const nextProducts = [...newProducts, ...stateRef.current.products];
-    stateRef.current.products = nextProducts;
-    localStorage.setItem(STORAGE_KEYS.PRODUCTS, JSON.stringify(nextProducts));
-    setProducts(nextProducts);
+    commitProducts(nextProducts, newIds);
     cloudSyncProductsBatch(newProducts).then(ok => {
       if (ok) removeDirtyProductIds(newIds);
     });
@@ -1025,12 +1107,7 @@ export const StoreProvider: React.FC<{ children: React.ReactNode }> = ({ childre
       }
       return p;
     });
-    if (updatedItem) {
-      addDirtyProductIds([id]);
-    }
-    stateRef.current.products = nextProducts;
-    localStorage.setItem(STORAGE_KEYS.PRODUCTS, JSON.stringify(nextProducts));
-    setProducts(nextProducts);
+    commitProducts(nextProducts, updatedItem ? [id] : []);
     if (updatedItem) {
       cloudSyncProduct(updatedItem).then(ok => {
         if (ok) removeDirtyProductIds([id]);
@@ -1039,12 +1116,9 @@ export const StoreProvider: React.FC<{ children: React.ReactNode }> = ({ childre
   };
 
   const deleteProduct = (id: string) => {
-    removeDirtyProductIds([id]);
     addPendingDeletedProductIds([id]);
     const nextProducts = stateRef.current.products.filter(p => p.id !== id);
-    stateRef.current.products = nextProducts;
-    localStorage.setItem(STORAGE_KEYS.PRODUCTS, JSON.stringify(nextProducts));
-    setProducts(nextProducts);
+    commitProducts(nextProducts, [], [id]);
     pushCloudTombstones({ deletedProductIds: [id] });
     cloudDeleteProduct(id).then(res => {
       if (res.success) {
@@ -1073,10 +1147,7 @@ export const StoreProvider: React.FC<{ children: React.ReactNode }> = ({ childre
     if (changedProducts.length === 0) return 0;
 
     const changedIds = changedProducts.map(p => p.id);
-    addDirtyProductIds(changedIds);
-    stateRef.current.products = nextProducts;
-    localStorage.setItem(STORAGE_KEYS.PRODUCTS, JSON.stringify(nextProducts));
-    setProducts(nextProducts);
+    commitProducts(nextProducts, changedIds);
     cloudSyncProductsBatch(changedProducts).then(ok => {
       if (ok) removeDirtyProductIds(changedIds);
     });
@@ -1091,11 +1162,8 @@ export const StoreProvider: React.FC<{ children: React.ReactNode }> = ({ childre
     const removedCount = stateRef.current.products.length - nextProducts.length;
     if (removedCount === 0) return 0;
 
-    removeDirtyProductIds(cleanIds);
     addPendingDeletedProductIds(cleanIds);
-    stateRef.current.products = nextProducts;
-    localStorage.setItem(STORAGE_KEYS.PRODUCTS, JSON.stringify(nextProducts));
-    setProducts(nextProducts);
+    commitProducts(nextProducts, [], cleanIds);
     pushCloudTombstones({ deletedProductIds: cleanIds });
     cloudDeleteProductsBatch(cleanIds).then(res => {
       if (res.success) {
@@ -1122,10 +1190,7 @@ export const StoreProvider: React.FC<{ children: React.ReactNode }> = ({ childre
       updatedAt: now,
     };
     const nextCustomers = [newCustomer, ...stateRef.current.customers];
-    stateRef.current.customers = nextCustomers;
-    localStorage.setItem(STORAGE_KEYS.CUSTOMERS, JSON.stringify(nextCustomers));
-    setCustomers(nextCustomers);
-    addDirtyCustomerIds([newId]);
+    commitCustomers(nextCustomers, [newId]);
     cloudSyncCustomer(newCustomer).then(ok => {
       if (ok) removeDirtyCustomerIds([newId]);
     });
@@ -1150,11 +1215,8 @@ export const StoreProvider: React.FC<{ children: React.ReactNode }> = ({ childre
       };
     });
     const nextCustomers = [...newCustomers, ...stateRef.current.customers];
-    stateRef.current.customers = nextCustomers;
-    localStorage.setItem(STORAGE_KEYS.CUSTOMERS, JSON.stringify(nextCustomers));
-    setCustomers(nextCustomers);
     const newIds = newCustomers.map(c => c.id);
-    addDirtyCustomerIds(newIds);
+    commitCustomers(nextCustomers, newIds);
     cloudSyncCustomersBatch(newCustomers).then(ok => {
       if (ok) removeDirtyCustomerIds(newIds);
     });
@@ -1177,11 +1239,8 @@ export const StoreProvider: React.FC<{ children: React.ReactNode }> = ({ childre
       }
       return c;
     });
-    stateRef.current.customers = nextCustomers;
-    localStorage.setItem(STORAGE_KEYS.CUSTOMERS, JSON.stringify(nextCustomers));
-    setCustomers(nextCustomers);
+    commitCustomers(nextCustomers, updatedItem ? [id] : []);
     if (updatedItem) {
-      addDirtyCustomerIds([id]);
       cloudSyncCustomer(updatedItem).then(ok => {
         if (ok) removeDirtyCustomerIds([id]);
       });
@@ -1212,11 +1271,8 @@ export const StoreProvider: React.FC<{ children: React.ReactNode }> = ({ childre
     });
     if (changedCustomers.length === 0) return 0;
 
-    stateRef.current.customers = nextCustomers;
-    localStorage.setItem(STORAGE_KEYS.CUSTOMERS, JSON.stringify(nextCustomers));
-    setCustomers(nextCustomers);
     const changedIds = changedCustomers.map(c => c.id);
-    addDirtyCustomerIds(changedIds);
+    commitCustomers(nextCustomers, changedIds);
     cloudSyncCustomersBatch(changedCustomers).then(ok => {
       if (ok) removeDirtyCustomerIds(changedIds);
     });
@@ -1225,11 +1281,8 @@ export const StoreProvider: React.FC<{ children: React.ReactNode }> = ({ childre
 
   const deleteCustomer = (id: string) => {
     const nextCustomers = stateRef.current.customers.filter(c => c.id !== id);
-    stateRef.current.customers = nextCustomers;
-    localStorage.setItem(STORAGE_KEYS.CUSTOMERS, JSON.stringify(nextCustomers));
-    setCustomers(nextCustomers);
-    removeDirtyCustomerIds([id]);
     addPendingDeletedCustomerIds([id]);
+    commitCustomers(nextCustomers, [], [id]);
     pushCloudTombstones({ deletedCustomerIds: [id] });
     cloudDeleteCustomer(id).then(res => {
       if (res?.success) removePendingDeletedCustomerIds([id]);
@@ -1249,11 +1302,8 @@ export const StoreProvider: React.FC<{ children: React.ReactNode }> = ({ childre
     if (res.deletedCount === 0) {
       return { deletedCount: 0, skippedIds: res.skippedIds };
     }
-    stateRef.current.customers = res.nextCustomers;
-    localStorage.setItem(STORAGE_KEYS.CUSTOMERS, JSON.stringify(res.nextCustomers));
-    setCustomers(res.nextCustomers);
-    removeDirtyCustomerIds(res.deletedIds);
     addPendingDeletedCustomerIds(res.deletedIds);
+    commitCustomers(res.nextCustomers, [], res.deletedIds);
     pushCloudTombstones({ deletedCustomerIds: res.deletedIds });
     cloudDeleteCustomersBatch(res.deletedIds).then(cloudRes => {
       if (cloudRes?.success) removePendingDeletedCustomerIds(res.deletedIds);
@@ -1267,17 +1317,17 @@ export const StoreProvider: React.FC<{ children: React.ReactNode }> = ({ childre
 
   // Sentinel Customer Repair & Decoupling actions (ADR-0017 & ADR-0020)
   const repairCustomerData = (): MigrationRepairResult => {
-    const result = repairAndMigrateCustomers(customers, orders);
+    const currentCustomers = stateRef.current.customers;
+    const currentOrders = stateRef.current.orders;
+    const result = repairAndMigrateCustomers(currentCustomers, currentOrders);
     const phoneRepair = repairFusedPhonesBatch(result.repairedCustomers);
     const combinedLog = [...result.log, ...phoneRepair.log];
     const totalChanges = result.changesCount + phoneRepair.changedCustomers.length;
 
     if (totalChanges > 0) {
-      setCustomers(phoneRepair.customers);
-      setOrders(result.repairedOrders);
       const changedSet = new Map<string, Customer>();
       if (result.changesCount > 0) {
-        const origMap = new Map(customers.map(c => [c.id, c]));
+        const origMap = new Map(currentCustomers.map(c => [c.id, c]));
         for (const rc of phoneRepair.customers) {
           const orig = origMap.get(rc.id);
           if (!orig || orig.phone !== rc.phone || orig.phone2 !== rc.phone2 || orig.name !== rc.name || orig.address !== rc.address) {
@@ -1289,13 +1339,29 @@ export const StoreProvider: React.FC<{ children: React.ReactNode }> = ({ childre
         changedSet.set(cc.id, cc);
       }
       const toSync = Array.from(changedSet.values());
+      const toSyncIds = toSync.map(c => c.id);
+
+      const origOrderMap = new Map(currentOrders.map(o => [o.id, o]));
+      const changedOrders = result.changesCount > 0
+        ? result.repairedOrders.filter(ord => {
+            const orig = origOrderMap.get(ord.id);
+            return !orig || orig.customerId !== ord.customerId || orig.customerName !== ord.customerName;
+          })
+        : [];
+      const changedOrdIds = changedOrders.map(o => o.id);
+
+      commitCustomers(phoneRepair.customers, toSyncIds);
+      commitOrders(result.repairedOrders, changedOrdIds);
+
       if (toSync.length > 0) {
-        cloudSyncCustomersBatch(toSync);
+        cloudSyncCustomersBatch(toSync).then(ok => {
+          if (ok) removeDirtyCustomerIds(toSyncIds);
+        });
       }
-      if (result.changesCount > 0) {
-        for (const ord of result.repairedOrders) {
-          cloudSyncOrder(ord);
-        }
+      if (changedOrders.length > 0) {
+        cloudSyncOrdersBatch(changedOrders).then(ok => {
+          if (ok) removeDirtyOrderIds(changedOrdIds);
+        });
       }
     }
 
@@ -1313,10 +1379,10 @@ export const StoreProvider: React.FC<{ children: React.ReactNode }> = ({ childre
     const res = repairCustomerFusedPhones(target);
     if (!res.changed) return;
     const nextCustomers = stateRef.current.customers.map(c => (c.id === customerId ? res.customer : c));
-    stateRef.current.customers = nextCustomers;
-    localStorage.setItem(STORAGE_KEYS.CUSTOMERS, JSON.stringify(nextCustomers));
-    setCustomers(nextCustomers);
-    cloudSyncCustomer(res.customer);
+    commitCustomers(nextCustomers, [customerId]);
+    cloudSyncCustomer(res.customer).then(ok => {
+      if (ok) removeDirtyCustomerIds([customerId]);
+    });
   };
 
   const acceptAllPhoneSplitsBatch = (customerIds: string[]): number => {
@@ -1334,10 +1400,11 @@ export const StoreProvider: React.FC<{ children: React.ReactNode }> = ({ childre
       return c;
     });
     if (changedCustomers.length > 0) {
-      stateRef.current.customers = nextCustomers;
-      localStorage.setItem(STORAGE_KEYS.CUSTOMERS, JSON.stringify(nextCustomers));
-      setCustomers(nextCustomers);
-      cloudSyncCustomersBatch(changedCustomers);
+      const changedIds = changedCustomers.map(c => c.id);
+      commitCustomers(nextCustomers, changedIds);
+      cloudSyncCustomersBatch(changedCustomers).then(ok => {
+        if (ok) removeDirtyCustomerIds(changedIds);
+      });
     }
     return changedCustomers.length;
   };
@@ -1348,10 +1415,10 @@ export const StoreProvider: React.FC<{ children: React.ReactNode }> = ({ childre
     const res = convertAddressToExtraAddresses(target);
     if (!res.changed) return;
     const nextCustomers = stateRef.current.customers.map(c => (c.id === customerId ? res.customer : c));
-    stateRef.current.customers = nextCustomers;
-    localStorage.setItem(STORAGE_KEYS.CUSTOMERS, JSON.stringify(nextCustomers));
-    setCustomers(nextCustomers);
-    cloudSyncCustomer(res.customer);
+    commitCustomers(nextCustomers, [customerId]);
+    cloudSyncCustomer(res.customer).then(ok => {
+      if (ok) removeDirtyCustomerIds([customerId]);
+    });
   };
 
   const promoteMultiAddressesBatch = (customerIds: string[]): number => {
@@ -1369,10 +1436,11 @@ export const StoreProvider: React.FC<{ children: React.ReactNode }> = ({ childre
       return c;
     });
     if (changedCustomers.length > 0) {
-      stateRef.current.customers = nextList;
-      localStorage.setItem(STORAGE_KEYS.CUSTOMERS, JSON.stringify(nextList));
-      setCustomers(nextList);
-      cloudSyncCustomersBatch(changedCustomers);
+      const changedIds = changedCustomers.map(c => c.id);
+      commitCustomers(nextList, changedIds);
+      cloudSyncCustomersBatch(changedCustomers).then(ok => {
+        if (ok) removeDirtyCustomerIds(changedIds);
+      });
     }
     return changedCustomers.length;
   };
@@ -1393,18 +1461,20 @@ export const StoreProvider: React.FC<{ children: React.ReactNode }> = ({ childre
       .map(c => (c.id === customerId ? customerA : c))
       .concat(customerB);
 
-    stateRef.current.customers = nextCustomers;
-    localStorage.setItem(STORAGE_KEYS.CUSTOMERS, JSON.stringify(nextCustomers));
-    setCustomers(nextCustomers);
-    cloudSyncCustomersBatch([customerA, customerB]);
+    const changedCustIds = [customerA.id, customerB.id];
+    commitCustomers(nextCustomers, changedCustIds);
+    cloudSyncCustomersBatch([customerA, customerB]).then(ok => {
+      if (ok) removeDirtyCustomerIds(changedCustIds);
+    });
 
     if (ordersToUpdate.length > 0) {
       const updateMap = new Map(ordersToUpdate.map(u => [u.id, u]));
       const nextOrders = currentOrders.map(o => updateMap.get(o.id) || o);
-      stateRef.current.orders = nextOrders;
-      localStorage.setItem(STORAGE_KEYS.ORDERS, JSON.stringify(nextOrders));
-      setOrders(nextOrders);
-      cloudSyncOrdersBatch(ordersToUpdate);
+      const changedOrdIds = ordersToUpdate.map(o => o.id);
+      commitOrders(nextOrders, changedOrdIds);
+      cloudSyncOrdersBatch(ordersToUpdate).then(ok => {
+        if (ok) removeDirtyOrderIds(changedOrdIds);
+      });
     }
   };
 
@@ -1424,11 +1494,11 @@ export const StoreProvider: React.FC<{ children: React.ReactNode }> = ({ childre
       .map(c => (c.id === primaryId ? mergedCustomer : c));
 
     const dupIds = duplicates.map(d => d.id);
-    stateRef.current.customers = nextCustomers;
-    localStorage.setItem(STORAGE_KEYS.CUSTOMERS, JSON.stringify(nextCustomers));
-    setCustomers(nextCustomers);
-    cloudSyncCustomer(mergedCustomer);
     addPendingDeletedCustomerIds(dupIds);
+    commitCustomers(nextCustomers, [primaryId], dupIds);
+    cloudSyncCustomer(mergedCustomer).then(ok => {
+      if (ok) removeDirtyCustomerIds([primaryId]);
+    });
     pushCloudTombstones({ deletedCustomerIds: dupIds });
     cloudDeleteCustomersBatch(dupIds).then(cloudRes => {
       if (cloudRes?.success) removePendingDeletedCustomerIds(dupIds);
@@ -1437,10 +1507,11 @@ export const StoreProvider: React.FC<{ children: React.ReactNode }> = ({ childre
     if (ordersToUpdate.length > 0) {
       const updateMap = new Map(ordersToUpdate.map(u => [u.id, u]));
       const nextOrders = currentOrders.map(o => updateMap.get(o.id) || o);
-      stateRef.current.orders = nextOrders;
-      localStorage.setItem(STORAGE_KEYS.ORDERS, JSON.stringify(nextOrders));
-      setOrders(nextOrders);
-      cloudSyncOrdersBatch(ordersToUpdate);
+      const changedOrdIds = ordersToUpdate.map(o => o.id);
+      commitOrders(nextOrders, changedOrdIds);
+      cloudSyncOrdersBatch(ordersToUpdate).then(ok => {
+        if (ok) removeDirtyOrderIds(changedOrdIds);
+      });
     }
   };
 
@@ -1484,15 +1555,21 @@ export const StoreProvider: React.FC<{ children: React.ReactNode }> = ({ childre
     }
 
     if (mergedGroupsCount > 0) {
-      stateRef.current.customers = workingCustomers;
-      localStorage.setItem(STORAGE_KEYS.CUSTOMERS, JSON.stringify(workingCustomers));
-      setCustomers(workingCustomers);
-
       const changedPrimaries = Array.from(updatedPrimaryMap.values());
-      if (changedPrimaries.length > 0) cloudSyncCustomersBatch(changedPrimaries);
-      if (deletedIds.size > 0) {
-        const delArr = Array.from(deletedIds);
+      const changedPrimaryIds = changedPrimaries.map(c => c.id);
+      const delArr = Array.from(deletedIds);
+
+      if (delArr.length > 0) {
         addPendingDeletedCustomerIds(delArr);
+      }
+      commitCustomers(workingCustomers, changedPrimaryIds, delArr);
+
+      if (changedPrimaries.length > 0) {
+        cloudSyncCustomersBatch(changedPrimaries).then(ok => {
+          if (ok) removeDirtyCustomerIds(changedPrimaryIds);
+        });
+      }
+      if (delArr.length > 0) {
         pushCloudTombstones({ deletedCustomerIds: delArr });
         cloudDeleteCustomersBatch(delArr).then(cloudRes => {
           if (cloudRes?.success) removePendingDeletedCustomerIds(delArr);
@@ -1500,10 +1577,12 @@ export const StoreProvider: React.FC<{ children: React.ReactNode }> = ({ childre
       }
 
       if (updatedOrderMap.size > 0) {
-        stateRef.current.orders = workingOrders;
-        localStorage.setItem(STORAGE_KEYS.ORDERS, JSON.stringify(workingOrders));
-        setOrders(workingOrders);
-        cloudSyncOrdersBatch(Array.from(updatedOrderMap.values()));
+        const changedOrds = Array.from(updatedOrderMap.values());
+        const changedOrdIds = changedOrds.map(o => o.id);
+        commitOrders(workingOrders, changedOrdIds);
+        cloudSyncOrdersBatch(changedOrds).then(ok => {
+          if (ok) removeDirtyOrderIds(changedOrdIds);
+        });
       }
     }
 
@@ -1515,6 +1594,39 @@ export const StoreProvider: React.FC<{ children: React.ReactNode }> = ({ childre
   };
 
   // Order actions
+  const applyStockAdjustments = (adjustments: Array<{ productId: string; delta: number }>, now: string) => {
+    if (adjustments.length === 0) return;
+    const deltaMap = new Map(adjustments.map(a => [a.productId, a.delta]));
+    const touchedIds = adjustments.map(a => a.productId);
+    const nextProducts = stateRef.current.products.map(prod => {
+      const delta = deltaMap.get(prod.id);
+      if (delta !== undefined && delta !== 0) {
+        return { ...prod, stock: calculateStockDelta(prod.stock, delta), updatedAt: now };
+      }
+      return prod;
+    });
+    commitProducts(nextProducts, touchedIds);
+
+    cloudAdjustProductsStockBatch(adjustments).then(results => {
+      if (!results || results.length === 0) return;
+      const syncedIds = results.filter(r => r.success).map(r => r.productId);
+      const stockPatch = new Map<string, number>();
+      for (const r of results) {
+        if (r.success && typeof r.newStock === 'number') {
+          stockPatch.set(r.productId, Math.round(r.newStock * 10000) / 10000);
+        }
+      }
+      if (stockPatch.size > 0) {
+        const reconciled = stateRef.current.products.map(p =>
+          stockPatch.has(p.id) ? { ...p, stock: stockPatch.get(p.id)! } : p
+        );
+        commitProducts(reconciled, [], syncedIds);
+      } else if (syncedIds.length > 0) {
+        removeDirtyProductIds(syncedIds);
+      }
+    });
+  };
+
   const createOrder = (orderData: Omit<Order, 'id' | 'createdAt'>): Order => {
     const newId = 'HD' + Math.floor(1000 + Math.random() * 9000);
     const now = new Date().toISOString();
@@ -1526,7 +1638,6 @@ export const StoreProvider: React.FC<{ children: React.ReactNode }> = ({ childre
     };
 
     // 1. Trừ tồn kho nguyên tử chống Race Condition (ADR-0003 & ADR-0008)
-    // Gom nhóm số lượng theo productId để xử lý chính xác nhiều dòng cùng 1 món
     const qtyByProduct = new Map<string, number>();
     for (const item of newOrder.items || []) {
       if (item && item.productId) {
@@ -1536,73 +1647,43 @@ export const StoreProvider: React.FC<{ children: React.ReactNode }> = ({ childre
         );
       }
     }
-
     if (qtyByProduct.size > 0) {
-      setProducts(prevProducts =>
-        prevProducts.map(prod => {
-          const qty = qtyByProduct.get(prod.id);
-          if (qty && qty > 0) {
-            const newStock = calculateStockDelta(prod.stock, -qty);
-            return { ...prod, stock: newStock, updatedAt: now };
-          }
-          return prod;
-        })
-      );
-
       const adjustments = Array.from(qtyByProduct.entries()).map(([productId, qty]) => ({
         productId,
         delta: Math.round(-qty * 10000) / 10000,
       }));
-
-      cloudAdjustProductsStockBatch(adjustments).then(results => {
-        if (results && results.length > 0) {
-          setProducts(prev =>
-            prev.map(p => {
-              const match = results.find(r => r.productId === p.id && r.success && typeof r.newStock === 'number');
-              if (match && typeof match.newStock === 'number') {
-                return { ...p, stock: Math.round(match.newStock * 10000) / 10000 };
-              }
-              return p;
-            })
-          );
-        }
-      });
+      applyStockAdjustments(adjustments, now);
     }
 
     // 2. Update customer metrics & debt if applicable (ADR-0002)
     if (newOrder.customerId) {
-      setCustomers(prevCustomers => {
-        let updatedCust: Customer | null = null;
-        const nextList = prevCustomers.map(cust => {
-          if (cust.id === newOrder.customerId) {
-            const newDebt = cust.debt + (newOrder.debtAmount || 0);
-            const newTotalSpent = (cust.totalSpent || 0) + newOrder.total;
-            const newOrderCount = (cust.orderCount || 0) + 1;
-            const updated = {
-              ...cust,
-              debt: newDebt,
-              totalSpent: newTotalSpent,
-              orderCount: newOrderCount,
-              updatedAt: now,
-            };
-            updatedCust = updated;
-            return updated;
-          }
-          return cust;
-        });
-        if (updatedCust) {
-          cloudSyncCustomer(updatedCust);
+      let updatedCust: Customer | null = null;
+      const nextCustomers = stateRef.current.customers.map(cust => {
+        if (cust.id === newOrder.customerId) {
+          const updated = {
+            ...cust,
+            debt: cust.debt + (newOrder.debtAmount || 0),
+            totalSpent: (cust.totalSpent || 0) + newOrder.total,
+            orderCount: (cust.orderCount || 0) + 1,
+            updatedAt: now,
+          };
+          updatedCust = updated;
+          return updated;
         }
-        return nextList;
+        return cust;
       });
+      if (updatedCust) {
+        const custId = newOrder.customerId;
+        commitCustomers(nextCustomers, [custId]);
+        cloudSyncCustomer(updatedCust).then(ok => {
+          if (ok) removeDirtyCustomerIds([custId]);
+        });
+      }
     }
 
     // 3. Save order to list & Cloud
-    addDirtyOrderIds([newOrder.id]);
     const nextOrders = [newOrder, ...stateRef.current.orders];
-    stateRef.current.orders = nextOrders;
-    localStorage.setItem(STORAGE_KEYS.ORDERS, JSON.stringify(nextOrders));
-    setOrders(nextOrders);
+    commitOrders(nextOrders, [newOrder.id]);
     cloudSyncOrder(newOrder).then(ok => {
       if (ok) removeDirtyOrderIds([newOrder.id]);
     });
@@ -1621,10 +1702,7 @@ export const StoreProvider: React.FC<{ children: React.ReactNode }> = ({ childre
       return order;
     });
     if (updatedOrder) {
-      addDirtyOrderIds([orderId]);
-      stateRef.current.orders = nextOrders;
-      localStorage.setItem(STORAGE_KEYS.ORDERS, JSON.stringify(nextOrders));
-      setOrders(nextOrders);
+      commitOrders(nextOrders, [orderId]);
       cloudSyncOrder(updatedOrder).then(ok => {
         if (ok) removeDirtyOrderIds([orderId]);
       });
@@ -1633,7 +1711,7 @@ export const StoreProvider: React.FC<{ children: React.ReactNode }> = ({ childre
 
   // SỬA HÓA ĐƠN TOÀN DIỆN (ADR-0006 & ADR-0008)
   const updateOrder = (orderId: string, updatedOrder: Order) => {
-    const oldOrder = orders.find(o => o.id === orderId);
+    const oldOrder = stateRef.current.orders.find(o => o.id === orderId);
     if (!oldOrder) return;
     const now = new Date().toISOString();
 
@@ -1665,106 +1743,76 @@ export const StoreProvider: React.FC<{ children: React.ReactNode }> = ({ childre
       for (const pId of allProdIds) {
         const oldQ = oldQtyMap.get(pId) || 0;
         const newQ = newQtyMap.get(pId) || 0;
-        const qtyDiff = Math.round((newQ - oldQ) * 10000) / 10000; // dương = mua thêm (delta = -qtyDiff), âm = bớt đi (delta = +)
+        const qtyDiff = Math.round((newQ - oldQ) * 10000) / 10000;
         if (qtyDiff !== 0) {
           adjustments.push({ productId: pId, delta: Math.round(-qtyDiff * 10000) / 10000 });
         }
       }
 
       if (adjustments.length > 0) {
-        const deltaMap = new Map(adjustments.map(a => [a.productId, a.delta]));
-        setProducts(prevProducts =>
-          prevProducts.map(prod => {
-            const delta = deltaMap.get(prod.id);
-            if (delta !== undefined && delta !== 0) {
-              const newStock = calculateStockDelta(prod.stock, delta);
-              return { ...prod, stock: newStock, updatedAt: now };
-            }
-            return prod;
-          })
-        );
-
-        cloudAdjustProductsStockBatch(adjustments).then(results => {
-          if (results && results.length > 0) {
-            setProducts(prev =>
-              prev.map(p => {
-                const match = results.find(r => r.productId === p.id && r.success && typeof r.newStock === 'number');
-                if (match && typeof match.newStock === 'number') {
-                  return { ...p, stock: Math.round(match.newStock * 10000) / 10000 };
-                }
-                return p;
-              })
-            );
-          }
-        });
+        applyStockAdjustments(adjustments, now);
       }
     }
 
     // 2. TÍNH BÙ TRỪ CÔNG NỢ & DOANH THU KHÁCH HÀNG (ADR-0002 & ADR-0006)
-    setCustomers(prevCustomers => {
-      const customersToSync: Customer[] = [];
-      let nextList = prevCustomers;
+    const customersToSync: Customer[] = [];
+    let nextCustomers = stateRef.current.customers;
+    if (oldOrder.customerId === updatedOrder.customerId && updatedOrder.customerId) {
+      const debtDelta = (updatedOrder.debtAmount || 0) - (oldOrder.debtAmount || 0);
+      const spentDelta = updatedOrder.total - oldOrder.total;
 
-      // Trường hợp cùng 1 khách hàng
-      if (oldOrder.customerId === updatedOrder.customerId && updatedOrder.customerId) {
-        const debtDelta = (updatedOrder.debtAmount || 0) - (oldOrder.debtAmount || 0);
-        const spentDelta = updatedOrder.total - oldOrder.total;
-
-        nextList = prevCustomers.map(cust => {
-          if (cust.id === updatedOrder.customerId) {
-            const updated = {
-              ...cust,
-              debt: Math.max(0, cust.debt + debtDelta),
-              totalSpent: Math.max(0, (cust.totalSpent || 0) + spentDelta),
-              updatedAt: now,
-            };
-            customersToSync.push(updated);
-            return updated;
-          }
-          return cust;
-        });
-      } else {
-        // Trường hợp thay đổi khách hàng cho đơn
-        nextList = prevCustomers.map(cust => {
-          if (oldOrder.customerId && cust.id === oldOrder.customerId) {
-            const updated = {
-              ...cust,
-              debt: Math.max(0, cust.debt - (oldOrder.debtAmount || 0)),
-              totalSpent: Math.max(0, (cust.totalSpent || 0) - oldOrder.total),
-              orderCount: Math.max(0, (cust.orderCount || 0) - 1),
-              updatedAt: now,
-            };
-            customersToSync.push(updated);
-            return updated;
-          }
-          if (updatedOrder.customerId && cust.id === updatedOrder.customerId) {
-            const updated = {
-              ...cust,
-              debt: cust.debt + (updatedOrder.debtAmount || 0),
-              totalSpent: (cust.totalSpent || 0) + updatedOrder.total,
-              orderCount: (cust.orderCount || 0) + 1,
-              updatedAt: now,
-            };
-            customersToSync.push(updated);
-            return updated;
-          }
-          return cust;
-        });
-      }
-
-      for (const c of customersToSync) {
-        cloudSyncCustomer(c);
-      }
-      return nextList;
-    });
+      nextCustomers = stateRef.current.customers.map(cust => {
+        if (cust.id === updatedOrder.customerId) {
+          const updated = {
+            ...cust,
+            debt: Math.max(0, cust.debt + debtDelta),
+            totalSpent: Math.max(0, (cust.totalSpent || 0) + spentDelta),
+            updatedAt: now,
+          };
+          customersToSync.push(updated);
+          return updated;
+        }
+        return cust;
+      });
+    } else if (oldOrder.customerId !== updatedOrder.customerId) {
+      nextCustomers = stateRef.current.customers.map(cust => {
+        if (oldOrder.customerId && cust.id === oldOrder.customerId) {
+          const updated = {
+            ...cust,
+            debt: Math.max(0, cust.debt - (oldOrder.debtAmount || 0)),
+            totalSpent: Math.max(0, (cust.totalSpent || 0) - oldOrder.total),
+            orderCount: Math.max(0, (cust.orderCount || 0) - 1),
+            updatedAt: now,
+          };
+          customersToSync.push(updated);
+          return updated;
+        }
+        if (updatedOrder.customerId && cust.id === updatedOrder.customerId) {
+          const updated = {
+            ...cust,
+            debt: cust.debt + (updatedOrder.debtAmount || 0),
+            totalSpent: (cust.totalSpent || 0) + updatedOrder.total,
+            orderCount: (cust.orderCount || 0) + 1,
+            updatedAt: now,
+          };
+          customersToSync.push(updated);
+          return updated;
+        }
+        return cust;
+      });
+    }
+    if (customersToSync.length > 0) {
+      const syncIds = customersToSync.map(c => c.id);
+      commitCustomers(nextCustomers, syncIds);
+      cloudSyncCustomersBatch(customersToSync).then(ok => {
+        if (ok) removeDirtyCustomerIds(syncIds);
+      });
+    }
 
     // 3. CẬP NHẬT ĐƠN HÀNG TRONG DANH SÁCH & CLOUD
     const orderToSave: Order = { ...updatedOrder, updatedAt: now };
-    addDirtyOrderIds([orderId]);
     const nextOrders = stateRef.current.orders.map(o => (o.id === orderId ? orderToSave : o));
-    stateRef.current.orders = nextOrders;
-    localStorage.setItem(STORAGE_KEYS.ORDERS, JSON.stringify(nextOrders));
-    setOrders(nextOrders);
+    commitOrders(nextOrders, [orderId]);
     cloudSyncOrder(orderToSave).then(ok => {
       if (ok) removeDirtyOrderIds([orderId]);
     });
@@ -1772,7 +1820,7 @@ export const StoreProvider: React.FC<{ children: React.ReactNode }> = ({ childre
 
   // XÓA VĨNH VIỄN HÓA ĐƠN KÈM HOÀN KHO & TRỪ NỢ (ADR-0006 & ADR-0008)
   const deleteOrder = (orderId: string) => {
-    const orderToDelete = orders.find(o => o.id === orderId);
+    const orderToDelete = stateRef.current.orders.find(o => o.id === orderId);
     if (!orderToDelete) return;
     const now = new Date().toISOString();
 
@@ -1790,70 +1838,43 @@ export const StoreProvider: React.FC<{ children: React.ReactNode }> = ({ childre
 
       const adjustments = Array.from(returnQtyMap.entries()).map(([productId, qty]) => ({
         productId,
-        delta: Math.round(qty * 10000) / 10000, // hoàn kho: delta dương
+        delta: Math.round(qty * 10000) / 10000,
       }));
-
       if (adjustments.length > 0) {
-        const deltaMap = new Map(adjustments.map(a => [a.productId, a.delta]));
-        setProducts(prevProducts =>
-          prevProducts.map(prod => {
-            const delta = deltaMap.get(prod.id);
-            if (delta !== undefined && delta !== 0) {
-              const newStock = calculateStockDelta(prod.stock, delta);
-              return { ...prod, stock: newStock, updatedAt: now };
-            }
-            return prod;
-          })
-        );
-
-        cloudAdjustProductsStockBatch(adjustments).then(results => {
-          if (results && results.length > 0) {
-            setProducts(prev =>
-              prev.map(p => {
-                const match = results.find(r => r.productId === p.id && r.success && typeof r.newStock === 'number');
-                if (match && typeof match.newStock === 'number') {
-                  return { ...p, stock: Math.round(match.newStock * 10000) / 10000 };
-                }
-                return p;
-              })
-            );
-          }
-        });
+        applyStockAdjustments(adjustments, now);
       }
 
       // 2. Giảm trừ dư nợ & doanh thu lũy kế của khách hàng
       if (orderToDelete.customerId) {
-        setCustomers(prevCustomers => {
-          let updatedCust: Customer | null = null;
-          const nextList = prevCustomers.map(cust => {
-            if (cust.id === orderToDelete.customerId) {
-              const updated = {
-                ...cust,
-                debt: Math.max(0, cust.debt - (orderToDelete.debtAmount || 0)),
-                totalSpent: Math.max(0, (cust.totalSpent || 0) - orderToDelete.total),
-                orderCount: Math.max(0, (cust.orderCount || 0) - 1),
-                updatedAt: now,
-              };
-              updatedCust = updated;
-              return updated;
-            }
-            return cust;
-          });
-          if (updatedCust) {
-            cloudSyncCustomer(updatedCust);
+        let updatedCust: Customer | null = null;
+        const nextCustomers = stateRef.current.customers.map(cust => {
+          if (cust.id === orderToDelete.customerId) {
+            const updated = {
+              ...cust,
+              debt: Math.max(0, cust.debt - (orderToDelete.debtAmount || 0)),
+              totalSpent: Math.max(0, (cust.totalSpent || 0) - orderToDelete.total),
+              orderCount: Math.max(0, (cust.orderCount || 0) - 1),
+              updatedAt: now,
+            };
+            updatedCust = updated;
+            return updated;
           }
-          return nextList;
+          return cust;
         });
+        if (updatedCust) {
+          const custId = orderToDelete.customerId;
+          commitCustomers(nextCustomers, [custId]);
+          cloudSyncCustomer(updatedCust).then(ok => {
+            if (ok) removeDirtyCustomerIds([custId]);
+          });
+        }
       }
     }
 
     // 3. Xóa đơn khỏi danh sách & Cloud (kèm tombstone chống tái sinh đa thiết bị)
-    removeDirtyOrderIds([orderId]);
     addPendingDeletedOrderIds([orderId]);
     const nextOrders = stateRef.current.orders.filter(o => o.id !== orderId);
-    stateRef.current.orders = nextOrders;
-    localStorage.setItem(STORAGE_KEYS.ORDERS, JSON.stringify(nextOrders));
-    setOrders(nextOrders);
+    commitOrders(nextOrders, [], [orderId]);
     pushCloudTombstones({ deletedOrderIds: [orderId] });
     cloudDeleteOrder(orderId).then(res => {
       if (res.success) {
@@ -1864,7 +1885,7 @@ export const StoreProvider: React.FC<{ children: React.ReactNode }> = ({ childre
 
   // Hủy đơn hàng (Soft-cancel với auto-restock nguyên tử - ADR-0003 & ADR-0008)
   const cancelOrder = (orderId: string) => {
-    const orderToCancel = orders.find(o => o.id === orderId);
+    const orderToCancel = stateRef.current.orders.find(o => o.id === orderId);
     if (!orderToCancel || orderToCancel.status === 'cancelled') return;
     const now = new Date().toISOString();
 
@@ -1881,60 +1902,36 @@ export const StoreProvider: React.FC<{ children: React.ReactNode }> = ({ childre
 
     const adjustments = Array.from(returnQtyMap.entries()).map(([productId, qty]) => ({
       productId,
-      delta: Math.round(qty * 10000) / 10000, // restock
+      delta: Math.round(qty * 10000) / 10000,
     }));
-
     if (adjustments.length > 0) {
-      const deltaMap = new Map(adjustments.map(a => [a.productId, a.delta]));
-      setProducts(prevProducts =>
-        prevProducts.map(prod => {
-          const delta = deltaMap.get(prod.id);
-          if (delta !== undefined && delta !== 0) {
-            const newStock = calculateStockDelta(prod.stock, delta);
-            return { ...prod, stock: newStock, updatedAt: now };
-          }
-          return prod;
-        })
-      );
-
-      cloudAdjustProductsStockBatch(adjustments).then(results => {
-        if (results && results.length > 0) {
-          setProducts(prev =>
-            prev.map(p => {
-              const match = results.find(r => r.productId === p.id && r.success && typeof r.newStock === 'number');
-              if (match && typeof match.newStock === 'number') {
-                return { ...p, stock: Math.round(match.newStock * 10000) / 10000 };
-              }
-              return p;
-            })
-          );
-        }
-      });
+      applyStockAdjustments(adjustments, now);
     }
 
     // 2. Reverse customer debt if order had debt
     if (orderToCancel.customerId && orderToCancel.debtAmount > 0) {
-      setCustomers(prevCustomers => {
-        let updatedCust: Customer | null = null;
-        const nextList = prevCustomers.map(cust => {
-          if (cust.id === orderToCancel.customerId) {
-            const updated = {
-              ...cust,
-              debt: Math.max(0, cust.debt - orderToCancel.debtAmount),
-              totalSpent: Math.max(0, (cust.totalSpent || 0) - orderToCancel.total),
-              orderCount: Math.max(0, (cust.orderCount || 0) - 1),
-              updatedAt: now,
-            };
-            updatedCust = updated;
-            return updated;
-          }
-          return cust;
-        });
-        if (updatedCust) {
-          cloudSyncCustomer(updatedCust);
+      let updatedCust: Customer | null = null;
+      const nextCustomers = stateRef.current.customers.map(cust => {
+        if (cust.id === orderToCancel.customerId) {
+          const updated = {
+            ...cust,
+            debt: Math.max(0, cust.debt - orderToCancel.debtAmount),
+            totalSpent: Math.max(0, (cust.totalSpent || 0) - orderToCancel.total),
+            orderCount: Math.max(0, (cust.orderCount || 0) - 1),
+            updatedAt: now,
+          };
+          updatedCust = updated;
+          return updated;
         }
-        return nextList;
+        return cust;
       });
+      if (updatedCust) {
+        const custId = orderToCancel.customerId;
+        commitCustomers(nextCustomers, [custId]);
+        cloudSyncCustomer(updatedCust).then(ok => {
+          if (ok) removeDirtyCustomerIds([custId]);
+        });
+      }
     }
 
     // 3. Mark as cancelled & Cloud
@@ -1947,10 +1944,7 @@ export const StoreProvider: React.FC<{ children: React.ReactNode }> = ({ childre
       return o;
     });
     if (cancelledOrder) {
-      addDirtyOrderIds([orderId]);
-      stateRef.current.orders = nextOrders;
-      localStorage.setItem(STORAGE_KEYS.ORDERS, JSON.stringify(nextOrders));
-      setOrders(nextOrders);
+      commitOrders(nextOrders, [orderId]);
       cloudSyncOrder(cancelledOrder).then(ok => {
         if (ok) removeDirtyOrderIds([orderId]);
       });
@@ -1959,7 +1953,7 @@ export const StoreProvider: React.FC<{ children: React.ReactNode }> = ({ childre
 
   // Debt payment action (ADR-0002 - Running Balance)
   const payDebt = (customerId: string, amount: number, paymentMethod: 'cash' | 'transfer', note?: string) => {
-    const targetCust = customers.find(c => c.id === customerId);
+    const targetCust = stateRef.current.customers.find(c => c.id === customerId);
     if (!targetCust || amount <= 0) return;
     const now = new Date().toISOString();
 
@@ -1974,29 +1968,32 @@ export const StoreProvider: React.FC<{ children: React.ReactNode }> = ({ childre
       createdAt: now,
       updatedAt: now,
     };
-    setDebtPayments(prev => [newPayment, ...prev]);
+    const nextPayments = [newPayment, ...stateRef.current.debtPayments];
+    stateRef.current.debtPayments = nextPayments;
+    localStorage.setItem(STORAGE_KEYS.DEBT_PAYMENTS, JSON.stringify(nextPayments));
+    setDebtPayments(nextPayments);
     cloudSyncDebtPayment(newPayment);
 
     // 2. Reduce customer debt running balance
-    setCustomers(prev => {
-      let updatedCust: Customer | null = null;
-      const nextList = prev.map(c => {
-        if (c.id === customerId) {
-          const updated = {
-            ...c,
-            debt: Math.max(0, c.debt - amount),
-            updatedAt: now,
-          };
-          updatedCust = updated;
-          return updated;
-        }
-        return c;
-      });
-      if (updatedCust) {
-        cloudSyncCustomer(updatedCust);
+    let updatedCust: Customer | null = null;
+    const nextCustomers = stateRef.current.customers.map(c => {
+      if (c.id === customerId) {
+        const updated = {
+          ...c,
+          debt: Math.max(0, c.debt - amount),
+          updatedAt: now,
+        };
+        updatedCust = updated;
+        return updated;
       }
-      return nextList;
+      return c;
     });
+    commitCustomers(nextCustomers, updatedCust ? [customerId] : []);
+    if (updatedCust) {
+      cloudSyncCustomer(updatedCust).then(ok => {
+        if (ok) removeDirtyCustomerIds([customerId]);
+      });
+    }
   };
 
   // Receipt settings action
@@ -2082,6 +2079,7 @@ export const StoreProvider: React.FC<{ children: React.ReactNode }> = ({ childre
       ? { ...stateRef.current.receiptSettings, ...snapshot.receiptSettings }
       : stateRef.current.receiptSettings;
 
+    mutationEpochRef.current += 1;
     stateRef.current.products = finalProds;
     stateRef.current.customers = finalCustomers;
     stateRef.current.orders = repairedOrders;
@@ -2120,7 +2118,13 @@ export const StoreProvider: React.FC<{ children: React.ReactNode }> = ({ childre
         if (ok) removeDirtyProductIds(pIds);
       });
     }
-    if (finalCustomers.length > 0) cloudSyncCustomersBatch(finalCustomers);
+    if (finalCustomers.length > 0) {
+      const cIds = finalCustomers.map(c => c.id);
+      addDirtyCustomerIds(cIds);
+      cloudSyncCustomersBatch(finalCustomers).then(ok => {
+        if (ok) removeDirtyCustomerIds(cIds);
+      });
+    }
     if (repairedOrders.length > 0) {
       const oIds = repairedOrders.map(o => o.id);
       addDirtyOrderIds(oIds);
@@ -2202,10 +2206,7 @@ export const StoreProvider: React.FC<{ children: React.ReactNode }> = ({ childre
     const nextProducts = createdProducts.length > 0 ? [...createdProducts, ...currentProds] : currentProds;
     if (createdProducts.length > 0) {
       const createdIds = createdProducts.map(p => p.id);
-      addDirtyProductIds(createdIds);
-      stateRef.current.products = nextProducts;
-      localStorage.setItem(STORAGE_KEYS.PRODUCTS, JSON.stringify(nextProducts));
-      setProducts(nextProducts);
+      commitProducts(nextProducts, createdIds);
       cloudSyncProductsBatch(createdProducts).then(ok => {
         if (ok) removeDirtyProductIds(createdIds);
       });
@@ -2256,15 +2257,10 @@ export const StoreProvider: React.FC<{ children: React.ReactNode }> = ({ childre
 
     if (changedOrders.length > 0) {
       const changedOrdIds = changedOrders.map(o => o.id);
-      addDirtyOrderIds(changedOrdIds);
-      stateRef.current.orders = nextOrders;
-      localStorage.setItem(STORAGE_KEYS.ORDERS, JSON.stringify(nextOrders));
-      setOrders(nextOrders);
+      commitOrders(nextOrders, changedOrdIds);
       cloudSyncOrdersBatch(changedOrders).then(ok => {
         if (ok) removeDirtyOrderIds(changedOrdIds);
       });
-    } else {
-      setOrders(nextOrders);
     }
 
     // 4. Auto-restore customers from order contacts
@@ -2304,8 +2300,11 @@ export const StoreProvider: React.FC<{ children: React.ReactNode }> = ({ childre
     let nextCustomers = stateRef.current.customers;
     if (newCustomersToAdd.length > 0) {
       nextCustomers = [...newCustomersToAdd, ...stateRef.current.customers];
-      setCustomers(nextCustomers);
-      cloudSyncCustomersBatch(newCustomersToAdd);
+      const newCustIds = newCustomersToAdd.map(c => c.id);
+      commitCustomers(nextCustomers, newCustIds);
+      cloudSyncCustomersBatch(newCustomersToAdd).then(ok => {
+        if (ok) removeDirtyCustomerIds(newCustIds);
+      });
     }
 
     // 5. Update Emergency Vault Snapshot
@@ -2342,10 +2341,10 @@ export const StoreProvider: React.FC<{ children: React.ReactNode }> = ({ childre
 
     const { updatedCustomer, log } = restoreCustomerFromOrderSnapshot(cust, ord);
     const nextCustomers = stateRef.current.customers.map(c => (c.id === customerId ? updatedCustomer : c));
-    stateRef.current.customers = nextCustomers;
-    localStorage.setItem(STORAGE_KEYS.CUSTOMERS, JSON.stringify(nextCustomers));
-    setCustomers(nextCustomers);
-    cloudSyncCustomer(updatedCustomer);
+    commitCustomers(nextCustomers, [customerId]);
+    cloudSyncCustomer(updatedCustomer).then(ok => {
+      if (ok) removeDirtyCustomerIds([customerId]);
+    });
     return { success: true, message: log };
   };
 
@@ -2359,19 +2358,20 @@ export const StoreProvider: React.FC<{ children: React.ReactNode }> = ({ childre
       stateRef.current.orders
     );
     const nextCustomers = [...stateRef.current.customers.filter(c => c.id !== customerId), customerA, customerB];
-    stateRef.current.customers = nextCustomers;
-    localStorage.setItem(STORAGE_KEYS.CUSTOMERS, JSON.stringify(nextCustomers));
-    setCustomers(nextCustomers);
-    cloudSyncCustomer(customerA);
-    cloudSyncCustomer(customerB);
+    const changedCustIds = [customerA.id, customerB.id];
+    commitCustomers(nextCustomers, changedCustIds);
+    cloudSyncCustomersBatch([customerA, customerB]).then(ok => {
+      if (ok) removeDirtyCustomerIds(changedCustIds);
+    });
 
     if (ordersToUpdate.length > 0) {
       const updateMap = new Map(ordersToUpdate.map(u => [u.id, u]));
       const nextOrders = stateRef.current.orders.map(o => updateMap.get(o.id) || o);
-      stateRef.current.orders = nextOrders;
-      localStorage.setItem(STORAGE_KEYS.ORDERS, JSON.stringify(nextOrders));
-      setOrders(nextOrders);
-      cloudSyncOrdersBatch(ordersToUpdate);
+      const changedOrdIds = ordersToUpdate.map(o => o.id);
+      commitOrders(nextOrders, changedOrdIds);
+      cloudSyncOrdersBatch(ordersToUpdate).then(ok => {
+        if (ok) removeDirtyOrderIds(changedOrdIds);
+      });
     }
   };
 
@@ -2381,10 +2381,10 @@ export const StoreProvider: React.FC<{ children: React.ReactNode }> = ({ childre
     const res = addSecondaryPhoneFromOrderHelper(cust, phone);
     if (!res.changed) return false;
     const nextCustomers = stateRef.current.customers.map(c => (c.id === customerId ? res.customer : c));
-    stateRef.current.customers = nextCustomers;
-    localStorage.setItem(STORAGE_KEYS.CUSTOMERS, JSON.stringify(nextCustomers));
-    setCustomers(nextCustomers);
-    cloudSyncCustomer(res.customer);
+    commitCustomers(nextCustomers, [customerId]);
+    cloudSyncCustomer(res.customer).then(ok => {
+      if (ok) removeDirtyCustomerIds([customerId]);
+    });
     return true;
   };
 
@@ -2394,10 +2394,10 @@ export const StoreProvider: React.FC<{ children: React.ReactNode }> = ({ childre
     const res = addExtraAddressFromOrderHelper(cust, address);
     if (!res.changed) return false;
     const nextCustomers = stateRef.current.customers.map(c => (c.id === customerId ? res.customer : c));
-    stateRef.current.customers = nextCustomers;
-    localStorage.setItem(STORAGE_KEYS.CUSTOMERS, JSON.stringify(nextCustomers));
-    setCustomers(nextCustomers);
-    cloudSyncCustomer(res.customer);
+    commitCustomers(nextCustomers, [customerId]);
+    cloudSyncCustomer(res.customer).then(ok => {
+      if (ok) removeDirtyCustomerIds([customerId]);
+    });
     return true;
   };
 
@@ -2446,10 +2446,12 @@ export const StoreProvider: React.FC<{ children: React.ReactNode }> = ({ childre
     }
 
     if (changedCustomerMap.size > 0) {
-      stateRef.current.customers = workingCustomers;
-      localStorage.setItem(STORAGE_KEYS.CUSTOMERS, JSON.stringify(workingCustomers));
-      setCustomers(workingCustomers);
-      cloudSyncCustomersBatch(Array.from(changedCustomerMap.values()));
+      const changedArr = Array.from(changedCustomerMap.values());
+      const changedIds = changedArr.map(c => c.id);
+      commitCustomers(workingCustomers, changedIds);
+      cloudSyncCustomersBatch(changedArr).then(ok => {
+        if (ok) removeDirtyCustomerIds(changedIds);
+      });
     }
 
     return { updatedCount: changedCustomerMap.size, splitCount: 0 };

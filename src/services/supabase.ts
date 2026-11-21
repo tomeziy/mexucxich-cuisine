@@ -749,6 +749,16 @@ export interface CloudPullLocalInput {
   dirtyCustomerIds?: string[];
 }
 
+export interface CloudPullRawSnapshot {
+  products: Product[];
+  customers: Customer[];
+  orders: Order[];
+  debtPayments: DebtPayment[];
+  cloudHasExtraAddressesCol: boolean;
+  cloudCustomersOk: boolean;
+  cloudDebtPaymentsOk: boolean;
+}
+
 export interface CloudPullReconcileResult {
   products: Product[];
   customers: Customer[];
@@ -760,6 +770,7 @@ export interface CloudPullReconcileResult {
   unsyncedLocalProducts: Product[];
   unsyncedLocalOrders: Order[];
   unsyncedLocalCustomers?: Customer[];
+  cloudRaw?: CloudPullRawSnapshot;
 }
 
 /**
@@ -961,18 +972,29 @@ export const pullAllDataFromCloud = async (
       setCloudExtraAddressesUnsupported(!cloudHasExtraAddressesCol);
     }
 
-    return reconcileCloudAndLocalPullData({
-      cloudProductsRaw: cloudProducts,
-      cloudCustomersRaw: cloudCustomers,
-      cloudOrdersRaw: cloudOrders,
-      cloudDebtPaymentsRaw: cloudDebtPayments,
-      cloudHasExtraAddressesCol,
-      cloudTombstones,
-      cloudCustomersOk: customersOk,
-      cloudDebtPaymentsOk: debtPaymentsOk,
-      settings: (sRes as any)?.data?.data as ReceiptSettings | undefined,
-      localData,
-    });
+    return {
+      ...reconcileCloudAndLocalPullData({
+        cloudProductsRaw: cloudProducts,
+        cloudCustomersRaw: cloudCustomers,
+        cloudOrdersRaw: cloudOrders,
+        cloudDebtPaymentsRaw: cloudDebtPayments,
+        cloudHasExtraAddressesCol,
+        cloudTombstones,
+        cloudCustomersOk: customersOk,
+        cloudDebtPaymentsOk: debtPaymentsOk,
+        settings: (sRes as any)?.data?.data as ReceiptSettings | undefined,
+        localData,
+      }),
+      cloudRaw: {
+        products: cloudProducts,
+        customers: cloudCustomers,
+        orders: cloudOrders,
+        debtPayments: cloudDebtPayments,
+        cloudHasExtraAddressesCol,
+        cloudCustomersOk: customersOk,
+        cloudDebtPaymentsOk: debtPaymentsOk,
+      },
+    };
   } catch (e) {
     console.error('Failed to pull data from Supabase:', e);
     return null;
@@ -1205,8 +1227,9 @@ export const cloudDeleteCustomersBatch = async (
 
 // Batch items sync helpers
 export const cloudSyncProductsBatch = async (products: Product[]): Promise<boolean> => {
+  if (products.length === 0) return true;
   const client = getSupabaseClient();
-  if (!client || products.length === 0) return true;
+  if (!client) return false;
   try {
     const pRows = products.map(transformProductToDb);
     await upsertInChunks(client, 'products', pRows, 500);
@@ -1218,8 +1241,9 @@ export const cloudSyncProductsBatch = async (products: Product[]): Promise<boole
 };
 
 export const cloudSyncCustomersBatch = async (customers: Customer[]): Promise<boolean> => {
+  if (customers.length === 0) return true;
   const client = getSupabaseClient();
-  if (!client || customers.length === 0) return true;
+  if (!client) return false;
   try {
     const cRows = customers.map(transformCustomerToDb);
     await upsertInChunks(client, 'customers', cRows, 500);
@@ -1231,8 +1255,9 @@ export const cloudSyncCustomersBatch = async (customers: Customer[]): Promise<bo
 };
 
 export const cloudSyncOrdersBatch = async (orders: Order[]): Promise<boolean> => {
+  if (orders.length === 0) return true;
   const client = getSupabaseClient();
-  if (!client || orders.length === 0) return true;
+  if (!client) return false;
   try {
     const oRows = orders.map(transformOrderToDb);
     await upsertInChunks(client, 'orders', oRows, 500);

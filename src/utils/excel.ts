@@ -30,10 +30,10 @@ export const PRODUCT_HEADER_ALIASES = {
     'donvi', 'donvitinh', 'dvt', 'unit', 'quycach'
   ],
   cost: [
-    'giavon', 'gianhap', 'giamua', 'cost', 'giagoc'
+    'giavon', 'giavonvnd', 'gianhap', 'gianhapvnd', 'giamua', 'cost', 'giagoc', 'giagocvnd'
   ],
   price: [
-    'giaban', 'dongia', 'giale', 'giabanle', 'gia', 'price', 'giatien'
+    'giaban', 'giabanvnd', 'dongia', 'dongiavnd', 'giale', 'giabanle', 'gia', 'giavnd', 'price', 'giatien'
   ],
   stock: [
     'tonkho', 'soluong', 'ton', 'stock', 'qty', 'sl', 'soluongton', 'soluongtonkho'
@@ -759,7 +759,12 @@ export function parseOrderItemsString(
   const trimmed = itemsStr.trim();
   if (!trimmed) return [];
 
-  // Split on commas, semicolons, newlines, or bullets that are NOT inside parentheses
+  // Split on semicolons, newlines, or bullets outside parentheses;
+  // split on commas or pluses ONLY at real item boundaries (never inside dish names like "Canh măng khô sườn, móng giò (x1 - 250.000đ)" or "BB mix 2 bánh cút + 2 bánh muối (x1 - 80.000đ)").
+  const STRUCTURED_SUFFIX_END_RE = /\(\s*x\s*[\d.,]+(?:\s*-\s*[^)]+)?\s*\)$/i;
+  const STRUCTURED_SUFFIX_ANY_RE = /\(\s*x\s*[\d.,]+(?:\s*-\s*[^)]+)?\s*\)/i;
+  const ALT_ITEM_COMPLETE_RE = /^(?:[\d.,]+\s*x\s+.+|.+\s+x\s*[\d.,]+|.+:\s*[\d.,]+.*)$/i;
+
   const rawParts: string[] = [];
   let current = '';
   let depth = 0;
@@ -768,15 +773,31 @@ export function parseOrderItemsString(
     if (char === '(') depth++;
     else if (char === ')') depth = Math.max(0, depth - 1);
 
-    if (
-      depth === 0 &&
-      (char === ',' || char === ';' || char === '\n' || char === '\r' || char === '•' || char === '+')
-    ) {
+    if (depth === 0 && (char === ';' || char === '\n' || char === '\r' || char === '•')) {
       if (current.trim()) rawParts.push(current.trim());
       current = '';
-    } else {
-      current += char;
+      continue;
     }
+
+    if (depth === 0 && (char === ',' || char === '+')) {
+      const curTrim = current.trim();
+      const rest = trimmed.slice(i + 1);
+      const nextHardIdx = rest.search(/[;\n\r•]/);
+      const untilHard = nextHardIdx === -1 ? rest : rest.slice(0, nextHardIdx);
+
+      const isBoundary =
+        STRUCTURED_SUFFIX_END_RE.test(curTrim) ||
+        ALT_ITEM_COMPLETE_RE.test(curTrim) ||
+        !STRUCTURED_SUFFIX_ANY_RE.test(untilHard);
+
+      if (isBoundary) {
+        if (curTrim) rawParts.push(curTrim);
+        current = '';
+        continue;
+      }
+    }
+
+    current += char;
   }
   if (current.trim()) rawParts.push(current.trim());
 
