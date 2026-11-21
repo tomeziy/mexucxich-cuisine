@@ -23,11 +23,14 @@ import {
   Upload,
   Search,
   X,
+  AlertTriangle,
+  Check,
 } from 'lucide-react';
 import { exportOrdersToExcel, parseOrdersExcel } from '../utils/excel';
+import { analyzeOrderImportRows, AnalyzedOrderImportRow } from '../utils/importReconciler';
 
 export const ReportsPage: React.FC = () => {
-  const { orders, receiptSettings, deleteOrder, restoreFromExcelOrders } = useStore();
+  const { products, orders, receiptSettings, deleteOrder, restoreFromExcelOrders } = useStore();
 
   const [dateFilter, setDateFilter] = useState<'today' | '7days' | 'month' | 'all'>('today');
   const [statusFilter, setStatusFilter] = useState<string>('all');
@@ -35,28 +38,66 @@ export const ReportsPage: React.FC = () => {
   const [searchQuery, setSearchQuery] = useState('');
   const [isImporting, setIsImporting] = useState(false);
 
+  // ADR-0024: Order Excel Import Preview & Conflict Analysis Modal state
+  const [isOrderImportModalOpen, setIsOrderImportModalOpen] = useState(false);
+  const [orderImportRows, setOrderImportRows] = useState<AnalyzedOrderImportRow[]>([]);
+  const [orderImportMissingProdsCount, setOrderImportMissingProdsCount] = useState(0);
+  const [orderImportFileName, setOrderImportFileName] = useState('');
+  const [orderImportTab, setOrderImportTab] = useState<'all' | 'new' | 'conflict' | 'identical'>('all');
+
   const handleImportExcel = async (e: React.ChangeEvent<HTMLInputElement>) => {
     const file = e.target.files?.[0];
     if (!file) return;
 
     setIsImporting(true);
     try {
+      setOrderImportFileName(file.name);
       const parsedOrders = await parseOrdersExcel(file);
       if (!parsedOrders || parsedOrders.length === 0) {
         alert('Không tìm thấy dữ liệu đơn hàng hợp lệ trong tệp Excel!');
         return;
       }
 
-      const res = restoreFromExcelOrders(parsedOrders);
-      alert(
-        `Khôi phục thành công!\n- Đã nạp: ${parsedOrders.length} đơn hàng (${res.restoredOrdersCount} đơn mới).\n- Thực đơn: đã khôi phục ${res.restoredProductsCount} món ăn vào danh mục.`
-      );
+      const analyzed = analyzeOrderImportRows(parsedOrders, orders, products);
+      setOrderImportRows(analyzed.rows);
+      setOrderImportMissingProdsCount(analyzed.missingProductsCount);
+      const hasConflict = analyzed.rows.some(r => r.diffStatus === 'conflict');
+      setOrderImportTab(hasConflict ? 'conflict' : 'all');
+      setIsOrderImportModalOpen(true);
     } catch (err: any) {
       alert(`Lỗi khi đọc tệp báo cáo Excel: ${err?.message || err}`);
     } finally {
       setIsImporting(false);
       if (e.target) e.target.value = '';
     }
+  };
+
+  const handleConfirmOrderImport = () => {
+    if (orderImportRows.length === 0) return;
+
+    const toProcess = orderImportRows.filter(r => r.action !== 'skip').map(r => r.order);
+    const overwriteOrderIds = orderImportRows
+      .filter(r => r.action === 'overwrite')
+      .map(r => r.order.id);
+    const skippedCount = orderImportRows.length - toProcess.length;
+
+    if (toProcess.length === 0) {
+      alert(`Đã bỏ qua toàn bộ ${skippedCount} đơn trùng hệt — dữ liệu hiện tại được giữ nguyên.`);
+      setIsOrderImportModalOpen(false);
+      setOrderImportRows([]);
+      return;
+    }
+
+    const res = restoreFromExcelOrders(toProcess, { overwriteOrderIds });
+    alert(
+      `Nhập báo cáo đơn hàng thành công!\n` +
+        `- Thêm đơn mới: ${res.restoredOrdersCount} đơn\n` +
+        `- Ghi đè cập nhật đơn khác biệt: ${res.updatedOrdersCount} đơn\n` +
+        `- Bỏ qua (đã giống hệt): ${skippedCount} đơn\n` +
+        `- Thực đơn: đã khôi phục ${res.restoredProductsCount} món ăn vào danh mục.`
+    );
+    setIsOrderImportModalOpen(false);
+    setOrderImportRows([]);
   };
 
   // Modal for reprint
@@ -492,6 +533,299 @@ export const ReportsPage: React.FC = () => {
           setEditingOrder(null);
         }}
       />
+
+      {/* Order Excel Import & Conflict Preview Modal (ADR-0024) */}
+      {isOrderImportModalOpen && (
+        <div className="fixed inset-0 bg-black/60 backdrop-blur-2xs z-50 flex items-center justify-center p-3">
+          <div className="bg-white rounded-2xl max-w-4xl w-full p-4 sm:p-5 shadow-2xl animate-in fade-in zoom-in duration-150 max-h-[92vh] flex flex-col">
+            <div className="flex items-center justify-between pb-3 border-b border-slate-100 shrink-0">
+              <div className="flex items-center gap-2">
+                <div className="w-8 h-8 rounded-lg bg-blue-600 text-white flex items-center justify-center font-bold">
+                  <FileSpreadsheet className="w-4 h-4" />
+                </div>
+                <div>
+                  <h3 className="font-extrabold text-sm text-slate-900">
+                    Xem trước & Đối soát Đơn hàng từ Excel
+                  </h3>
+                  <p className="text-[10px] text-slate-500">
+                    Tệp: <strong>{orderImportFileName}</strong> • Tìm thấy <strong>{orderImportRows.length}</strong> đơn hàng
+                  </p>
+                </div>
+              </div>
+              <button
+                type="button"
+                onClick={() => setIsOrderImportModalOpen(false)}
+                className="w-7 h-7 rounded-lg hover:bg-slate-100 flex items-center justify-center text-slate-400"
+              >
+                <X className="w-4 h-4" />
+              </button>
+            </div>
+
+            {orderImportMissingProdsCount > 0 && (
+              <div className="mt-2.5 p-2.5 rounded-xl bg-amber-50 border border-amber-200 text-[11px] font-semibold text-amber-900 flex items-center gap-2 shrink-0">
+                <Package className="w-4 h-4 text-amber-600 shrink-0" />
+                <span>
+                  Hệ thống phát hiện <strong>{orderImportMissingProdsCount}</strong> món ăn trong báo cáo chưa có trong thực đơn — sẽ tự động khôi phục vào danh mục món khi xác nhận.
+                </span>
+              </div>
+            )}
+
+            {(() => {
+              const newRows = orderImportRows.filter(r => r.diffStatus === 'new');
+              const conflictRows = orderImportRows.filter(r => r.diffStatus === 'conflict');
+              const identicalRows = orderImportRows.filter(r => r.diffStatus === 'identical');
+              const visibleRows =
+                orderImportTab === 'new'
+                  ? newRows
+                  : orderImportTab === 'conflict'
+                  ? conflictRows
+                  : orderImportTab === 'identical'
+                  ? identicalRows
+                  : orderImportRows;
+
+              return (
+                <>
+                  <div className="flex flex-wrap items-center justify-between gap-2 pt-2.5 pb-2 shrink-0">
+                    <div className="flex flex-wrap items-center gap-1.5 text-[11px] font-bold">
+                      <button
+                        type="button"
+                        onClick={() => setOrderImportTab('all')}
+                        className={`px-2.5 py-1 rounded-full transition ${
+                          orderImportTab === 'all'
+                            ? 'bg-slate-900 text-white'
+                            : 'bg-slate-100 text-slate-600 hover:bg-slate-200'
+                        }`}
+                      >
+                        Tất cả ({orderImportRows.length})
+                      </button>
+                      <button
+                        type="button"
+                        onClick={() => setOrderImportTab('new')}
+                        className={`px-2.5 py-1 rounded-full transition ${
+                          orderImportTab === 'new'
+                            ? 'bg-emerald-600 text-white'
+                            : 'bg-emerald-50 text-emerald-800 hover:bg-emerald-100'
+                        }`}
+                      >
+                        ✨ Đơn mới ({newRows.length})
+                      </button>
+                      <button
+                        type="button"
+                        onClick={() => setOrderImportTab('conflict')}
+                        className={`px-2.5 py-1 rounded-full transition flex items-center gap-1 ${
+                          orderImportTab === 'conflict'
+                            ? 'bg-rose-600 text-white'
+                            : 'bg-rose-50 text-rose-700 hover:bg-rose-100'
+                        }`}
+                      >
+                        <AlertTriangle className="w-3 h-3" />
+                        <span>Đơn khác biệt / Xung đột ({conflictRows.length})</span>
+                      </button>
+                      <button
+                        type="button"
+                        onClick={() => setOrderImportTab('identical')}
+                        className={`px-2.5 py-1 rounded-full transition ${
+                          orderImportTab === 'identical'
+                            ? 'bg-slate-700 text-white'
+                            : 'bg-slate-100 text-slate-600 hover:bg-slate-200'
+                        }`}
+                      >
+                        Đơn đã có - Tự bỏ qua ({identicalRows.length})
+                      </button>
+                    </div>
+
+                    {orderImportRows.some(r => r.existingOrder) && (
+                      <div className="flex flex-wrap items-center gap-1 text-[11px] font-bold">
+                        <button
+                          type="button"
+                          onClick={() =>
+                            setOrderImportRows(prev =>
+                              prev.map(r => ({ ...r, action: r.recommendedAction }))
+                            )
+                          }
+                          className="px-2.5 py-1 rounded-lg bg-emerald-50 border border-emerald-300 text-emerald-800 hover:bg-emerald-100 transition"
+                        >
+                          Đề xuất thông minh
+                        </button>
+                        <button
+                          type="button"
+                          onClick={() =>
+                            setOrderImportRows(prev =>
+                              prev.map(r => (r.diffStatus === 'conflict' ? { ...r, action: 'overwrite' } : r))
+                            )
+                          }
+                          className="px-2.5 py-1 rounded-lg bg-rose-50 border border-rose-300 text-rose-700 hover:bg-rose-100 transition"
+                        >
+                          Ghi đè tất cả xung đột
+                        </button>
+                        <button
+                          type="button"
+                          onClick={() =>
+                            setOrderImportRows(prev =>
+                              prev.map(r => (r.existingOrder ? { ...r, action: 'skip' } : r))
+                            )
+                          }
+                          className="px-2.5 py-1 rounded-lg bg-slate-100 border border-slate-300 text-slate-700 hover:bg-slate-200 transition"
+                        >
+                          Bỏ qua tất cả trùng
+                        </button>
+                      </div>
+                    )}
+                  </div>
+
+                  <div className="flex-1 overflow-y-auto custom-scroll my-2 border border-slate-200 rounded-xl overflow-hidden text-xs">
+                    <table className="w-full text-left border-collapse">
+                      <thead className="bg-slate-50 text-slate-600 uppercase text-[10px] font-extrabold sticky top-0 border-b border-slate-200">
+                        <tr>
+                          <th className="py-2.5 px-3">Mã đơn</th>
+                          <th className="py-2.5 px-3">Khách hàng</th>
+                          <th className="py-2.5 px-3 text-right">Tổng tiền File</th>
+                          <th className="py-2.5 px-3">So sánh Cũ → Mới</th>
+                          <th className="py-2.5 px-3 text-center">Xử lý</th>
+                        </tr>
+                      </thead>
+                      <tbody className="divide-y divide-slate-100 font-medium">
+                        {visibleRows.length === 0 ? (
+                          <tr>
+                            <td colSpan={5} className="py-8 text-center text-slate-400">
+                              Không có đơn hàng nào trong nhóm lọc này.
+                            </td>
+                          </tr>
+                        ) : (
+                          visibleRows.map(row => (
+                            <tr
+                              key={row.order.id}
+                              className={`hover:bg-slate-50 transition ${
+                                row.diffStatus === 'identical'
+                                  ? 'opacity-70 bg-slate-50/40'
+                                  : row.diffStatus === 'conflict'
+                                  ? 'bg-amber-50/20'
+                                  : ''
+                              }`}
+                            >
+                              <td className="py-2.5 px-3 font-mono font-bold text-slate-900">
+                                #{row.order.id}
+                                <span className="block text-[10px] font-sans font-normal text-slate-400">
+                                  {formatDate(row.order.createdAt)}
+                                </span>
+                              </td>
+                              <td className="py-2.5 px-3">
+                                <strong className="text-slate-800 block">{row.order.customerName}</strong>
+                                <span className="text-[10px] text-slate-500">
+                                  {(row.order.items || []).length} món
+                                </span>
+                              </td>
+                              <td className="py-2.5 px-3 text-right font-bold text-slate-900 font-mono">
+                                {formatVND(row.order.total)}
+                              </td>
+                              <td className="py-2.5 px-3">
+                                {row.diffStatus === 'new' ? (
+                                  <span className="px-2 py-0.5 rounded text-[10px] font-bold bg-emerald-100 text-emerald-800 inline-block">
+                                    Đơn mới chưa có trên hệ thống
+                                  </span>
+                                ) : row.diffStatus === 'identical' ? (
+                                  <span className="px-2 py-0.5 rounded text-[10px] font-bold bg-slate-100 text-slate-600 inline-block">
+                                    Giống hệt đơn hiện có
+                                  </span>
+                                ) : (
+                                  <div className="flex flex-wrap gap-1">
+                                    {row.diffs.map(d => {
+                                      const fmt = (v: string | number) =>
+                                        ['total', 'paidAmount', 'debtAmount'].includes(d.field) &&
+                                        typeof v === 'number'
+                                          ? formatVND(v)
+                                          : String(v);
+                                      return (
+                                        <span
+                                          key={d.field}
+                                          className="px-1.5 py-0.5 rounded bg-amber-100/80 text-amber-900 text-[10px] font-bold"
+                                        >
+                                          {d.label}: {fmt(d.oldValue)} → {fmt(d.newValue)}
+                                        </span>
+                                      );
+                                    })}
+                                  </div>
+                                )}
+                              </td>
+                              <td className="py-2.5 px-3 text-center">
+                                {row.existingOrder ? (
+                                  <div className="inline-flex rounded-lg border border-slate-200 p-0.5 bg-slate-50 text-[10px] font-bold">
+                                    <button
+                                      type="button"
+                                      onClick={() =>
+                                        setOrderImportRows(prev =>
+                                          prev.map(r =>
+                                            r.order.id === row.order.id ? { ...r, action: 'overwrite' } : r
+                                          )
+                                        )
+                                      }
+                                      className={`px-2 py-1 rounded transition ${
+                                        row.action === 'overwrite'
+                                          ? 'bg-rose-500 text-white shadow-2xs'
+                                          : 'text-slate-600 hover:text-slate-900'
+                                      }`}
+                                    >
+                                      Ghi đè theo File
+                                    </button>
+                                    <button
+                                      type="button"
+                                      onClick={() =>
+                                        setOrderImportRows(prev =>
+                                          prev.map(r =>
+                                            r.order.id === row.order.id ? { ...r, action: 'skip' } : r
+                                          )
+                                        )
+                                      }
+                                      className={`px-2 py-1 rounded transition ${
+                                        row.action === 'skip'
+                                          ? 'bg-slate-600 text-white shadow-2xs'
+                                          : 'text-slate-600 hover:text-slate-900'
+                                      }`}
+                                    >
+                                      Bỏ qua
+                                    </button>
+                                  </div>
+                                ) : (
+                                  <span className="text-[11px] font-bold text-emerald-700">Thêm mới</span>
+                                )}
+                              </td>
+                            </tr>
+                          ))
+                        )}
+                      </tbody>
+                    </table>
+                  </div>
+                </>
+              );
+            })()}
+
+            <div className="pt-3 border-t border-slate-100 flex items-center justify-between gap-2 shrink-0 text-xs font-bold">
+              <span className="text-[11px] text-slate-500">
+                Sẽ thêm/cập nhật{' '}
+                <strong>{orderImportRows.filter(r => r.action !== 'skip').length}</strong> /{' '}
+                {orderImportRows.length} đơn hàng
+              </span>
+              <div className="flex items-center gap-2">
+                <button
+                  type="button"
+                  onClick={() => setIsOrderImportModalOpen(false)}
+                  className="px-4 py-2 rounded-xl text-slate-600 hover:bg-slate-100 transition"
+                >
+                  Hủy bỏ
+                </button>
+                <button
+                  type="button"
+                  onClick={handleConfirmOrderImport}
+                  className="px-5 py-2 rounded-xl bg-blue-600 hover:bg-blue-700 text-white shadow-sm shadow-blue-600/20 transition flex items-center gap-1.5"
+                >
+                  <Check className="w-4 h-4" />
+                  <span>Xác nhận nhập báo cáo</span>
+                </button>
+              </div>
+            </div>
+          </div>
+        </div>
+      )}
     </div>
   );
 };

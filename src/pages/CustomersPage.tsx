@@ -45,21 +45,15 @@ import {
   parseCustomersExcel,
   normalizeVietnamesePhone,
   isPhoneMatching,
-  ParsedCustomerRow,
 } from '../utils/excel';
+import {
+  analyzeCustomerImportRows,
+  buildCustomerImportPlan,
+  classifySingleCustomerImportRow,
+  AnalyzedCustomerImportRow,
+} from '../utils/importReconciler';
 
-export interface CustomerImportRowItem {
-  id: string;
-  name: string;
-  phone: string;
-  phone2?: string;
-  address: string;
-  extraAddresses?: string[];
-  debt: number;
-  isDuplicate: boolean;
-  existingCustomer?: Customer;
-  action: 'accumulate' | 'overwrite' | 'skip';
-}
+export type CustomerImportRowItem = AnalyzedCustomerImportRow;
 
 export const CustomersPage: React.FC = () => {
   const {
@@ -72,6 +66,7 @@ export const CustomersPage: React.FC = () => {
     addCustomer,
     addCustomersBatch,
     updateCustomer,
+    updateCustomersBatch,
     deleteCustomer,
     deleteCustomersBatch,
     deleteOrder,
@@ -146,9 +141,10 @@ export const CustomersPage: React.FC = () => {
   const [editCustomerAddress, setEditCustomerAddress] = useState('');
   const [editCustomerExtraAddresses, setEditCustomerExtraAddresses] = useState<string[]>([]);
 
-  // Excel Import states
+  // Excel Import states (ADR-0024 Smart Diff Reconciliation)
   const [isImportModalOpen, setIsImportModalOpen] = useState(false);
-  const [importRows, setImportRows] = useState<CustomerImportRowItem[]>([]);
+  const [importRows, setImportRows] = useState<AnalyzedCustomerImportRow[]>([]);
+  const [importTab, setImportTab] = useState<'all' | 'new' | 'conflict' | 'enrich' | 'identical'>('all');
   const [importFileName, setImportFileName] = useState('');
 
   // Row Inline Edit State in Import Preview
@@ -170,44 +166,28 @@ export const CustomersPage: React.FC = () => {
         return;
       }
 
-      const mapped: CustomerImportRowItem[] = parsed.map((p, idx) => {
-        const normPPhone = normalizeVietnamesePhone(p.phone);
-        const normPPhone2 = p.phone2 ? normalizeVietnamesePhone(p.phone2) : undefined;
-        // ADR-0015 & ADR-0019: Match duplicates by normalized phone number across phone and phone2
-        const matchByPhone = (normPPhone || normPPhone2)
-          ? customers.find(c => {
-              const p1Match = normPPhone && (
-                (c.phone && isPhoneMatching(c.phone, normPPhone)) ||
-                (c.phone2 && isPhoneMatching(c.phone2, normPPhone))
-              );
-              const p2Match = normPPhone2 && (
-                (c.phone && isPhoneMatching(c.phone, normPPhone2)) ||
-                (c.phone2 && isPhoneMatching(c.phone2, normPPhone2))
-              );
-              return p1Match || p2Match;
-            })
-          : null;
-        const existing = matchByPhone;
-        return {
-          id: `cust_row_${Date.now()}_${idx}`,
-          name: p.name,
-          phone: normPPhone,
-          phone2: normPPhone2,
-          address: p.address,
-          extraAddresses: p.extraAddresses,
-          debt: p.debt,
-          isDuplicate: !!existing,
-          existingCustomer: existing || undefined,
-          action: 'accumulate',
-        };
-      });
-
-      setImportRows(mapped);
+      const analyzed = analyzeCustomerImportRows(parsed, customers);
+      setImportRows(analyzed);
+      const hasConflict = analyzed.some(r => r.diffStatus === 'conflict');
+      const hasEnrich = analyzed.some(r => r.diffStatus === 'enrich_contact');
+      setImportTab(hasConflict ? 'conflict' : hasEnrich ? 'enrich' : 'all');
       setIsImportModalOpen(true);
     } catch (err) {
       e.target.value = '';
       alert('Lỗi khi đọc file Excel. Vui lòng kiểm tra định dạng file!');
     }
+  };
+
+  const handleApplyRecommendedAll = () => {
+    setImportRows(prev => prev.map(r => ({ ...r, action: r.recommendedAction })));
+  };
+
+  const handleApplyAllMergeInfo = () => {
+    setImportRows(prev => prev.map(r => (r.isDuplicate ? { ...r, action: 'merge_info' } : r)));
+  };
+
+  const handleApplyAllOverwrite = () => {
+    setImportRows(prev => prev.map(r => (r.isDuplicate ? { ...r, action: 'overwrite' } : r)));
   };
 
   const handleApplyAllAccumulate = () => {
@@ -218,10 +198,10 @@ export const CustomersPage: React.FC = () => {
     setImportRows(prev => prev.map(r => (r.isDuplicate ? { ...r, action: 'skip' } : r)));
   };
 
-  const startEditRow = (row: CustomerImportRowItem) => {
+  const startEditRow = (row: AnalyzedCustomerImportRow) => {
     setEditingRowId(row.id);
     setRowEditName(row.name);
-    setRowEditPhone(row.phone);
+    setRowEditPhone(row.phone2 ? `${row.phone} / ${row.phone2}` : row.phone);
     setRowEditAddress(row.address);
     setRowEditDebt(row.debt);
   };
@@ -231,35 +211,18 @@ export const CustomersPage: React.FC = () => {
       prev.map(r => {
         if (r.id === rowId) {
           const newName = rowEditName.trim() || r.name;
-          const normEdited = normalizeVietnamesePhone(rowEditPhone.trim());
-          let newPhone = normEdited;
-          let newPhone2 = r.phone2;
-          if (normEdited.includes(' / ')) {
-            const parts = normEdited.split(' / ').map(p => p.trim()).filter(Boolean);
-            if (parts.length >= 2) {
-              newPhone = parts[0];
-              newPhone2 = parts.slice(1).join(' / ');
-            }
-          }
-          // Re-evaluate duplication with modified phone / name
-          const matchByPhone = newPhone
-            ? customers.find(
-                c =>
-                  (c.phone && isPhoneMatching(c.phone, newPhone)) ||
-                  (c.phone2 && isPhoneMatching(c.phone2, newPhone))
-              )
-            : null;
-          const existing = matchByPhone;
-          return {
-            ...r,
-            name: newName,
-            phone: newPhone,
-            phone2: newPhone2,
-            address: rowEditAddress.trim(),
-            debt: Math.max(0, rowEditDebt || 0),
-            isDuplicate: !!existing,
-            existingCustomer: existing || undefined,
-          };
+          return classifySingleCustomerImportRow(
+            {
+              id: r.id,
+              name: newName,
+              phone: rowEditPhone.trim(),
+              phone2: undefined,
+              address: rowEditAddress.trim(),
+              extraAddresses: r.extraAddresses,
+              debt: Math.max(0, rowEditDebt || 0),
+            },
+            customers
+          );
         }
         return r;
       })
@@ -270,153 +233,19 @@ export const CustomersPage: React.FC = () => {
   const handleConfirmImport = () => {
     if (importRows.length === 0) return;
 
-    let updatedCount = 0;
-    let newCount = 0;
-    let skippedCount = 0;
-
-    // Accumulators for existing customers
-    const updatedCustomersMap = new Map<
-      string,
-      {
-        id: string;
-        name: string;
-        phone: string;
-        phone2?: string;
-        address: string;
-        extraAddresses?: string[];
-        debt: number;
-        action: 'accumulate' | 'overwrite';
-      }
-    >();
-
-    // Accumulators for new customers with dual-index lookup (phone & normalized name)
-    const newCustomersMap = new Map<
-      string,
-      Omit<Customer, 'id' | 'totalSpent' | 'orderCount'>
-    >();
-    const phoneToNewCustKey = new Map<string, string>();
-    const nameToNewCustKey = new Map<string, string>();
-
-    importRows.forEach((row, idx) => {
-      if (row.isDuplicate && row.existingCustomer) {
-        if (row.action === 'skip') {
-          skippedCount++;
-        } else if (row.action === 'overwrite') {
-          const normAddr = normalizeAddressList(
-            row.address || row.existingCustomer.address,
-            row.extraAddresses || row.existingCustomer.extraAddresses
-          );
-          updatedCustomersMap.set(row.existingCustomer.id, {
-            id: row.existingCustomer.id,
-            name: row.name || row.existingCustomer.name,
-            phone: row.phone || row.existingCustomer.phone,
-            phone2: row.phone2 ?? row.existingCustomer.phone2,
-            address: normAddr.address,
-            extraAddresses: normAddr.extraAddresses,
-            debt: row.debt,
-            action: 'overwrite',
-          });
-        } else {
-          // 'accumulate' (ADR-0015: strictly preserve verified contact info, append any new extra addresses)
-          const existingAcc = updatedCustomersMap.get(row.existingCustomer.id);
-          const baseDebt = existingAcc ? existingAcc.debt : row.existingCustomer.debt;
-          const baseName = existingAcc ? existingAcc.name : row.existingCustomer.name;
-          const basePhone = existingAcc ? existingAcc.phone : row.existingCustomer.phone;
-          const basePhone2 = existingAcc ? existingAcc.phone2 : row.existingCustomer.phone2;
-          const baseAddress = existingAcc ? existingAcc.address : row.existingCustomer.address;
-          const baseExtras = existingAcc ? existingAcc.extraAddresses : row.existingCustomer.extraAddresses;
-          const nextPhone = basePhone || row.phone;
-          const nextPhone2 =
-            basePhone2 || (row.phone2 && (!nextPhone || !isPhoneMatching(nextPhone, row.phone2)) ? row.phone2 : undefined);
-          const normAddr = normalizeAddressList(
-            baseAddress || row.address,
-            [...(baseExtras || []), ...(row.extraAddresses || []), ...(baseAddress && row.address ? [row.address] : [])]
-          );
-          updatedCustomersMap.set(row.existingCustomer.id, {
-            id: row.existingCustomer.id,
-            name: baseName || row.name,
-            phone: nextPhone,
-            phone2: nextPhone2,
-            address: normAddr.address,
-            extraAddresses: normAddr.extraAddresses,
-            debt: baseDebt + row.debt,
-            action: 'accumulate',
-          });
-        }
-      } else {
-        // Group new customers within the file ONLY by normalized phone (ADR-0015)
-        // Never group by unaccented name, as different customers can share common Vietnamese names
-        const normPhone = row.phone ? normalizeVietnamesePhone(row.phone) : '';
-
-        let targetKey: string | null = null;
-        if (normPhone) {
-          for (const [existingPhone, key] of phoneToNewCustKey.entries()) {
-            if (isPhoneMatching(existingPhone, normPhone)) {
-              targetKey = key;
-              break;
-            }
-          }
-        }
-
-        if (targetKey && newCustomersMap.has(targetKey)) {
-          const existingNew = newCustomersMap.get(targetKey)!;
-          const mergedPhone = existingNew.phone || normPhone;
-          const mergedPhone2 = existingNew.phone2 || row.phone2;
-          const mergedAddr = normalizeAddressList(
-            existingNew.address || row.address,
-            [...(existingNew.extraAddresses || []), ...(row.extraAddresses || []), ...(existingNew.address && row.address ? [row.address] : [])]
-          );
-          const mergedDebt = existingNew.debt + row.debt;
-
-          newCustomersMap.set(targetKey, {
-            ...existingNew,
-            phone: mergedPhone,
-            phone2: mergedPhone2,
-            address: mergedAddr.address,
-            extraAddresses: mergedAddr.extraAddresses,
-            debt: mergedDebt,
-          });
-
-          if (mergedPhone) phoneToNewCustKey.set(mergedPhone, targetKey);
-        } else {
-          const newCustKey = `new_cust_${idx}`;
-          const normAddr = normalizeAddressList(row.address, row.extraAddresses);
-          newCustomersMap.set(newCustKey, {
-            name: row.name,
-            phone: normPhone,
-            phone2: row.phone2,
-            address: normAddr.address,
-            extraAddresses: normAddr.extraAddresses,
-            debt: row.debt,
-          });
-
-          if (normPhone) phoneToNewCustKey.set(normPhone, newCustKey);
-        }
-      }
-    });
-
-    // Apply updates for existing customers
-    updatedCustomersMap.forEach(item => {
-      updateCustomer(item.id, {
-        name: item.name,
-        phone: item.phone,
-        phone2: item.phone2,
-        address: item.address,
-        extraAddresses: item.extraAddresses,
-        debt: item.debt,
-      });
-      updatedCount++;
-    });
-
-    // Apply batch inserts for new customers
-    const newCustomersToAdd = Array.from(newCustomersMap.values());
-    if (newCustomersToAdd.length > 0) {
-      addCustomersBatch(newCustomersToAdd);
-      newCount = newCustomersToAdd.length;
+    const plan = buildCustomerImportPlan(importRows);
+    if (plan.customerUpdates.length > 0) {
+      updateCustomersBatch(plan.customerUpdates);
+    }
+    if (plan.newCustomers.length > 0) {
+      addCustomersBatch(plan.newCustomers);
     }
 
     alert(
-      `Đã xử lý xong ${importRows.length} dòng khách hàng:\n- Thêm mới: ${newCount} khách\n- Cập nhật nợ: ${updatedCount} khách\n- Bỏ qua: ${skippedCount} khách`
+      `Đã xử lý xong ${importRows.length} dòng khách hàng:\n` +
+        `- Thêm mới: ${plan.counts.created} khách\n` +
+        `- Cập nhật / Gộp thông tin: ${plan.counts.updated} khách\n` +
+        `- Bỏ qua (không thay đổi): ${plan.counts.skipped} khách`
     );
     setIsImportModalOpen(false);
     setImportRows([]);
@@ -1926,252 +1755,410 @@ export const CustomersPage: React.FC = () => {
               </button>
             </div>
 
-            {/* Badges & Bulk Action Controls */}
-            <div className="flex flex-wrap items-center justify-between gap-2 pt-2.5 pb-2 shrink-0">
-              <div className="flex items-center gap-2 text-[11px] font-bold">
-                {(() => {
-                  const duplicateCount = importRows.filter(r => r.isDuplicate).length;
-                  const newCount = importRows.length - duplicateCount;
-                  return (
-                    <>
-                      <span className="px-2.5 py-1 rounded-full bg-emerald-100 text-emerald-800">
-                        ✨ {newCount} khách mới
-                      </span>
-                      {duplicateCount > 0 ? (
-                        <span className="px-2.5 py-1 rounded-full bg-amber-100 text-amber-800 flex items-center gap-1">
-                          <AlertTriangle className="w-3.5 h-3.5" />
-                          <span>{duplicateCount} khách trùng lặp (SĐT / Tên)</span>
-                        </span>
-                      ) : (
-                        <span className="px-2.5 py-1 rounded-full bg-slate-100 text-slate-600">
-                          Không có khách trùng
-                        </span>
-                      )}
-                    </>
-                  );
-                })()}
-              </div>
+            {/* Filter Tabs & Bulk Action Controls (ADR-0024) */}
+            {(() => {
+              const newRows = importRows.filter(r => r.diffStatus === 'new');
+              const conflictRows = importRows.filter(r => r.diffStatus === 'conflict');
+              const enrichRows = importRows.filter(r => r.diffStatus === 'enrich_contact');
+              const identicalRows = importRows.filter(r => r.diffStatus === 'identical');
+              const visibleRows =
+                importTab === 'new'
+                  ? newRows
+                  : importTab === 'conflict'
+                  ? conflictRows
+                  : importTab === 'enrich'
+                  ? enrichRows
+                  : importTab === 'identical'
+                  ? identicalRows
+                  : importRows;
 
-              {/* Bulk Resolution Buttons */}
-              {importRows.some(r => r.isDuplicate) && (
-                <div className="flex items-center gap-1.5 text-xs font-bold">
-                  <span className="text-[11px] text-slate-500 mr-1">Thao tác nhanh cho khách trùng:</span>
-                  <button
-                    type="button"
-                    onClick={handleApplyAllAccumulate}
-                    className="px-2.5 py-1 rounded-lg bg-amber-50 border border-amber-300 text-amber-800 hover:bg-amber-100 transition text-[11px]"
-                  >
-                    Đồng ý tất cả (Cộng dồn)
-                  </button>
-                  <button
-                    type="button"
-                    onClick={handleSkipAllDuplicates}
-                    className="px-2.5 py-1 rounded-lg bg-slate-100 border border-slate-300 text-slate-700 hover:bg-slate-200 transition text-[11px]"
-                  >
-                    Bỏ qua tất cả trùng
-                  </button>
-                </div>
-              )}
-            </div>
+              return (
+                <>
+                  <div className="flex flex-wrap items-center justify-between gap-2 pt-2.5 pb-2 shrink-0">
+                    <div className="flex flex-wrap items-center gap-1.5 text-[11px] font-bold">
+                      <button
+                        type="button"
+                        onClick={() => setImportTab('all')}
+                        className={`px-2.5 py-1 rounded-full transition ${
+                          importTab === 'all'
+                            ? 'bg-slate-900 text-white'
+                            : 'bg-slate-100 text-slate-600 hover:bg-slate-200'
+                        }`}
+                      >
+                        Tất cả ({importRows.length})
+                      </button>
+                      <button
+                        type="button"
+                        onClick={() => setImportTab('new')}
+                        className={`px-2.5 py-1 rounded-full transition ${
+                          importTab === 'new'
+                            ? 'bg-emerald-600 text-white'
+                            : 'bg-emerald-50 text-emerald-800 hover:bg-emerald-100'
+                        }`}
+                      >
+                        ✨ Khách mới ({newRows.length})
+                      </button>
+                      <button
+                        type="button"
+                        onClick={() => setImportTab('conflict')}
+                        className={`px-2.5 py-1 rounded-full transition flex items-center gap-1 ${
+                          importTab === 'conflict'
+                            ? 'bg-rose-600 text-white'
+                            : 'bg-rose-50 text-rose-700 hover:bg-rose-100'
+                        }`}
+                      >
+                        <AlertTriangle className="w-3 h-3" />
+                        <span>Xung đột Nợ / Tên ({conflictRows.length})</span>
+                      </button>
+                      <button
+                        type="button"
+                        onClick={() => setImportTab('enrich')}
+                        className={`px-2.5 py-1 rounded-full transition ${
+                          importTab === 'enrich'
+                            ? 'bg-sky-600 text-white'
+                            : 'bg-sky-50 text-sky-800 hover:bg-sky-100'
+                        }`}
+                      >
+                        Bổ sung SĐT / Đ/c ({enrichRows.length})
+                      </button>
+                      <button
+                        type="button"
+                        onClick={() => setImportTab('identical')}
+                        className={`px-2.5 py-1 rounded-full transition ${
+                          importTab === 'identical'
+                            ? 'bg-slate-700 text-white'
+                            : 'bg-slate-100 text-slate-600 hover:bg-slate-200'
+                        }`}
+                      >
+                        Giống hệt - Tự bỏ qua ({identicalRows.length})
+                      </button>
+                    </div>
 
-            {/* Preview Table */}
-            <div className="flex-1 overflow-y-auto custom-scroll my-2 border border-slate-200 rounded-xl overflow-hidden text-xs">
-              <table className="w-full text-left border-collapse">
-                <thead className="bg-slate-50 text-slate-600 uppercase text-[10px] font-extrabold sticky top-0 border-b border-slate-200">
-                  <tr>
-                    <th className="py-2.5 px-3">Khách hàng từ File</th>
-                    <th className="py-2.5 px-3">Điện thoại</th>
-                    <th className="py-2.5 px-3">Địa chỉ</th>
-                    <th className="py-2.5 px-3 text-right">Nợ trong File</th>
-                    <th className="py-2.5 px-3">Trạng thái hệ thống</th>
-                    <th className="py-2.5 px-3 text-center">Lựa chọn xử lý</th>
-                    <th className="py-2.5 px-2 text-center">Sửa</th>
-                  </tr>
-                </thead>
-                <tbody className="divide-y divide-slate-100 font-medium">
-                  {importRows.map((row, idx) => {
-                    const isEditing = editingRowId === row.id;
+                    {/* Bulk Resolution Buttons */}
+                    {importRows.some(r => r.isDuplicate) && (
+                      <div className="flex flex-wrap items-center gap-1 text-[11px] font-bold">
+                        <button
+                          type="button"
+                          onClick={handleApplyRecommendedAll}
+                          className="px-2.5 py-1 rounded-lg bg-emerald-50 border border-emerald-300 text-emerald-800 hover:bg-emerald-100 transition"
+                        >
+                          Đề xuất thông minh
+                        </button>
+                        <button
+                          type="button"
+                          onClick={handleApplyAllMergeInfo}
+                          className="px-2.5 py-1 rounded-lg bg-sky-50 border border-sky-300 text-sky-800 hover:bg-sky-100 transition"
+                        >
+                          Gộp SĐT/Đ/c (Giữ nợ cũ)
+                        </button>
+                        <button
+                          type="button"
+                          onClick={handleApplyAllOverwrite}
+                          className="px-2.5 py-1 rounded-lg bg-rose-50 border border-rose-300 text-rose-700 hover:bg-rose-100 transition"
+                        >
+                          Ghi đè tất cả
+                        </button>
+                        <button
+                          type="button"
+                          onClick={handleApplyAllAccumulate}
+                          className="px-2.5 py-1 rounded-lg bg-amber-50 border border-amber-300 text-amber-800 hover:bg-amber-100 transition"
+                        >
+                          Cộng dồn tất cả
+                        </button>
+                        <button
+                          type="button"
+                          onClick={handleSkipAllDuplicates}
+                          className="px-2.5 py-1 rounded-lg bg-slate-100 border border-slate-300 text-slate-700 hover:bg-slate-200 transition"
+                        >
+                          Bỏ qua tất cả trùng
+                        </button>
+                      </div>
+                    )}
+                  </div>
 
-                    if (isEditing) {
-                      return (
-                        <tr key={row.id} className="bg-amber-50/60">
-                          <td className="py-2 px-2">
-                            <input
-                              type="text"
-                              value={rowEditName}
-                              onChange={e => setRowEditName(e.target.value)}
-                              className="w-full bg-white border border-amber-300 rounded px-2 py-1 text-xs font-bold"
-                            />
-                          </td>
-                          <td className="py-2 px-2">
-                            <input
-                              type="text"
-                              value={rowEditPhone}
-                              onChange={e => setRowEditPhone(e.target.value)}
-                              placeholder="09..."
-                              className="w-full bg-white border border-amber-300 rounded px-2 py-1 text-xs font-mono"
-                            />
-                          </td>
-                          <td className="py-2 px-2">
-                            <input
-                              type="text"
-                              value={rowEditAddress}
-                              onChange={e => setRowEditAddress(e.target.value)}
-                              className="w-full bg-white border border-amber-300 rounded px-2 py-1 text-xs"
-                            />
-                          </td>
-                          <td className="py-2 px-2 text-right">
-                            <input
-                              type="number"
-                              min="0"
-                              step="1000"
-                              value={rowEditDebt}
-                              onChange={e => setRowEditDebt(Number(e.target.value) || 0)}
-                              className="w-24 bg-white border border-amber-300 rounded px-2 py-1 text-xs text-right font-bold text-rose-600"
-                            />
-                          </td>
-                          <td colSpan={2} className="py-2 px-2 text-center">
-                            <span className="text-[11px] text-amber-700 italic">Đang sửa trực tiếp dòng này</span>
-                          </td>
-                          <td className="py-2 px-2 text-center">
-                            <div className="flex items-center justify-center gap-1">
-                              <button
-                                onClick={() => saveEditRow(row.id)}
-                                className="px-2 py-1 rounded bg-emerald-600 text-white font-bold text-[10px]"
-                              >
-                                Lưu
-                              </button>
-                              <button
-                                onClick={() => setEditingRowId(null)}
-                                className="px-2 py-1 rounded bg-slate-200 text-slate-600 font-bold text-[10px]"
-                              >
-                                Hủy
-                              </button>
-                            </div>
-                          </td>
+                  {/* Preview Table */}
+                  <div className="flex-1 overflow-y-auto custom-scroll my-2 border border-slate-200 rounded-xl overflow-hidden text-xs">
+                    <table className="w-full text-left border-collapse">
+                      <thead className="bg-slate-50 text-slate-600 uppercase text-[10px] font-extrabold sticky top-0 border-b border-slate-200">
+                        <tr>
+                          <th className="py-2.5 px-3">Khách hàng từ File</th>
+                          <th className="py-2.5 px-3">Điện thoại</th>
+                          <th className="py-2.5 px-3">Địa chỉ</th>
+                          <th className="py-2.5 px-3 text-right">Nợ trong File</th>
+                          <th className="py-2.5 px-3">So sánh & Xung đột</th>
+                          <th className="py-2.5 px-3 text-center">Lựa chọn xử lý</th>
+                          <th className="py-2.5 px-2 text-center">Sửa</th>
                         </tr>
-                      );
-                    }
+                      </thead>
+                      <tbody className="divide-y divide-slate-100 font-medium">
+                        {visibleRows.length === 0 ? (
+                          <tr>
+                            <td colSpan={7} className="py-8 text-center text-slate-400">
+                              Không có dòng khách hàng nào trong nhóm lọc này.
+                            </td>
+                          </tr>
+                        ) : (
+                          visibleRows.map(row => {
+                            const isEditing = editingRowId === row.id;
 
-                    return (
-                      <tr key={row.id} className={`hover:bg-slate-50 transition ${row.isDuplicate ? 'bg-amber-50/20' : ''}`}>
-                        <td className="py-2.5 px-3">
-                          <strong className="text-slate-900 block">{row.name}</strong>
-                        </td>
-                        <td className="py-2.5 px-3 font-mono text-slate-600">
-                          {row.phone || <span className="text-slate-300 italic">-</span>}
-                        </td>
-                        <td className="py-2.5 px-3 text-slate-500 max-w-[140px]" title={[row.address, ...(row.extraAddresses || [])].filter(Boolean).join(' | ')}>
-                          <div className="truncate">
-                            {row.address || <span className="text-slate-300 italic">-</span>}
-                          </div>
-                          {row.extraAddresses && row.extraAddresses.length > 0 && (
-                            <span className="inline-block mt-0.5 px-1 py-0.2 bg-amber-50 text-amber-800 border border-amber-200 rounded text-[9.5px] font-bold">
-                              +{row.extraAddresses.length} đ/c phụ
-                            </span>
-                          )}
-                        </td>
-                        <td className="py-2.5 px-3 text-right font-bold text-rose-600">
-                          {row.debt > 0 ? formatVND(row.debt) : '0đ'}
-                        </td>
-                        <td className="py-2.5 px-3">
-                          {row.isDuplicate && row.existingCustomer ? (
-                            <div className="space-y-0.5">
-                              <span className="text-[10px] font-bold text-amber-800 block">
-                                Trùng: {row.existingCustomer.name} ({row.existingCustomer.phone || row.existingCustomer.id})
-                              </span>
-                              <span className="text-[10px] text-slate-500 block">
-                                Nợ cũ: <strong className="text-slate-800">{formatVND(row.existingCustomer.debt)}</strong>
-                              </span>
-                              {row.action === 'accumulate' && row.debt > 0 && (
-                                <span className="text-[10px] font-bold text-emerald-700 block">
-                                  → Tổng nợ mới: {formatVND(row.existingCustomer.debt + row.debt)}
-                                </span>
-                              )}
-                              {row.action === 'overwrite' && (
-                                <span className="text-[10px] font-bold text-rose-600 block">
-                                  → Ghi đè nợ: {formatVND(row.debt)}
-                                </span>
-                              )}
-                            </div>
-                          ) : (
-                            <span className="px-2 py-0.5 rounded text-[10px] font-bold bg-emerald-100 text-emerald-800 inline-block">
-                              Khách mới
-                            </span>
-                          )}
-                        </td>
-                        <td className="py-2.5 px-3 text-center">
-                          {row.isDuplicate ? (
-                            <div className="inline-flex rounded-lg border border-slate-200 p-0.5 bg-slate-50 text-[10px] font-bold">
-                              <button
-                                type="button"
-                                onClick={() =>
-                                  setImportRows(prev =>
-                                    prev.map(r => (r.id === row.id ? { ...r, action: 'accumulate' } : r))
-                                  )
-                                }
-                                className={`px-2 py-1 rounded transition ${
-                                  row.action === 'accumulate'
-                                    ? 'bg-amber-500 text-white shadow-2xs'
-                                    : 'text-slate-600 hover:text-slate-900'
+                            if (isEditing) {
+                              return (
+                                <tr key={row.id} className="bg-amber-50/60">
+                                  <td className="py-2 px-2">
+                                    <input
+                                      type="text"
+                                      value={rowEditName}
+                                      onChange={e => setRowEditName(e.target.value)}
+                                      className="w-full bg-white border border-amber-300 rounded px-2 py-1 text-xs font-bold"
+                                    />
+                                  </td>
+                                  <td className="py-2 px-2">
+                                    <input
+                                      type="text"
+                                      value={rowEditPhone}
+                                      onChange={e => setRowEditPhone(e.target.value)}
+                                      placeholder="09..."
+                                      className="w-full bg-white border border-amber-300 rounded px-2 py-1 text-xs font-mono"
+                                    />
+                                  </td>
+                                  <td className="py-2 px-2">
+                                    <input
+                                      type="text"
+                                      value={rowEditAddress}
+                                      onChange={e => setRowEditAddress(e.target.value)}
+                                      className="w-full bg-white border border-amber-300 rounded px-2 py-1 text-xs"
+                                    />
+                                  </td>
+                                  <td className="py-2 px-2 text-right">
+                                    <input
+                                      type="number"
+                                      min="0"
+                                      step="1000"
+                                      value={rowEditDebt}
+                                      onChange={e => setRowEditDebt(Number(e.target.value) || 0)}
+                                      className="w-24 bg-white border border-amber-300 rounded px-2 py-1 text-xs text-right font-bold text-rose-600"
+                                    />
+                                  </td>
+                                  <td colSpan={2} className="py-2 px-2 text-center">
+                                    <span className="text-[11px] text-amber-700 italic">Đang sửa trực tiếp dòng này</span>
+                                  </td>
+                                  <td className="py-2 px-2 text-center">
+                                    <div className="flex items-center justify-center gap-1">
+                                      <button
+                                        onClick={() => saveEditRow(row.id)}
+                                        className="px-2 py-1 rounded bg-emerald-600 text-white font-bold text-[10px]"
+                                      >
+                                        Lưu
+                                      </button>
+                                      <button
+                                        onClick={() => setEditingRowId(null)}
+                                        className="px-2 py-1 rounded bg-slate-200 text-slate-600 font-bold text-[10px]"
+                                      >
+                                        Hủy
+                                      </button>
+                                    </div>
+                                  </td>
+                                </tr>
+                              );
+                            }
+
+                            return (
+                              <tr
+                                key={row.id}
+                                className={`hover:bg-slate-50 transition ${
+                                  row.diffStatus === 'identical'
+                                    ? 'opacity-70 bg-slate-50/40'
+                                    : row.isDuplicate
+                                    ? 'bg-amber-50/20'
+                                    : ''
                                 }`}
-                                title="Cộng dồn số nợ trong file vào nợ hiện tại của khách"
                               >
-                                Cộng dồn
-                              </button>
-                              <button
-                                type="button"
-                                onClick={() =>
-                                  setImportRows(prev =>
-                                    prev.map(r => (r.id === row.id ? { ...r, action: 'overwrite' } : r))
-                                  )
-                                }
-                                className={`px-2 py-1 rounded transition ${
-                                  row.action === 'overwrite'
-                                    ? 'bg-rose-500 text-white shadow-2xs'
-                                    : 'text-slate-600 hover:text-slate-900'
-                                }`}
-                                title="Ghi đè số nợ cũ bằng số nợ trong file"
-                              >
-                                Ghi đè
-                              </button>
-                              <button
-                                type="button"
-                                onClick={() =>
-                                  setImportRows(prev =>
-                                    prev.map(r => (r.id === row.id ? { ...r, action: 'skip' } : r))
-                                  )
-                                }
-                                className={`px-2 py-1 rounded transition ${
-                                  row.action === 'skip'
-                                    ? 'bg-slate-600 text-white shadow-2xs'
-                                    : 'text-slate-600 hover:text-slate-900'
-                                }`}
-                                title="Bỏ qua dòng này, không cập nhật khách cũ"
-                              >
-                                Bỏ qua
-                              </button>
-                            </div>
-                          ) : (
-                            <span className="text-[11px] font-bold text-emerald-700">Tạo mới</span>
-                          )}
-                        </td>
-                        <td className="py-2.5 px-2 text-center">
-                          <button
-                            type="button"
-                            onClick={() => startEditRow(row)}
-                            className="p-1.5 rounded-lg border border-slate-200 hover:bg-amber-50 hover:text-amber-600 text-slate-500 transition"
-                            title="Sửa nhanh thông tin dòng trước khi nhập"
-                          >
-                            <Edit2 className="w-3 h-3" />
-                          </button>
-                        </td>
-                      </tr>
-                    );
-                  })}
-                </tbody>
-              </table>
-            </div>
+                                <td className="py-2.5 px-3">
+                                  <strong className="text-slate-900 block">{row.name}</strong>
+                                  {row.matchType === 'name_only' && (
+                                    <span className="inline-block mt-0.5 px-1.5 py-0.5 rounded bg-rose-100 text-rose-800 text-[9.5px] font-bold">
+                                      ⚠️ Trùng tên khác SĐT
+                                    </span>
+                                  )}
+                                </td>
+                                <td className="py-2.5 px-3 font-mono text-slate-600">
+                                  <div>{row.phone || <span className="text-slate-300 italic">-</span>}</div>
+                                  {row.phone2 && (
+                                    <div className="text-[10px] text-slate-400">SĐT 2: {row.phone2}</div>
+                                  )}
+                                </td>
+                                <td
+                                  className="py-2.5 px-3 text-slate-500 max-w-[140px]"
+                                  title={[row.address, ...(row.extraAddresses || [])].filter(Boolean).join(' | ')}
+                                >
+                                  <div className="truncate">
+                                    {row.address || <span className="text-slate-300 italic">-</span>}
+                                  </div>
+                                  {row.extraAddresses && row.extraAddresses.length > 0 && (
+                                    <span className="inline-block mt-0.5 px-1 py-0.2 bg-amber-50 text-amber-800 border border-amber-200 rounded text-[9.5px] font-bold">
+                                      +{row.extraAddresses.length} đ/c phụ
+                                    </span>
+                                  )}
+                                </td>
+                                <td className="py-2.5 px-3 text-right font-bold text-rose-600">
+                                  {row.debt > 0 ? formatVND(row.debt) : '0đ'}
+                                </td>
+                                <td className="py-2.5 px-3">
+                                  {row.isDuplicate && row.existingCustomer ? (
+                                    <div className="space-y-1">
+                                      <span className="text-[10px] font-bold text-amber-800 block">
+                                        Khớp: {row.existingCustomer.name} ({row.existingCustomer.phone || row.existingCustomer.id})
+                                      </span>
+                                      <span className="text-[10px] text-slate-500 block">
+                                        Nợ hiện tại: <strong className="text-slate-800">{formatVND(row.existingCustomer.debt)}</strong>
+                                      </span>
+                                      {row.diffs.length === 0 ? (
+                                        <span className="px-1.5 py-0.5 rounded bg-slate-100 text-slate-600 text-[10px] font-bold inline-block">
+                                          Giống hệt dữ liệu hiện tại
+                                        </span>
+                                      ) : (
+                                        <div className="flex flex-wrap gap-1">
+                                          {row.diffs.map((d, dIdx) => {
+                                            const fmt = (v: string | number) =>
+                                              d.field === 'debt' && typeof v === 'number' ? formatVND(v) : String(v);
+                                            return (
+                                              <span
+                                                key={`${d.field}_${dIdx}`}
+                                                className="px-1.5 py-0.5 rounded bg-amber-100/80 text-amber-900 text-[10px] font-bold"
+                                              >
+                                                {d.label}: {fmt(d.oldValue)} → {fmt(d.newValue)}
+                                              </span>
+                                            );
+                                          })}
+                                        </div>
+                                      )}
+                                      {row.action === 'accumulate' && row.debt > 0 && (
+                                        <span className="text-[10px] font-bold text-emerald-700 block">
+                                          → Tổng nợ mới: {formatVND(row.existingCustomer.debt + row.debt)}
+                                        </span>
+                                      )}
+                                      {row.action === 'overwrite' && (
+                                        <span className="text-[10px] font-bold text-rose-600 block">
+                                          → Ghi đè nợ thành: {formatVND(row.debt)}
+                                        </span>
+                                      )}
+                                    </div>
+                                  ) : (
+                                    <span className="px-2 py-0.5 rounded text-[10px] font-bold bg-emerald-100 text-emerald-800 inline-block">
+                                      Khách mới
+                                    </span>
+                                  )}
+                                </td>
+                                <td className="py-2.5 px-3 text-center">
+                                  {row.isDuplicate ? (
+                                    <div className="inline-flex flex-wrap justify-center rounded-lg border border-slate-200 p-0.5 bg-slate-50 text-[10px] font-bold gap-0.5">
+                                      <button
+                                        type="button"
+                                        onClick={() =>
+                                          setImportRows(prev =>
+                                            prev.map(r => (r.id === row.id ? { ...r, action: 'merge_info' } : r))
+                                          )
+                                        }
+                                        className={`px-2 py-1 rounded transition ${
+                                          row.action === 'merge_info'
+                                            ? 'bg-sky-600 text-white shadow-2xs'
+                                            : 'text-slate-600 hover:text-slate-900'
+                                        }`}
+                                        title="Chỉ bổ sung SĐT 2 / Địa chỉ phụ mới và giữ nguyên số nợ cũ"
+                                      >
+                                        Gộp SĐT/Đ/c (Giữ nợ)
+                                      </button>
+                                      <button
+                                        type="button"
+                                        onClick={() =>
+                                          setImportRows(prev =>
+                                            prev.map(r => (r.id === row.id ? { ...r, action: 'overwrite' } : r))
+                                          )
+                                        }
+                                        className={`px-2 py-1 rounded transition ${
+                                          row.action === 'overwrite'
+                                            ? 'bg-rose-500 text-white shadow-2xs'
+                                            : 'text-slate-600 hover:text-slate-900'
+                                        }`}
+                                        title="Ghi đè toàn bộ thông tin & công nợ bằng dữ liệu trong file"
+                                      >
+                                        Ghi đè
+                                      </button>
+                                      <button
+                                        type="button"
+                                        onClick={() =>
+                                          setImportRows(prev =>
+                                            prev.map(r => (r.id === row.id ? { ...r, action: 'accumulate' } : r))
+                                          )
+                                        }
+                                        className={`px-2 py-1 rounded transition ${
+                                          row.action === 'accumulate'
+                                            ? 'bg-amber-500 text-white shadow-2xs'
+                                            : 'text-slate-600 hover:text-slate-900'
+                                        }`}
+                                        title="Cộng dồn số nợ trong file vào nợ hiện tại của khách"
+                                      >
+                                        Cộng dồn nợ
+                                      </button>
+                                      {row.matchType === 'name_only' && (
+                                        <button
+                                          type="button"
+                                          onClick={() =>
+                                            setImportRows(prev =>
+                                              prev.map(r => (r.id === row.id ? { ...r, action: 'create' } : r))
+                                            )
+                                          }
+                                          className={`px-2 py-1 rounded transition ${
+                                            row.action === 'create'
+                                              ? 'bg-emerald-600 text-white shadow-2xs'
+                                              : 'text-slate-600 hover:text-emerald-700'
+                                          }`}
+                                          title="Tạo thành hồ sơ khách hàng mới độc lập"
+                                        >
+                                          Tạo riêng
+                                        </button>
+                                      )}
+                                      <button
+                                        type="button"
+                                        onClick={() =>
+                                          setImportRows(prev =>
+                                            prev.map(r => (r.id === row.id ? { ...r, action: 'skip' } : r))
+                                          )
+                                        }
+                                        className={`px-2 py-1 rounded transition ${
+                                          row.action === 'skip'
+                                            ? 'bg-slate-600 text-white shadow-2xs'
+                                            : 'text-slate-600 hover:text-slate-900'
+                                        }`}
+                                        title="Bỏ qua dòng này, không cập nhật khách cũ"
+                                      >
+                                        Bỏ qua
+                                      </button>
+                                    </div>
+                                  ) : (
+                                    <span className="text-[11px] font-bold text-emerald-700">Tạo mới</span>
+                                  )}
+                                </td>
+                                <td className="py-2.5 px-2 text-center">
+                                  <button
+                                    type="button"
+                                    onClick={() => startEditRow(row)}
+                                    className="p-1.5 rounded-lg border border-slate-200 hover:bg-amber-50 hover:text-amber-600 text-slate-500 transition"
+                                    title="Sửa nhanh thông tin dòng trước khi nhập"
+                                  >
+                                    <Edit2 className="w-3 h-3" />
+                                  </button>
+                                </td>
+                              </tr>
+                            );
+                          })
+                        )}
+                      </tbody>
+                    </table>
+                  </div>
+                </>
+              );
+            })()}
 
             {/* Modal Footer Controls */}
             <div className="pt-3 border-t border-slate-100 flex items-center justify-between gap-2 shrink-0 text-xs font-bold">

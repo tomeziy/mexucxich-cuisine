@@ -74,7 +74,21 @@ import {
   applyCatalogAntiShrinkGuard,
   isCloudExtraAddressesUnsupported,
   subscribeCloudExtraAddressesSupport,
+  fetchStoreAuthConfig,
+  pushStoreAuthConfig,
+  subscribeToCloudRealtimeChanges,
 } from '../services/supabase';
+import {
+  StoreAuthConfig,
+  StoreAuthSession,
+  LOCAL_AUTH_CONFIG_KEY,
+  LOCAL_AUTH_SESSION_KEY,
+  createDefaultStoreAuthConfig,
+  hashStorePassword,
+  verifyStoreCredentials,
+  createStoreAuthSession,
+  isStoreSessionValid,
+} from '../utils/auth';
 
 export { applyCatalogAntiShrinkGuard };
 
@@ -90,13 +104,22 @@ interface StoreContextType {
   lastCloudSyncAt: string | null;
   cloudSyncError: string | null;
   sentinelAcks: SentinelAcknowledgments;
+  authConfig: StoreAuthConfig;
+  isAuthenticated: boolean;
+  isScreenLocked: boolean;
+  loginWithPassword: (username: string, password: string) => boolean;
+  logoutOrLockScreen: () => void;
+  updateAuthConfig: (patch: { requireSignIn?: boolean; newUsername?: string; newPassword?: string }) => Promise<boolean>;
   addProduct: (product: Omit<Product, 'id'>) => Product;
   addProductsBatch: (products: Array<Omit<Product, 'id'>>) => Product[];
   updateProduct: (id: string, product: Partial<Product>) => void;
+  updateProductsBatch: (updates: Array<{ id: string; data: Partial<Product> }>) => number;
   deleteProduct: (id: string) => void;
+  deleteProductsBatch: (ids: string[]) => number;
   addCustomer: (customer: Omit<Customer, 'id' | 'debt' | 'totalSpent' | 'orderCount'>) => Customer;
   addCustomersBatch: (customers: Array<Omit<Customer, 'id' | 'totalSpent' | 'orderCount'>>) => Customer[];
   updateCustomer: (id: string, customer: Partial<Customer>) => void;
+  updateCustomersBatch: (updates: Array<{ id: string; data: Partial<Customer> }>) => number;
   deleteCustomer: (id: string) => void;
   deleteCustomersBatch: (ids: string[], options?: { onlySafe?: boolean }) => { deletedCount: number; skippedIds: string[] };
   createOrder: (orderData: Omit<Order, 'id' | 'createdAt'>) => Order;
@@ -125,7 +148,10 @@ interface StoreContextType {
   resetSentinelAcks: () => void;
   restoreCustomerFromOrder: (customerId: string, orderId: string) => { success: boolean; message: string };
   splitCustomerByHistoricalOrderRecord: (customerId: string, targetPhone: string) => void;
-  restoreFromExcelOrders: (orders: Order[]) => { restoredOrdersCount: number; restoredProductsCount: number };
+  restoreFromExcelOrders: (
+    orders: Order[],
+    options?: { overwriteOrderIds?: string[] }
+  ) => { restoredOrdersCount: number; updatedOrdersCount: number; restoredProductsCount: number };
   restoreFromVault: (key?: string) => { success: boolean; message: string; restoredProducts: number; restoredOrders: number };
   getAvailableBackups: () => BackupMetadata[];
   resetToMockData: () => void;
@@ -283,6 +309,42 @@ export const StoreProvider: React.FC<{ children: React.ReactNode }> = ({ childre
   );
   const [cloudSyncError, setCloudSyncError] = useState<string | null>(null);
   const [sentinelAcks, setSentinelAcks] = useState<SentinelAcknowledgments>(() => loadSentinelAcks());
+
+  // ADR-0024: Store-wide authentication config & session gate
+  const [authConfig, setAuthConfig] = useState<StoreAuthConfig>(() => {
+    try {
+      const raw = localStorage.getItem(LOCAL_AUTH_CONFIG_KEY);
+      if (raw) {
+        const parsed = JSON.parse(raw);
+        if (parsed && typeof parsed.username === 'string' && typeof parsed.passwordHash === 'string') {
+          return parsed as StoreAuthConfig;
+        }
+      }
+    } catch {
+      // ignore corrupted auth config
+    }
+    return createDefaultStoreAuthConfig();
+  });
+  const [authSession, setAuthSession] = useState<StoreAuthSession | null>(() => {
+    try {
+      const raw = localStorage.getItem(LOCAL_AUTH_SESSION_KEY);
+      return raw ? (JSON.parse(raw) as StoreAuthSession) : null;
+    } catch {
+      return null;
+    }
+  });
+  const [isScreenLocked, setIsScreenLocked] = useState<boolean>(false);
+
+  const authConfigRef = useRef<StoreAuthConfig>(authConfig);
+  const isCloudSyncingRef = useRef<boolean>(isCloudSyncing);
+  useEffect(() => {
+    authConfigRef.current = authConfig;
+  }, [authConfig]);
+  useEffect(() => {
+    isCloudSyncingRef.current = isCloudSyncing;
+  }, [isCloudSyncing]);
+
+  const isAuthenticated = isStoreSessionValid(authSession, authConfig);
 
   useEffect(() => {
     return subscribeCloudExtraAddressesSupport(setCloudExtraAddressesUnsupported);
@@ -606,7 +668,23 @@ export const StoreProvider: React.FC<{ children: React.ReactNode }> = ({ childre
         dirtyOrderIds,
       };
 
-      const pullRes = await pullAllDataFromCloud(localData);
+      const [pullRes, cloudAuth] = await Promise.all([
+        pullAllDataFromCloud(localData),
+        fetchStoreAuthConfig().catch(() => null),
+      ]);
+
+      if (cloudAuth && cloudAuth.updatedAt) {
+        const localTs = authConfigRef.current?.updatedAt
+          ? new Date(authConfigRef.current.updatedAt).getTime()
+          : 0;
+        const remoteTs = new Date(cloudAuth.updatedAt).getTime();
+        if (!Number.isFinite(localTs) || (Number.isFinite(remoteTs) && remoteTs > localTs)) {
+          authConfigRef.current = cloudAuth;
+          localStorage.setItem(LOCAL_AUTH_CONFIG_KEY, JSON.stringify(cloudAuth));
+          setAuthConfig(cloudAuth);
+        }
+      }
+
       if (!pullRes) {
         const errMsg = 'Không thể kết nối hoặc tải dữ liệu từ Supabase Cloud!';
         setCloudSyncError(errMsg);
@@ -761,11 +839,30 @@ export const StoreProvider: React.FC<{ children: React.ReactNode }> = ({ childre
     window.addEventListener('online', refreshCloud);
     document.addEventListener('visibilitychange', handleVisibility);
 
+    // ADR-0024 Layer 1: Debounced WebSocket Realtime push wakeup when another device writes
+    let realtimeTimer: number | null = null;
+    const unsubscribeRealtime = subscribeToCloudRealtimeChanges(() => {
+      if (document.visibilityState !== 'visible' || isCloudSyncingRef.current) return;
+      if (realtimeTimer !== null) {
+        window.clearTimeout(realtimeTimer);
+      }
+      realtimeTimer = window.setTimeout(() => {
+        realtimeTimer = null;
+        if (document.visibilityState === 'visible' && !isCloudSyncingRef.current) {
+          refreshCloud();
+        }
+      }, 1500);
+    });
+
     return () => {
       window.clearInterval(intervalId);
       window.removeEventListener('focus', refreshCloud);
       window.removeEventListener('online', refreshCloud);
       document.removeEventListener('visibilitychange', handleVisibility);
+      if (realtimeTimer !== null) {
+        window.clearTimeout(realtimeTimer);
+      }
+      unsubscribeRealtime();
     };
   }, [cloudConfig.supabaseUrl, cloudConfig.supabaseAnonKey, cloudConfig.autoSync]);
 
@@ -790,6 +887,61 @@ export const StoreProvider: React.FC<{ children: React.ReactNode }> = ({ childre
     }
     return await executeCloudPullRef.current();
   }, []);
+
+  // ADR-0024: Authentication gate & Cloud auth config actions
+  const loginWithPassword = (username: string, password: string): boolean => {
+    const activeCfg = authConfigRef.current;
+    if (!verifyStoreCredentials(username, password, activeCfg)) {
+      return false;
+    }
+    const nextSession = createStoreAuthSession(activeCfg);
+    localStorage.setItem(LOCAL_AUTH_SESSION_KEY, JSON.stringify(nextSession));
+    setAuthSession(nextSession);
+    setIsScreenLocked(false);
+    return true;
+  };
+
+  const logoutOrLockScreen = () => {
+    localStorage.removeItem(LOCAL_AUTH_SESSION_KEY);
+    setAuthSession(null);
+    setIsScreenLocked(true);
+  };
+
+  const updateAuthConfig = async (patch: {
+    requireSignIn?: boolean;
+    newUsername?: string;
+    newPassword?: string;
+  }): Promise<boolean> => {
+    const current = authConfigRef.current;
+    const nextUsername = (patch.newUsername ?? current.username).trim() || current.username;
+    const nextRequire = patch.requireSignIn ?? current.requireSignIn;
+    const salt = current.salt || 'mxc_salt_v1';
+    const nextHash =
+      patch.newPassword && patch.newPassword.length > 0
+        ? hashStorePassword(nextUsername, patch.newPassword, salt)
+        : current.passwordHash;
+
+    const nextConfig: StoreAuthConfig = {
+      requireSignIn: nextRequire,
+      username: nextUsername,
+      passwordHash: nextHash,
+      salt,
+      sessionTtlDays: current.sessionTtlDays || 30,
+      updatedAt: new Date().toISOString(),
+    };
+
+    authConfigRef.current = nextConfig;
+    localStorage.setItem(LOCAL_AUTH_CONFIG_KEY, JSON.stringify(nextConfig));
+    setAuthConfig(nextConfig);
+
+    // Keep current admin device signed in after updating credentials
+    const nextSession = createStoreAuthSession(nextConfig);
+    localStorage.setItem(LOCAL_AUTH_SESSION_KEY, JSON.stringify(nextSession));
+    setAuthSession(nextSession);
+    setIsScreenLocked(false);
+
+    return await pushStoreAuthConfig(nextConfig);
+  };
 
   // Product actions
   const addProduct = (productData: Omit<Product, 'id'>): Product => {
@@ -871,6 +1023,58 @@ export const StoreProvider: React.FC<{ children: React.ReactNode }> = ({ childre
     });
   };
 
+  const updateProductsBatch = (
+    updates: Array<{ id: string; data: Partial<Product> }>
+  ): number => {
+    if (!updates || updates.length === 0) return 0;
+    const now = new Date().toISOString();
+    const updateMap = new Map<string, Partial<Product>>();
+    for (const u of updates) {
+      if (u && u.id) updateMap.set(u.id, u.data || {});
+    }
+    const changedProducts: Product[] = [];
+    const nextProducts = stateRef.current.products.map(p => {
+      const patch = updateMap.get(p.id);
+      if (!patch) return p;
+      const updated = { ...p, ...patch, updatedAt: now };
+      changedProducts.push(updated);
+      return updated;
+    });
+    if (changedProducts.length === 0) return 0;
+
+    const changedIds = changedProducts.map(p => p.id);
+    addDirtyProductIds(changedIds);
+    stateRef.current.products = nextProducts;
+    localStorage.setItem(STORAGE_KEYS.PRODUCTS, JSON.stringify(nextProducts));
+    setProducts(nextProducts);
+    cloudSyncProductsBatch(changedProducts).then(ok => {
+      if (ok) removeDirtyProductIds(changedIds);
+    });
+    return changedProducts.length;
+  };
+
+  const deleteProductsBatch = (ids: string[]): number => {
+    const cleanIds = Array.from(new Set((ids || []).map(id => String(id || '').trim()).filter(Boolean)));
+    if (cleanIds.length === 0) return 0;
+    const idSet = new Set(cleanIds);
+    const nextProducts = stateRef.current.products.filter(p => !idSet.has(p.id));
+    const removedCount = stateRef.current.products.length - nextProducts.length;
+    if (removedCount === 0) return 0;
+
+    removeDirtyProductIds(cleanIds);
+    addPendingDeletedProductIds(cleanIds);
+    stateRef.current.products = nextProducts;
+    localStorage.setItem(STORAGE_KEYS.PRODUCTS, JSON.stringify(nextProducts));
+    setProducts(nextProducts);
+    pushCloudTombstones({ deletedProductIds: cleanIds });
+    cloudDeleteProductsBatch(cleanIds).then(res => {
+      if (res.success) {
+        removePendingDeletedProductIds(cleanIds);
+      }
+    });
+    return removedCount;
+  };
+
   // Customer actions
   const addCustomer = (customerData: Omit<Customer, 'id' | 'debt' | 'totalSpent' | 'orderCount'>): Customer => {
     const newId = `KH_${Date.now()}_${Math.floor(1000 + Math.random() * 9000)}`;
@@ -931,6 +1135,37 @@ export const StoreProvider: React.FC<{ children: React.ReactNode }> = ({ childre
         return c;
       })
     );
+  };
+
+  const updateCustomersBatch = (
+    updates: Array<{ id: string; data: Partial<Customer> }>
+  ): number => {
+    if (!updates || updates.length === 0) return 0;
+    const now = new Date().toISOString();
+    const updateMap = new Map<string, Partial<Customer>>();
+    for (const u of updates) {
+      if (u && u.id) updateMap.set(u.id, u.data || {});
+    }
+    const changedCustomers: Customer[] = [];
+    const nextCustomers = stateRef.current.customers.map(c => {
+      const patch = updateMap.get(c.id);
+      if (!patch) return c;
+      const merged = { ...c, ...patch, updatedAt: now };
+      if ('address' in patch || 'extraAddresses' in patch) {
+        const normAddr = normalizeAddressList(merged.address || '', merged.extraAddresses);
+        merged.address = normAddr.address;
+        merged.extraAddresses = normAddr.extraAddresses;
+      }
+      changedCustomers.push(merged);
+      return merged;
+    });
+    if (changedCustomers.length === 0) return 0;
+
+    stateRef.current.customers = nextCustomers;
+    localStorage.setItem(STORAGE_KEYS.CUSTOMERS, JSON.stringify(nextCustomers));
+    setCustomers(nextCustomers);
+    cloudSyncCustomersBatch(changedCustomers);
+    return changedCustomers.length;
   };
 
   const deleteCustomer = (id: string) => {
@@ -1884,15 +2119,17 @@ export const StoreProvider: React.FC<{ children: React.ReactNode }> = ({ childre
     return listVaultBackups();
   };
 
-  // ADR-0018: Native Excel Orders & Products Importer
+  // ADR-0018 & ADR-0024: Native Excel Orders & Products Importer (with selective conflict overwrite)
   const restoreFromExcelOrders = (
-    importedOrders: Order[]
+    importedOrders: Order[],
+    options?: { overwriteOrderIds?: string[] }
   ): {
     restoredOrdersCount: number;
+    updatedOrdersCount: number;
     restoredProductsCount: number;
   } => {
     if (!importedOrders || importedOrders.length === 0) {
-      return { restoredOrdersCount: 0, restoredProductsCount: 0 };
+      return { restoredOrdersCount: 0, updatedOrdersCount: 0, restoredProductsCount: 0 };
     }
 
     const currentProds = stateRef.current.products;
@@ -1940,18 +2177,34 @@ export const StoreProvider: React.FC<{ children: React.ReactNode }> = ({ childre
       }),
     }));
 
-    // 3. Merge orders
+    // 3. Merge orders (new orders + explicitly approved overwrites)
+    const overwriteSet = new Set(
+      (options?.overwriteOrderIds || []).map(id => String(id || '').trim()).filter(Boolean)
+    );
     const existingOrderIds = new Set(stateRef.current.orders.map(o => o.id));
-    const newOrders = linkedOrders.filter(o => !existingOrderIds.has(o.id));
-    const nextOrders = [...newOrders, ...stateRef.current.orders];
-    if (newOrders.length > 0) {
-      const newOrdIds = newOrders.map(o => o.id);
-      addDirtyOrderIds(newOrdIds);
+    const newOrders: Order[] = [];
+    const overwriteMap = new Map<string, Order>();
+
+    for (const ord of linkedOrders) {
+      if (!existingOrderIds.has(ord.id)) {
+        newOrders.push(ord);
+      } else if (overwriteSet.has(ord.id)) {
+        overwriteMap.set(ord.id, { ...ord, updatedAt: new Date().toISOString() });
+      }
+    }
+
+    const updatedExisting = stateRef.current.orders.map(o => overwriteMap.get(o.id) || o);
+    const nextOrders = [...newOrders, ...updatedExisting];
+    const changedOrders = [...newOrders, ...Array.from(overwriteMap.values())];
+
+    if (changedOrders.length > 0) {
+      const changedOrdIds = changedOrders.map(o => o.id);
+      addDirtyOrderIds(changedOrdIds);
       stateRef.current.orders = nextOrders;
       localStorage.setItem(STORAGE_KEYS.ORDERS, JSON.stringify(nextOrders));
       setOrders(nextOrders);
-      cloudSyncOrdersBatch(newOrders).then(ok => {
-        if (ok) removeDirtyOrderIds(newOrdIds);
+      cloudSyncOrdersBatch(changedOrders).then(ok => {
+        if (ok) removeDirtyOrderIds(changedOrdIds);
       });
     } else {
       setOrders(nextOrders);
@@ -2014,6 +2267,7 @@ export const StoreProvider: React.FC<{ children: React.ReactNode }> = ({ childre
 
     return {
       restoredOrdersCount: newOrders.length,
+      updatedOrdersCount: overwriteMap.size,
       restoredProductsCount: createdProducts.length,
     };
   };
@@ -2209,13 +2463,22 @@ export const StoreProvider: React.FC<{ children: React.ReactNode }> = ({ childre
         lastCloudSyncAt,
         cloudSyncError,
         sentinelAcks,
+        authConfig,
+        isAuthenticated,
+        isScreenLocked,
+        loginWithPassword,
+        logoutOrLockScreen,
+        updateAuthConfig,
         addProduct,
         addProductsBatch,
         updateProduct,
+        updateProductsBatch,
         deleteProduct,
+        deleteProductsBatch,
         addCustomer,
         addCustomersBatch,
         updateCustomer,
+        updateCustomersBatch,
         deleteCustomer,
         deleteCustomersBatch,
         createOrder,

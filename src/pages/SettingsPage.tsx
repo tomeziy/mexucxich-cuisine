@@ -26,6 +26,9 @@ import {
   HelpCircle,
   CheckCircle2,
   ShieldAlert,
+  Lock,
+  KeyRound,
+  ShieldCheck,
 } from 'lucide-react';
 import {
   testSupabaseConnection,
@@ -105,6 +108,10 @@ const SAMPLE_ORDER: Order = {
 
 export const SettingsPage: React.FC = () => {
   const {
+    products,
+    customers,
+    orders,
+    debtPayments,
     receiptSettings,
     updateReceiptSettings,
     cloudConfig,
@@ -115,10 +122,62 @@ export const SettingsPage: React.FC = () => {
     importAllData,
     resetToMockData,
     restoreFromVault,
+    authConfig,
+    isAuthenticated,
+    updateAuthConfig,
+    logoutOrLockScreen,
   } = useStore();
 
   const [settings, setSettings] = useState<ReceiptSettings>(receiptSettings);
   const [savedSuccess, setSavedSuccess] = useState(false);
+
+  // Security & Fast Username+Password Sign-In states (ADR-0024)
+  const [secRequireSignIn, setSecRequireSignIn] = useState<boolean>(authConfig.requireSignIn);
+  const [secUsername, setSecUsername] = useState<string>(authConfig.username || 'hang');
+  const [secPassword, setSecPassword] = useState<string>('');
+  const [secSaving, setSecSaving] = useState<boolean>(false);
+  const [secStatus, setSecStatus] = useState<{ success?: boolean; message?: string } | null>(null);
+
+  React.useEffect(() => {
+    setSecRequireSignIn(authConfig.requireSignIn);
+    setSecUsername(authConfig.username || 'hang');
+  }, [authConfig.requireSignIn, authConfig.username]);
+
+  const handleSaveSecurity = async () => {
+    const cleanUser = secUsername.trim();
+    if (!cleanUser) {
+      setSecStatus({ success: false, message: 'Tên đăng nhập không được để trống!' });
+      return;
+    }
+    if (cleanUser.toLowerCase() !== authConfig.username.toLowerCase() && !secPassword) {
+      setSecStatus({
+        success: false,
+        message: 'Khi đổi Tên đăng nhập, vui lòng nhập Mật khẩu mới để đồng bộ mã bảo mật!',
+      });
+      return;
+    }
+
+    setSecSaving(true);
+    setSecStatus(null);
+    try {
+      const ok = await updateAuthConfig({
+        requireSignIn: secRequireSignIn,
+        newUsername: cleanUser,
+        newPassword: secPassword || undefined,
+      });
+      setSecPassword('');
+      setSecStatus({
+        success: true,
+        message: ok
+          ? 'Đã lưu & đồng bộ cấu hình đăng nhập lên Cloud cho mọi thiết bị!'
+          : 'Đã lưu cấu hình trên máy này (sẽ đồng bộ lên Cloud khi có mạng).',
+      });
+    } catch (err: any) {
+      setSecStatus({ success: false, message: `Lỗi lưu cấu hình: ${err?.message || err}` });
+    } finally {
+      setSecSaving(false);
+    }
+  };
 
   // Cloud Supabase states
   const [cloudUrl, setCloudUrl] = useState(cloudConfig.supabaseUrl || DEFAULT_SUPABASE_URL);
@@ -251,6 +310,32 @@ export const SettingsPage: React.FC = () => {
     reader.onload = (event) => {
       try {
         const json = JSON.parse(event.target?.result as string);
+        if (!json || typeof json !== 'object') {
+          alert('Tệp sao lưu không đúng cấu trúc!');
+          return;
+        }
+
+        const inProds = Array.isArray(json.products) ? json.products.length : 0;
+        const inCusts = Array.isArray(json.customers) ? json.customers.length : 0;
+        const inOrders = Array.isArray(json.orders) ? json.orders.length : 0;
+        const inDebts = Array.isArray(json.debtPayments) ? json.debtPayments.length : 0;
+        const exportedLabel = json.exportedAt
+          ? new Date(json.exportedAt).toLocaleString('vi-VN')
+          : 'Không rõ thời gian';
+
+        const confirmSummary =
+          `KIỂM TRA ĐỐI SOÁT TRƯỚC KHI KHÔI PHỤC FILE JSON (${file.name})\n` +
+          `Ngày xuất sao lưu: ${exportedLabel}\n\n` +
+          `• Món ăn: File có ${inProds} món (Hiện tại: ${products.length} món)\n` +
+          `• Khách hàng: File có ${inCusts} khách (Hiện tại: ${customers.length} khách)\n` +
+          `• Đơn hàng: File có ${inOrders} đơn (Hiện tại: ${orders.length} đơn)\n` +
+          `• Phiếu thu nợ: File có ${inDebts} phiếu (Hiện tại: ${debtPayments.length} phiếu)\n\n` +
+          `Hệ thống sẽ HỢP NHẤT AN TOÀN (không xóa mất dữ liệu mới hơn hiện có và tự lọc món demo SP01–SP08). Tiếp tục?`;
+
+        if (!window.confirm(confirmSummary)) {
+          return;
+        }
+
         if (importAllData(json)) {
           alert(
             'Đã gộp và khôi phục dữ liệu từ file JSON an toàn!\n- Toàn bộ món ăn và đơn hàng mới hiện có vẫn được giữ nguyên.\n- Các món demo cũ (SP01–SP08) đã tự động loại bỏ và đang đồng bộ lên Cloud.'
@@ -960,6 +1045,112 @@ export const SettingsPage: React.FC = () => {
                   </div>
                 )}
               </div>
+            </div>
+          </div>
+
+          {/* Security & Fast Username+Password Sign-In Card (ADR-0024) */}
+          <div className="bg-white p-4 rounded-2xl border border-slate-200 shadow-xs space-y-3">
+            <div className="flex flex-wrap items-center justify-between gap-2">
+              <h3 className="font-extrabold text-xs uppercase tracking-wider text-slate-400 flex items-center gap-1.5">
+                <Lock className="w-3.5 h-3.5 text-amber-500" />
+                <span>Bảo mật & Đăng nhập nhanh (Username & Password)</span>
+              </h3>
+              <span
+                className={`text-[10px] font-bold px-2.5 py-0.5 rounded-full ${
+                  isAuthenticated
+                    ? 'bg-emerald-100 text-emerald-800'
+                    : 'bg-slate-100 text-slate-600'
+                }`}
+              >
+                {isAuthenticated ? 'Đã xác thực (Nhớ 30 ngày)' : 'Chưa khóa bắt buộc'}
+              </span>
+            </div>
+
+            <p className="text-xs text-slate-500">
+              Bảo vệ dữ liệu bán hàng khi mở trên thiết bị mới hoặc máy chung bằng tên đăng nhập và mật khẩu (hỗ trợ Trình quản lý mật khẩu trình duyệt tự điền trong 1 giây, tự nhớ phiên 30 ngày).
+            </p>
+
+            <label className="flex items-center justify-between p-2.5 rounded-xl border border-slate-200 bg-slate-50/70 cursor-pointer text-xs">
+              <div>
+                <span className="font-bold text-slate-800 block">
+                  Bắt buộc đăng nhập khi mở ứng dụng trên thiết bị mới
+                </span>
+                <span className="text-[10px] text-slate-400">
+                  Đồng bộ quy tắc khóa cho tất cả thiết bị kết nối Cloud
+                </span>
+              </div>
+              <input
+                type="checkbox"
+                checked={secRequireSignIn}
+                onChange={e => setSecRequireSignIn(e.target.checked)}
+                className="w-4 h-4 rounded text-amber-500 focus:ring-amber-500"
+              />
+            </label>
+
+            <div className="grid grid-cols-1 sm:grid-cols-2 gap-2.5 text-xs">
+              <div>
+                <label className="font-bold text-slate-700 block mb-1">Tên đăng nhập (Username)</label>
+                <input
+                  type="text"
+                  value={secUsername}
+                  onChange={e => setSecUsername(e.target.value)}
+                  placeholder="hang"
+                  className="w-full bg-slate-50 border border-slate-200 rounded-xl px-3 py-2 font-bold text-slate-800 focus:outline-none focus:ring-1 focus:ring-amber-500"
+                />
+              </div>
+
+              <div>
+                <label className="font-bold text-slate-700 block mb-1">
+                  Mật khẩu mới (để trống nếu giữ nguyên)
+                </label>
+                <div className="relative">
+                  <KeyRound className="w-3.5 h-3.5 text-slate-400 absolute left-3 top-1/2 -translate-y-1/2" />
+                  <input
+                    type="password"
+                    value={secPassword}
+                    onChange={e => setSecPassword(e.target.value)}
+                    placeholder="Mặc định ban đầu: mexucxich"
+                    className="w-full bg-slate-50 border border-slate-200 rounded-xl pl-8 pr-3 py-2 text-slate-800 focus:outline-none focus:ring-1 focus:ring-amber-500"
+                  />
+                </div>
+              </div>
+            </div>
+
+            {secStatus && (
+              <div
+                className={`p-2.5 rounded-xl border text-xs font-semibold flex items-center gap-2 ${
+                  secStatus.success
+                    ? 'bg-emerald-50 border-emerald-200 text-emerald-800'
+                    : 'bg-rose-50 border-rose-200 text-rose-800'
+                }`}
+              >
+                {secStatus.success ? (
+                  <CheckCircle2 className="w-4 h-4 text-emerald-600 shrink-0" />
+                ) : (
+                  <AlertTriangle className="w-4 h-4 text-rose-600 shrink-0" />
+                )}
+                <span>{secStatus.message}</span>
+              </div>
+            )}
+
+            <div className="flex flex-wrap items-center gap-2 pt-1 text-xs font-bold">
+              <button
+                type="button"
+                onClick={handleSaveSecurity}
+                disabled={secSaving}
+                className="flex-1 py-2.5 px-3 rounded-xl bg-amber-500 hover:bg-amber-600 text-white shadow-2xs transition flex items-center justify-center gap-1.5 disabled:opacity-50"
+              >
+                <ShieldCheck className="w-4 h-4" />
+                <span>{secSaving ? 'Đang lưu...' : 'Lưu cài đặt bảo mật & Đồng bộ'}</span>
+              </button>
+              <button
+                type="button"
+                onClick={() => logoutOrLockScreen()}
+                className="py-2.5 px-3.5 rounded-xl border border-slate-200 bg-slate-50 hover:bg-rose-50 hover:border-rose-200 hover:text-rose-700 text-slate-700 transition flex items-center justify-center gap-1.5"
+              >
+                <Lock className="w-3.5 h-3.5" />
+                <span>Khóa máy ngay</span>
+              </button>
             </div>
           </div>
 

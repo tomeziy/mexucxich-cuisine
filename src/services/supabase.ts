@@ -15,6 +15,9 @@ import {
   applyCatalogAntiShrinkGuard,
 } from './syncConflict.ts';
 
+import type { StoreAuthConfig } from '../utils/auth.ts';
+import { STORE_AUTH_CONFIG_ROW_ID } from '../utils/auth.ts';
+
 export {
   calculateStockDelta,
   getEntityTimestamp,
@@ -25,6 +28,7 @@ export {
   mergeOrders,
   mergeDebtPayments,
   applyCatalogAntiShrinkGuard,
+  STORE_AUTH_CONFIG_ROW_ID,
 };
 
 const CLOUD_CONFIG_KEY = 'mexucxich_cloud_config';
@@ -1294,6 +1298,114 @@ export const cloudSyncSettings = async (s: ReceiptSettings) => {
     if (error) console.error('cloudSyncSettings error:', error);
   } catch (e) {
     console.error('cloudSyncSettings error:', e);
+  }
+};
+
+/**
+ * Fetch store-wide authentication config (`store_auth_config_v1`) from Cloud `store_settings`.
+ */
+export const fetchStoreAuthConfig = async (
+  clientArg?: SupabaseClient | null
+): Promise<StoreAuthConfig | null> => {
+  const client = clientArg === undefined ? getSupabaseClient() : clientArg;
+  if (!client) return null;
+
+  try {
+    const { data, error } = await client
+      .from('store_settings')
+      .select('data, updated_at')
+      .eq('id', STORE_AUTH_CONFIG_ROW_ID)
+      .maybeSingle();
+
+    if (error || !data || !data.data || typeof data.data !== 'object') {
+      return null;
+    }
+
+    const raw: any = data.data;
+    if (typeof raw.username !== 'string' || typeof raw.passwordHash !== 'string') {
+      return null;
+    }
+
+    return {
+      requireSignIn: Boolean(raw.requireSignIn),
+      username: raw.username,
+      passwordHash: raw.passwordHash,
+      salt: String(raw.salt || 'mxc_salt_v1'),
+      sessionTtlDays: Number(raw.sessionTtlDays) || 30,
+      updatedAt: String(raw.updatedAt || data.updated_at || ''),
+    };
+  } catch (e) {
+    console.warn('fetchStoreAuthConfig error:', e);
+    return null;
+  }
+};
+
+/**
+ * Persist updated store authentication config (`store_auth_config_v1`) to Cloud `store_settings`.
+ */
+export const pushStoreAuthConfig = async (
+  config: StoreAuthConfig,
+  clientArg?: SupabaseClient | null
+): Promise<boolean> => {
+  const client = clientArg === undefined ? getSupabaseClient() : clientArg;
+  if (!client) return false;
+
+  try {
+    const { error } = await safeUpsert(
+      client,
+      'store_settings',
+      {
+        id: STORE_AUTH_CONFIG_ROW_ID,
+        data: config,
+        updated_at: config.updatedAt || new Date().toISOString(),
+      },
+      'id'
+    );
+    if (error) {
+      console.warn('pushStoreAuthConfig error:', error);
+      return false;
+    }
+    return true;
+  } catch (e) {
+    console.warn('pushStoreAuthConfig error:', e);
+    return false;
+  }
+};
+
+/**
+ * Subscribe to Supabase Realtime Postgres Changes across public tables so remote writes
+ * trigger near-instant incremental cloud reconciliation without full reload.
+ */
+export const subscribeToCloudRealtimeChanges = (
+  onRemoteChange: (table: string) => void
+): (() => void) => {
+  const client = getSupabaseClient();
+  if (!client) return () => {};
+
+  try {
+    const channel = client
+      .channel('mxc-realtime-sync')
+      .on(
+        'postgres_changes',
+        { event: '*', schema: 'public' },
+        (payload: any) => {
+          if (payload?.table) {
+            onRemoteChange(String(payload.table));
+          }
+        }
+      )
+      .subscribe();
+
+    return () => {
+      try {
+        client.removeChannel(channel);
+      } catch {
+        // Ignore cleanup errors
+      }
+    };
+  } catch (e) {
+    console.warn('subscribeToCloudRealtimeChanges error:', e);
+    return () => {};
   }
 };
 

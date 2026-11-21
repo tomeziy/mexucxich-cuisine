@@ -21,20 +21,28 @@ import {
   exportProductsToExcel,
   downloadProductTemplate,
   parseProductsExcel,
-  ParsedProductRow,
 } from '../utils/excel';
+import {
+  analyzeProductImportRows,
+  buildProductImportPlan,
+  AnalyzedProductImportRow,
+  MissingCatalogProductItem,
+} from '../utils/importReconciler';
 
 const EMOJI_OPTIONS = ['🧀', '🥩', '🥣', '🍳', '🥓', '🌶️', '🍄', '🍢', '🍗', '🌭', '🥗', '🥖', '🥟', '🧃', '🍯'];
 
-export interface ProductImportRowItem extends ParsedProductRow {
-  id: string;
-  isDuplicate: boolean;
-  existingProduct?: Product;
-  action: 'accumulate' | 'overwrite' | 'skip';
-}
+export type ProductImportRowItem = AnalyzedProductImportRow;
 
 export const ProductsPage: React.FC = () => {
-  const { products, addProduct, addProductsBatch, updateProduct, deleteProduct } = useStore();
+  const {
+    products,
+    addProduct,
+    addProductsBatch,
+    updateProduct,
+    updateProductsBatch,
+    deleteProduct,
+    deleteProductsBatch,
+  } = useStore();
 
   const [searchQuery, setSearchQuery] = useState('');
   const [selectedCategory, setSelectedCategory] = useState('Tất cả');
@@ -53,9 +61,11 @@ export const ProductsPage: React.FC = () => {
   const [formStock, setFormStock] = useState<number>(10);
   const [formImage, setFormImage] = useState('🌭');
 
-  // Excel Import states
+  // Excel Import states (ADR-0024 Smart Diff Reconciliation)
   const [isImportModalOpen, setIsImportModalOpen] = useState(false);
-  const [importRows, setImportRows] = useState<ProductImportRowItem[]>([]);
+  const [importRows, setImportRows] = useState<AnalyzedProductImportRow[]>([]);
+  const [missingCatalogItems, setMissingCatalogItems] = useState<MissingCatalogProductItem[]>([]);
+  const [importTab, setImportTab] = useState<'all' | 'new' | 'changed' | 'identical' | 'missing'>('all');
   const [importFileName, setImportFileName] = useState('');
 
   // Row Inline Edit State in Import Preview
@@ -79,25 +89,27 @@ export const ProductsPage: React.FC = () => {
         return;
       }
 
-      const mapped: ProductImportRowItem[] = parsed.map((p, idx) => {
-        const existing = products.find(
-          x => removeVietnameseTones(x.name) === removeVietnameseTones(p.name)
-        );
-        return {
-          ...p,
-          id: `prod_row_${Date.now()}_${idx}`,
-          isDuplicate: !!existing,
-          existingProduct: existing || undefined,
-          action: 'accumulate',
-        };
-      });
-
-      setImportRows(mapped);
+      const analyzed = analyzeProductImportRows(parsed, products);
+      setImportRows(analyzed.rows);
+      setMissingCatalogItems(analyzed.missingFromFile);
+      const hasChanged = analyzed.rows.some(
+        r => r.diffStatus === 'info_changed' || r.diffStatus === 'stock_changed' || r.diffStatus === 'both_changed'
+      );
+      setImportTab(hasChanged ? 'changed' : 'all');
       setIsImportModalOpen(true);
     } catch (err) {
       e.target.value = '';
       alert('Lỗi khi đọc file Excel. Vui lòng kiểm tra định dạng file!');
     }
+  };
+
+  const handleApplyRecommendedAll = () => {
+    setImportRows(prev => prev.map(r => ({ ...r, action: r.recommendedAction })));
+    setMissingCatalogItems(prev => prev.map(m => ({ ...m, action: 'keep' })));
+  };
+
+  const handleApplyAllOverwrite = () => {
+    setImportRows(prev => prev.map(r => (r.isDuplicate ? { ...r, action: 'overwrite' } : r)));
   };
 
   const handleApplyAllAccumulate = () => {
@@ -108,7 +120,7 @@ export const ProductsPage: React.FC = () => {
     setImportRows(prev => prev.map(r => (r.isDuplicate ? { ...r, action: 'skip' } : r)));
   };
 
-  const startEditRow = (row: ProductImportRowItem) => {
+  const startEditRow = (row: AnalyzedProductImportRow) => {
     setEditingRowId(row.id);
     setRowEditName(row.name);
     setRowEditCategory(row.category);
@@ -122,21 +134,19 @@ export const ProductsPage: React.FC = () => {
     setImportRows(prev =>
       prev.map(r => {
         if (r.id === rowId) {
-          const newName = rowEditName.trim() || r.name;
-          const existing = products.find(
-            x => removeVietnameseTones(x.name) === removeVietnameseTones(newName)
-          );
-          return {
-            ...r,
-            name: newName,
+          const updatedParsed = {
+            name: rowEditName.trim() || r.name,
             category: rowEditCategory.trim() || r.category,
             unit: rowEditUnit.trim() || r.unit,
             cost: Math.max(0, rowEditCost || 0),
             price: Math.max(0, rowEditPrice || 0),
             stock: Math.max(0, rowEditStock || 0),
-            isDuplicate: !!existing,
-            existingProduct: existing || undefined,
+            image: r.image,
           };
+          const reanalyzed = analyzeProductImportRows([updatedParsed], products).rows[0];
+          if (reanalyzed) {
+            return { ...reanalyzed, id: r.id };
+          }
         }
         return r;
       })
@@ -145,112 +155,30 @@ export const ProductsPage: React.FC = () => {
   };
 
   const handleConfirmImport = () => {
-    if (importRows.length === 0) return;
+    if (importRows.length === 0 && missingCatalogItems.length === 0) return;
 
-    let updatedCount = 0;
-    let newCount = 0;
-    let skippedCount = 0;
+    const plan = buildProductImportPlan(importRows, missingCatalogItems);
 
-    // Accumulators for existing products
-    const updatedProductsMap = new Map<
-      string,
-      {
-        id: string;
-        name: string;
-        category: string;
-        unit: string;
-        cost: number;
-        price: number;
-        stock: number;
-        action: 'accumulate' | 'overwrite';
-      }
-    >();
-
-    // Accumulators for new products
-    const newProductsMap = new Map<string, Omit<Product, 'id'>>();
-
-    importRows.forEach(row => {
-      if (row.isDuplicate && row.existingProduct) {
-        if (row.action === 'skip') {
-          skippedCount++;
-        } else if (row.action === 'overwrite') {
-          updatedProductsMap.set(row.existingProduct.id, {
-            id: row.existingProduct.id,
-            name: row.name || row.existingProduct.name,
-            category: row.category || row.existingProduct.category,
-            unit: row.unit || row.existingProduct.unit,
-            cost: row.cost || row.existingProduct.cost,
-            price: row.price || row.existingProduct.price,
-            stock: row.stock,
-            action: 'overwrite',
-          });
-        } else {
-          // 'accumulate' (Cộng dồn kho)
-          const existingAcc = updatedProductsMap.get(row.existingProduct.id);
-          const baseStock = existingAcc ? existingAcc.stock : row.existingProduct.stock;
-          updatedProductsMap.set(row.existingProduct.id, {
-            id: row.existingProduct.id,
-            name: row.name || row.existingProduct.name,
-            category: row.category || row.existingProduct.category,
-            unit: row.unit || row.existingProduct.unit,
-            cost: row.cost || row.existingProduct.cost,
-            price: row.price || row.existingProduct.price,
-            stock: baseStock + row.stock,
-            action: 'accumulate',
-          });
-        }
-      } else {
-        // Group new products within the file by normalized name to avoid duplicate creations
-        const key = removeVietnameseTones(row.name).trim().toLowerCase();
-        const existingNew = newProductsMap.get(key);
-        if (existingNew) {
-          newProductsMap.set(key, {
-            ...existingNew,
-            stock: existingNew.stock + row.stock,
-            price: row.price || existingNew.price,
-            cost: row.cost || existingNew.cost,
-            unit: row.unit || existingNew.unit,
-            category: row.category || existingNew.category,
-          });
-        } else {
-          newProductsMap.set(key, {
-            name: row.name,
-            category: row.category,
-            unit: row.unit,
-            cost: row.cost,
-            price: row.price,
-            stock: row.stock,
-            image: row.image || '🌭',
-          });
-        }
-      }
-    });
-
-    // Apply updates for existing products
-    updatedProductsMap.forEach(item => {
-      updateProduct(item.id, {
-        name: item.name,
-        category: item.category,
-        unit: item.unit,
-        cost: item.cost,
-        price: item.price,
-        stock: item.stock,
-      });
-      updatedCount++;
-    });
-
-    // Apply batch inserts for new products
-    const newProductsToAdd = Array.from(newProductsMap.values());
-    if (newProductsToAdd.length > 0) {
-      addProductsBatch(newProductsToAdd);
-      newCount = newProductsToAdd.length;
+    if (plan.productUpdates.length > 0) {
+      updateProductsBatch(plan.productUpdates);
+    }
+    if (plan.newProducts.length > 0) {
+      addProductsBatch(plan.newProducts);
+    }
+    if (plan.productIdsToDelete.length > 0) {
+      deleteProductsBatch(plan.productIdsToDelete);
     }
 
     alert(
-      `Đã xử lý xong ${importRows.length} món ăn:\n- Thêm mới: ${newCount} món\n- Cập nhật kho: ${updatedCount} món\n- Bỏ qua: ${skippedCount} món`
+      `Đã xử lý xong ${importRows.length} món ăn từ Excel:\n` +
+        `- Thêm mới: ${plan.counts.created} món\n` +
+        `- Cập nhật (giá/ĐVT/kho): ${plan.counts.updated} món\n` +
+        `- Bỏ qua (không thay đổi): ${plan.counts.skipped} món` +
+        (plan.counts.deleted > 0 ? `\n- Đã xóa khỏi thực đơn: ${plan.counts.deleted} món` : '')
     );
     setIsImportModalOpen(false);
     setImportRows([]);
+    setMissingCatalogItems([]);
   };
 
   const categories = ['Tất cả', 'Đồ tự làm', 'Đặc sản tuyển chọn', 'Ăn vặt & Khô', 'Gia vị & Sốt'];
@@ -699,267 +627,489 @@ export const ProductsPage: React.FC = () => {
               </button>
             </div>
 
-            {/* Badges & Bulk Action Controls */}
-            <div className="flex flex-wrap items-center justify-between gap-2 pt-2.5 pb-2 shrink-0">
-              <div className="flex items-center gap-2 text-[11px] font-bold">
-                {(() => {
-                  const duplicateCount = importRows.filter(r => r.isDuplicate).length;
-                  const newCount = importRows.length - duplicateCount;
-                  return (
-                    <>
-                      <span className="px-2.5 py-1 rounded-full bg-emerald-100 text-emerald-800">
-                        ✨ {newCount} món mới
-                      </span>
-                      {duplicateCount > 0 ? (
-                        <span className="px-2.5 py-1 rounded-full bg-amber-100 text-amber-800 flex items-center gap-1">
-                          <AlertTriangle className="w-3.5 h-3.5" />
-                          <span>{duplicateCount} món trùng tên trong thực đơn</span>
-                        </span>
-                      ) : (
-                        <span className="px-2.5 py-1 rounded-full bg-slate-100 text-slate-600">
-                          Không có món trùng
-                        </span>
-                      )}
-                    </>
-                  );
-                })()}
-              </div>
+            {/* Summary Tabs & Bulk Action Controls (ADR-0024) */}
+            {(() => {
+              const newRows = importRows.filter(r => r.diffStatus === 'new');
+              const changedRows = importRows.filter(
+                r =>
+                  r.diffStatus === 'info_changed' ||
+                  r.diffStatus === 'stock_changed' ||
+                  r.diffStatus === 'both_changed'
+              );
+              const identicalRows = importRows.filter(r => r.diffStatus === 'identical');
+              const visibleRows =
+                importTab === 'new'
+                  ? newRows
+                  : importTab === 'changed'
+                  ? changedRows
+                  : importTab === 'identical'
+                  ? identicalRows
+                  : importRows;
 
-              {/* Bulk Action Buttons */}
-              {importRows.some(r => r.isDuplicate) && (
-                <div className="flex items-center gap-1.5 text-xs font-bold">
-                  <span className="text-[11px] text-slate-500 mr-1">Thao tác nhanh cho món trùng:</span>
-                  <button
-                    type="button"
-                    onClick={handleApplyAllAccumulate}
-                    className="px-2.5 py-1 rounded-lg bg-amber-50 border border-amber-300 text-amber-800 hover:bg-amber-100 transition text-[11px]"
-                  >
-                    Áp dụng tất cả (Cộng dồn kho)
-                  </button>
-                  <button
-                    type="button"
-                    onClick={handleSkipAllDuplicates}
-                    className="px-2.5 py-1 rounded-lg bg-slate-100 border border-slate-300 text-slate-700 hover:bg-slate-200 transition text-[11px]"
-                  >
-                    Bỏ qua tất cả món trùng
-                  </button>
-                </div>
-              )}
-            </div>
+              return (
+                <>
+                  <div className="flex flex-wrap items-center justify-between gap-2 pt-2.5 pb-2 shrink-0">
+                    <div className="flex flex-wrap items-center gap-1.5 text-[11px] font-bold">
+                      <button
+                        type="button"
+                        onClick={() => setImportTab('all')}
+                        className={`px-2.5 py-1 rounded-full transition ${
+                          importTab === 'all'
+                            ? 'bg-slate-900 text-white'
+                            : 'bg-slate-100 text-slate-600 hover:bg-slate-200'
+                        }`}
+                      >
+                        Tất cả ({importRows.length})
+                      </button>
+                      <button
+                        type="button"
+                        onClick={() => setImportTab('new')}
+                        className={`px-2.5 py-1 rounded-full transition ${
+                          importTab === 'new'
+                            ? 'bg-emerald-600 text-white'
+                            : 'bg-emerald-50 text-emerald-800 hover:bg-emerald-100'
+                        }`}
+                      >
+                        ✨ Món mới ({newRows.length})
+                      </button>
+                      <button
+                        type="button"
+                        onClick={() => setImportTab('changed')}
+                        className={`px-2.5 py-1 rounded-full transition flex items-center gap-1 ${
+                          importTab === 'changed'
+                            ? 'bg-amber-500 text-white'
+                            : 'bg-amber-50 text-amber-800 hover:bg-amber-100'
+                        }`}
+                      >
+                        <AlertTriangle className="w-3 h-3" />
+                        <span>Có thay đổi / Xung đột ({changedRows.length})</span>
+                      </button>
+                      <button
+                        type="button"
+                        onClick={() => setImportTab('identical')}
+                        className={`px-2.5 py-1 rounded-full transition ${
+                          importTab === 'identical'
+                            ? 'bg-slate-700 text-white'
+                            : 'bg-slate-100 text-slate-600 hover:bg-slate-200'
+                        }`}
+                      >
+                        Giống hệt - Tự bỏ qua ({identicalRows.length})
+                      </button>
+                      <button
+                        type="button"
+                        onClick={() => setImportTab('missing')}
+                        className={`px-2.5 py-1 rounded-full transition ${
+                          importTab === 'missing'
+                            ? 'bg-rose-600 text-white'
+                            : 'bg-rose-50 text-rose-700 hover:bg-rose-100'
+                        }`}
+                      >
+                        Không có trong File ({missingCatalogItems.length})
+                      </button>
+                    </div>
 
-            {/* Preview Table */}
-            <div className="flex-1 overflow-y-auto custom-scroll my-2 border border-slate-200 rounded-xl overflow-hidden text-xs">
-              <table className="w-full text-left border-collapse">
-                <thead className="bg-slate-50 text-slate-600 uppercase text-[10px] font-extrabold sticky top-0 border-b border-slate-200">
-                  <tr>
-                    <th className="py-2.5 px-3">Tên món từ File</th>
-                    <th className="py-2.5 px-3">Danh mục / ĐVT</th>
-                    <th className="py-2.5 px-3 text-right">Giá vốn</th>
-                    <th className="py-2.5 px-3 text-right">Đơn giá</th>
-                    <th className="py-2.5 px-3 text-center">Tồn kho File</th>
-                    <th className="py-2.5 px-3">Kho hiện tại & Trùng lặp</th>
-                    <th className="py-2.5 px-3 text-center">Xử lý món</th>
-                    <th className="py-2.5 px-2 text-center">Sửa</th>
-                  </tr>
-                </thead>
-                <tbody className="divide-y divide-slate-100 font-medium">
-                  {importRows.map((row, idx) => {
-                    const isEditing = editingRowId === row.id;
+                    {importTab !== 'missing' && importRows.some(r => r.isDuplicate) && (
+                      <div className="flex flex-wrap items-center gap-1 text-[11px] font-bold">
+                        <button
+                          type="button"
+                          onClick={handleApplyRecommendedAll}
+                          className="px-2.5 py-1 rounded-lg bg-emerald-50 border border-emerald-300 text-emerald-800 hover:bg-emerald-100 transition"
+                        >
+                          Đề xuất thông minh
+                        </button>
+                        <button
+                          type="button"
+                          onClick={handleApplyAllOverwrite}
+                          className="px-2.5 py-1 rounded-lg bg-rose-50 border border-rose-300 text-rose-700 hover:bg-rose-100 transition"
+                        >
+                          Ghi đè tất cả
+                        </button>
+                        <button
+                          type="button"
+                          onClick={handleApplyAllAccumulate}
+                          className="px-2.5 py-1 rounded-lg bg-amber-50 border border-amber-300 text-amber-800 hover:bg-amber-100 transition"
+                        >
+                          Cộng kho tất cả
+                        </button>
+                        <button
+                          type="button"
+                          onClick={handleSkipAllDuplicates}
+                          className="px-2.5 py-1 rounded-lg bg-slate-100 border border-slate-300 text-slate-700 hover:bg-slate-200 transition"
+                        >
+                          Bỏ qua tất cả trùng
+                        </button>
+                      </div>
+                    )}
 
-                    if (isEditing) {
-                      return (
-                        <tr key={row.id} className="bg-amber-50/60">
-                          <td className="py-2 px-2">
-                            <input
-                              type="text"
-                              value={rowEditName}
-                              onChange={e => setRowEditName(e.target.value)}
-                              className="w-full bg-white border border-amber-300 rounded px-2 py-1 text-xs font-bold"
-                            />
-                          </td>
-                          <td className="py-2 px-2">
-                            <div className="flex gap-1">
-                              <input
-                                type="text"
-                                value={rowEditCategory}
-                                onChange={e => setRowEditCategory(e.target.value)}
-                                className="w-1/2 bg-white border border-amber-300 rounded px-1.5 py-1 text-xs"
-                              />
-                              <input
-                                type="text"
-                                value={rowEditUnit}
-                                onChange={e => setRowEditUnit(e.target.value)}
-                                className="w-1/2 bg-white border border-amber-300 rounded px-1.5 py-1 text-xs"
-                              />
-                            </div>
-                          </td>
-                          <td className="py-2 px-2 text-right">
-                            <input
-                              type="number"
-                              min="0"
-                              step="1000"
-                              value={rowEditCost}
-                              onChange={e => setRowEditCost(Number(e.target.value) || 0)}
-                              className="w-20 bg-white border border-amber-300 rounded px-1.5 py-1 text-xs text-right"
-                            />
-                          </td>
-                          <td className="py-2 px-2 text-right">
-                            <input
-                              type="number"
-                              min="0"
-                              step="1000"
-                              value={rowEditPrice}
-                              onChange={e => setRowEditPrice(Number(e.target.value) || 0)}
-                              className="w-20 bg-white border border-amber-300 rounded px-1.5 py-1 text-xs text-right font-bold text-amber-700"
-                            />
-                          </td>
-                          <td className="py-2 px-2 text-center">
-                            <input
-                              type="number"
-                              min="0"
-                              value={rowEditStock}
-                              onChange={e => setRowEditStock(Number(e.target.value) || 0)}
-                              className="w-16 bg-white border border-amber-300 rounded px-1.5 py-1 text-xs text-center font-bold"
-                            />
-                          </td>
-                          <td colSpan={2} className="py-2 px-2 text-center">
-                            <span className="text-[11px] text-amber-700 italic">Đang sửa trực tiếp dòng này</span>
-                          </td>
-                          <td className="py-2 px-2 text-center">
-                            <div className="flex items-center justify-center gap-1">
-                              <button
-                                onClick={() => saveEditRow(row.id)}
-                                className="px-2 py-1 rounded bg-emerald-600 text-white font-bold text-[10px]"
-                              >
-                                Lưu
-                              </button>
-                              <button
-                                onClick={() => setEditingRowId(null)}
-                                className="px-2 py-1 rounded bg-slate-200 text-slate-600 font-bold text-[10px]"
-                              >
-                                Hủy
-                              </button>
-                            </div>
-                          </td>
-                        </tr>
-                      );
-                    }
+                    {importTab === 'missing' && missingCatalogItems.length > 0 && (
+                      <div className="flex flex-wrap items-center gap-1 text-[11px] font-bold">
+                        <button
+                          type="button"
+                          onClick={() =>
+                            setMissingCatalogItems(prev => prev.map(m => ({ ...m, action: 'keep' })))
+                          }
+                          className="px-2.5 py-1 rounded-lg bg-emerald-50 border border-emerald-300 text-emerald-800 hover:bg-emerald-100 transition"
+                        >
+                          Giữ nguyên tất cả
+                        </button>
+                        <button
+                          type="button"
+                          onClick={() =>
+                            setMissingCatalogItems(prev => prev.map(m => ({ ...m, action: 'delete' })))
+                          }
+                          className="px-2.5 py-1 rounded-lg bg-rose-50 border border-rose-300 text-rose-700 hover:bg-rose-100 transition"
+                        >
+                          Chọn xóa tất cả món thiếu
+                        </button>
+                      </div>
+                    )}
+                  </div>
 
-                    return (
-                      <tr key={row.id} className={`hover:bg-slate-50 transition ${row.isDuplicate ? 'bg-amber-50/20' : ''}`}>
-                        <td className="py-2.5 px-3">
-                          <strong className="text-slate-900 block">{row.name}</strong>
-                        </td>
-                        <td className="py-2.5 px-3 text-slate-500">
-                          {row.category} • {row.unit}
-                        </td>
-                        <td className="py-2.5 px-3 text-right text-slate-600 font-mono">
-                          {formatVND(row.cost)}
-                        </td>
-                        <td className="py-2.5 px-3 text-right font-bold text-amber-700 font-mono">
-                          {formatVND(row.price)}
-                        </td>
-                        <td className="py-2.5 px-3 text-center font-bold text-slate-800">
-                          {row.stock}
-                        </td>
-                        <td className="py-2.5 px-3">
-                          {row.isDuplicate && row.existingProduct ? (
-                            <div className="space-y-0.5">
-                              <span className="text-[10px] font-bold text-amber-800 block">
-                                Trùng: {row.existingProduct.name} ({row.existingProduct.id})
-                              </span>
-                              <span className="text-[10px] text-slate-500 block">
-                                Tồn hiện tại: <strong className="text-slate-800">{row.existingProduct.stock}</strong>
-                              </span>
-                              {row.action === 'accumulate' && (
-                                <span className="text-[10px] font-bold text-emerald-700 block">
-                                  → Kho sau cộng dồn: {row.existingProduct.stock + row.stock}
-                                </span>
-                              )}
-                              {row.action === 'overwrite' && (
-                                <span className="text-[10px] font-bold text-rose-600 block">
-                                  → Ghi đè kho thành: {row.stock}
-                                </span>
-                              )}
-                            </div>
+                  {/* Preview Table */}
+                  <div className="flex-1 overflow-y-auto custom-scroll my-2 border border-slate-200 rounded-xl overflow-hidden text-xs">
+                    {importTab === 'missing' ? (
+                      <table className="w-full text-left border-collapse">
+                        <thead className="bg-rose-50/70 text-rose-800 uppercase text-[10px] font-extrabold sticky top-0 border-b border-rose-200">
+                          <tr>
+                            <th className="py-2.5 px-3">Món đang có trên hệ thống (vắng mặt trong File)</th>
+                            <th className="py-2.5 px-3">Danh mục / ĐVT</th>
+                            <th className="py-2.5 px-3 text-right">Đơn giá</th>
+                            <th className="py-2.5 px-3 text-center">Tồn kho</th>
+                            <th className="py-2.5 px-3 text-center">Hành động</th>
+                          </tr>
+                        </thead>
+                        <tbody className="divide-y divide-slate-100 font-medium">
+                          {missingCatalogItems.length === 0 ? (
+                            <tr>
+                              <td colSpan={5} className="py-8 text-center text-slate-400">
+                                Không có món nào bị thiếu so với thực đơn hiện tại.
+                              </td>
+                            </tr>
                           ) : (
-                            <span className="px-2 py-0.5 rounded text-[10px] font-bold bg-emerald-100 text-emerald-800 inline-block">
-                              Món mới
-                            </span>
+                            missingCatalogItems.map(item => (
+                              <tr
+                                key={item.product.id}
+                                className={item.action === 'delete' ? 'bg-rose-50/60' : 'hover:bg-slate-50'}
+                              >
+                                <td className="py-2.5 px-3">
+                                  <strong className="text-slate-900 block">{item.product.name}</strong>
+                                  <span className="text-[10px] font-mono text-slate-400">#{item.product.id}</span>
+                                </td>
+                                <td className="py-2.5 px-3 text-slate-500">
+                                  {item.product.category} • {item.product.unit}
+                                </td>
+                                <td className="py-2.5 px-3 text-right font-mono font-bold text-amber-700">
+                                  {formatVND(item.product.price)}
+                                </td>
+                                <td className="py-2.5 px-3 text-center font-bold">{item.product.stock}</td>
+                                <td className="py-2.5 px-3 text-center">
+                                  <div className="inline-flex rounded-lg border border-slate-200 p-0.5 bg-slate-50 text-[10px] font-bold">
+                                    <button
+                                      type="button"
+                                      onClick={() =>
+                                        setMissingCatalogItems(prev =>
+                                          prev.map(m =>
+                                            m.product.id === item.product.id ? { ...m, action: 'keep' } : m
+                                          )
+                                        )
+                                      }
+                                      className={`px-2.5 py-1 rounded transition ${
+                                        item.action === 'keep'
+                                          ? 'bg-emerald-600 text-white shadow-2xs'
+                                          : 'text-slate-600 hover:text-slate-900'
+                                      }`}
+                                    >
+                                      Giữ nguyên
+                                    </button>
+                                    <button
+                                      type="button"
+                                      onClick={() =>
+                                        setMissingCatalogItems(prev =>
+                                          prev.map(m =>
+                                            m.product.id === item.product.id ? { ...m, action: 'delete' } : m
+                                          )
+                                        )
+                                      }
+                                      className={`px-2.5 py-1 rounded transition ${
+                                        item.action === 'delete'
+                                          ? 'bg-rose-600 text-white shadow-2xs'
+                                          : 'text-slate-600 hover:text-rose-700'
+                                      }`}
+                                    >
+                                      Xóa khỏi thực đơn
+                                    </button>
+                                  </div>
+                                </td>
+                              </tr>
+                            ))
                           )}
-                        </td>
-                        <td className="py-2.5 px-3 text-center">
-                          {row.isDuplicate ? (
-                            <div className="inline-flex rounded-lg border border-slate-200 p-0.5 bg-slate-50 text-[10px] font-bold">
-                              <button
-                                type="button"
-                                onClick={() =>
-                                  setImportRows(prev =>
-                                    prev.map(r => (r.id === row.id ? { ...r, action: 'accumulate' } : r))
-                                  )
-                                }
-                                className={`px-2 py-1 rounded transition ${
-                                  row.action === 'accumulate'
-                                    ? 'bg-amber-500 text-white shadow-2xs'
-                                    : 'text-slate-600 hover:text-slate-900'
-                                }`}
-                                title="Cộng thêm số tồn kho trong file vào tồn kho hiện tại"
-                              >
-                                Cộng kho
-                              </button>
-                              <button
-                                type="button"
-                                onClick={() =>
-                                  setImportRows(prev =>
-                                    prev.map(r => (r.id === row.id ? { ...r, action: 'overwrite' } : r))
-                                  )
-                                }
-                                className={`px-2 py-1 rounded transition ${
-                                  row.action === 'overwrite'
-                                    ? 'bg-rose-500 text-white shadow-2xs'
-                                    : 'text-slate-600 hover:text-slate-900'
-                                }`}
-                                title="Ghi đè số tồn kho và giá bằng dữ liệu trong file"
-                              >
-                                Ghi đè
-                              </button>
-                              <button
-                                type="button"
-                                onClick={() =>
-                                  setImportRows(prev =>
-                                    prev.map(r => (r.id === row.id ? { ...r, action: 'skip' } : r))
-                                  )
-                                }
-                                className={`px-2 py-1 rounded transition ${
-                                  row.action === 'skip'
-                                    ? 'bg-slate-600 text-white shadow-2xs'
-                                    : 'text-slate-600 hover:text-slate-900'
-                                }`}
-                                title="Bỏ qua dòng này, không cập nhật món cũ"
-                              >
-                                Bỏ qua
-                              </button>
-                            </div>
+                        </tbody>
+                      </table>
+                    ) : (
+                      <table className="w-full text-left border-collapse">
+                        <thead className="bg-slate-50 text-slate-600 uppercase text-[10px] font-extrabold sticky top-0 border-b border-slate-200">
+                          <tr>
+                            <th className="py-2.5 px-3">Tên món từ File</th>
+                            <th className="py-2.5 px-3">Danh mục / ĐVT</th>
+                            <th className="py-2.5 px-3 text-right">Giá vốn</th>
+                            <th className="py-2.5 px-3 text-right">Đơn giá</th>
+                            <th className="py-2.5 px-3 text-center">Tồn kho File</th>
+                            <th className="py-2.5 px-3">So sánh Cũ → Mới</th>
+                            <th className="py-2.5 px-3 text-center">Xử lý món</th>
+                            <th className="py-2.5 px-2 text-center">Sửa</th>
+                          </tr>
+                        </thead>
+                        <tbody className="divide-y divide-slate-100 font-medium">
+                          {visibleRows.length === 0 ? (
+                            <tr>
+                              <td colSpan={8} className="py-8 text-center text-slate-400">
+                                Không có dòng nào trong nhóm lọc này.
+                              </td>
+                            </tr>
                           ) : (
-                            <span className="text-[11px] font-bold text-emerald-700">Thêm mới</span>
+                            visibleRows.map(row => {
+                              const isEditing = editingRowId === row.id;
+
+                              if (isEditing) {
+                                return (
+                                  <tr key={row.id} className="bg-amber-50/60">
+                                    <td className="py-2 px-2">
+                                      <input
+                                        type="text"
+                                        value={rowEditName}
+                                        onChange={e => setRowEditName(e.target.value)}
+                                        className="w-full bg-white border border-amber-300 rounded px-2 py-1 text-xs font-bold"
+                                      />
+                                    </td>
+                                    <td className="py-2 px-2">
+                                      <div className="flex gap-1">
+                                        <input
+                                          type="text"
+                                          value={rowEditCategory}
+                                          onChange={e => setRowEditCategory(e.target.value)}
+                                          className="w-1/2 bg-white border border-amber-300 rounded px-1.5 py-1 text-xs"
+                                        />
+                                        <input
+                                          type="text"
+                                          value={rowEditUnit}
+                                          onChange={e => setRowEditUnit(e.target.value)}
+                                          className="w-1/2 bg-white border border-amber-300 rounded px-1.5 py-1 text-xs"
+                                        />
+                                      </div>
+                                    </td>
+                                    <td className="py-2 px-2 text-right">
+                                      <input
+                                        type="number"
+                                        min="0"
+                                        step="1000"
+                                        value={rowEditCost}
+                                        onChange={e => setRowEditCost(Number(e.target.value) || 0)}
+                                        className="w-20 bg-white border border-amber-300 rounded px-1.5 py-1 text-xs text-right"
+                                      />
+                                    </td>
+                                    <td className="py-2 px-2 text-right">
+                                      <input
+                                        type="number"
+                                        min="0"
+                                        step="1000"
+                                        value={rowEditPrice}
+                                        onChange={e => setRowEditPrice(Number(e.target.value) || 0)}
+                                        className="w-20 bg-white border border-amber-300 rounded px-1.5 py-1 text-xs text-right font-bold text-amber-700"
+                                      />
+                                    </td>
+                                    <td className="py-2 px-2 text-center">
+                                      <input
+                                        type="number"
+                                        min="0"
+                                        value={rowEditStock}
+                                        onChange={e => setRowEditStock(Number(e.target.value) || 0)}
+                                        className="w-16 bg-white border border-amber-300 rounded px-1.5 py-1 text-xs text-center font-bold"
+                                      />
+                                    </td>
+                                    <td colSpan={2} className="py-2 px-2 text-center">
+                                      <span className="text-[11px] text-amber-700 italic">
+                                        Đang sửa trực tiếp dòng này
+                                      </span>
+                                    </td>
+                                    <td className="py-2 px-2 text-center">
+                                      <div className="flex items-center justify-center gap-1">
+                                        <button
+                                          onClick={() => saveEditRow(row.id)}
+                                          className="px-2 py-1 rounded bg-emerald-600 text-white font-bold text-[10px]"
+                                        >
+                                          Lưu
+                                        </button>
+                                        <button
+                                          onClick={() => setEditingRowId(null)}
+                                          className="px-2 py-1 rounded bg-slate-200 text-slate-600 font-bold text-[10px]"
+                                        >
+                                          Hủy
+                                        </button>
+                                      </div>
+                                    </td>
+                                  </tr>
+                                );
+                              }
+
+                              return (
+                                <tr
+                                  key={row.id}
+                                  className={`hover:bg-slate-50 transition ${
+                                    row.diffStatus === 'identical'
+                                      ? 'opacity-70 bg-slate-50/40'
+                                      : row.isDuplicate
+                                      ? 'bg-amber-50/20'
+                                      : ''
+                                  }`}
+                                >
+                                  <td className="py-2.5 px-3">
+                                    <strong className="text-slate-900 block">{row.name}</strong>
+                                  </td>
+                                  <td className="py-2.5 px-3 text-slate-500">
+                                    {row.category} • {row.unit}
+                                  </td>
+                                  <td className="py-2.5 px-3 text-right text-slate-600 font-mono">
+                                    {formatVND(row.cost)}
+                                  </td>
+                                  <td className="py-2.5 px-3 text-right font-bold text-amber-700 font-mono">
+                                    {formatVND(row.price)}
+                                  </td>
+                                  <td className="py-2.5 px-3 text-center font-bold text-slate-800">
+                                    {row.stock}
+                                  </td>
+                                  <td className="py-2.5 px-3">
+                                    {row.isDuplicate && row.existingProduct ? (
+                                      <div className="space-y-1">
+                                        <span className="text-[10px] font-bold text-slate-700 block">
+                                          Khớp: {row.existingProduct.name} ({row.existingProduct.id})
+                                        </span>
+                                        {row.diffs.length === 0 ? (
+                                          <span className="px-1.5 py-0.5 rounded bg-slate-100 text-slate-600 text-[10px] font-bold inline-block">
+                                            Giống hệt dữ liệu hiện tại
+                                          </span>
+                                        ) : (
+                                          <div className="flex flex-wrap gap-1">
+                                            {row.diffs.map(d => {
+                                              const formatVal = (v: string | number) =>
+                                                (d.field === 'price' || d.field === 'cost') && typeof v === 'number'
+                                                  ? formatVND(v)
+                                                  : String(v);
+                                              return (
+                                                <span
+                                                  key={d.field}
+                                                  className="px-1.5 py-0.5 rounded bg-amber-100/80 text-amber-900 text-[10px] font-bold"
+                                                >
+                                                  {d.label}: {formatVal(d.oldValue)} → {formatVal(d.newValue)}
+                                                </span>
+                                              );
+                                            })}
+                                          </div>
+                                        )}
+                                        {row.action === 'accumulate' && (
+                                          <span className="text-[10px] font-bold text-emerald-700 block">
+                                            → Kho sau cộng: {row.existingProduct.stock + row.stock} (Giữ nguyên giá cũ)
+                                          </span>
+                                        )}
+                                      </div>
+                                    ) : (
+                                      <span className="px-2 py-0.5 rounded text-[10px] font-bold bg-emerald-100 text-emerald-800 inline-block">
+                                        Món mới
+                                      </span>
+                                    )}
+                                  </td>
+                                  <td className="py-2.5 px-3 text-center">
+                                    {row.isDuplicate ? (
+                                      <div className="inline-flex flex-wrap justify-center rounded-lg border border-slate-200 p-0.5 bg-slate-50 text-[10px] font-bold gap-0.5">
+                                        <button
+                                          type="button"
+                                          onClick={() =>
+                                            setImportRows(prev =>
+                                              prev.map(r => (r.id === row.id ? { ...r, action: 'update_info' } : r))
+                                            )
+                                          }
+                                          className={`px-2 py-1 rounded transition ${
+                                            row.action === 'update_info'
+                                              ? 'bg-sky-600 text-white shadow-2xs'
+                                              : 'text-slate-600 hover:text-slate-900'
+                                          }`}
+                                          title="Cập nhật giá, ĐVT, danh mục nhưng giữ nguyên tồn kho hiện tại"
+                                        >
+                                          Giữ kho (Sửa giá/ĐVT)
+                                        </button>
+                                        <button
+                                          type="button"
+                                          onClick={() =>
+                                            setImportRows(prev =>
+                                              prev.map(r => (r.id === row.id ? { ...r, action: 'overwrite' } : r))
+                                            )
+                                          }
+                                          className={`px-2 py-1 rounded transition ${
+                                            row.action === 'overwrite'
+                                              ? 'bg-rose-500 text-white shadow-2xs'
+                                              : 'text-slate-600 hover:text-slate-900'
+                                          }`}
+                                          title="Ghi đè toàn bộ giá, ĐVT và số tồn kho bằng file"
+                                        >
+                                          Ghi đè
+                                        </button>
+                                        <button
+                                          type="button"
+                                          onClick={() =>
+                                            setImportRows(prev =>
+                                              prev.map(r => (r.id === row.id ? { ...r, action: 'accumulate' } : r))
+                                            )
+                                          }
+                                          className={`px-2 py-1 rounded transition ${
+                                            row.action === 'accumulate'
+                                              ? 'bg-amber-500 text-white shadow-2xs'
+                                              : 'text-slate-600 hover:text-slate-900'
+                                          }`}
+                                          title="Cộng thêm tồn kho từ file vào kho hiện tại (giữ nguyên giá hiện có)"
+                                        >
+                                          Cộng kho
+                                        </button>
+                                        <button
+                                          type="button"
+                                          onClick={() =>
+                                            setImportRows(prev =>
+                                              prev.map(r => (r.id === row.id ? { ...r, action: 'skip' } : r))
+                                            )
+                                          }
+                                          className={`px-2 py-1 rounded transition ${
+                                            row.action === 'skip'
+                                              ? 'bg-slate-600 text-white shadow-2xs'
+                                              : 'text-slate-600 hover:text-slate-900'
+                                          }`}
+                                          title="Bỏ qua dòng này, không thay đổi"
+                                        >
+                                          Bỏ qua
+                                        </button>
+                                      </div>
+                                    ) : (
+                                      <span className="text-[11px] font-bold text-emerald-700">Thêm mới</span>
+                                    )}
+                                  </td>
+                                  <td className="py-2.5 px-2 text-center">
+                                    <button
+                                      type="button"
+                                      onClick={() => startEditRow(row)}
+                                      className="p-1.5 rounded-lg border border-slate-200 hover:bg-amber-50 hover:text-amber-600 text-slate-500 transition"
+                                      title="Sửa nhanh thông tin món trước khi nhập"
+                                    >
+                                      <Edit2 className="w-3 h-3" />
+                                    </button>
+                                  </td>
+                                </tr>
+                              );
+                            })
                           )}
-                        </td>
-                        <td className="py-2.5 px-2 text-center">
-                          <button
-                            type="button"
-                            onClick={() => startEditRow(row)}
-                            className="p-1.5 rounded-lg border border-slate-200 hover:bg-amber-50 hover:text-amber-600 text-slate-500 transition"
-                            title="Sửa nhanh thông tin món trước khi nhập"
-                          >
-                            <Edit2 className="w-3 h-3" />
-                          </button>
-                        </td>
-                      </tr>
-                    );
-                  })}
-                </tbody>
-              </table>
-            </div>
+                        </tbody>
+                      </table>
+                    )}
+                  </div>
+                </>
+              );
+            })()}
 
             {/* Modal Footer Controls */}
             <div className="pt-3 border-t border-slate-100 flex items-center justify-between gap-2 shrink-0 text-xs font-bold">
