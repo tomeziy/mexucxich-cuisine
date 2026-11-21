@@ -44,6 +44,7 @@ import {
 import {
   getSupabaseConfig,
   saveSupabaseConfig,
+  hasActiveSupabaseAuthSession,
   cloudSyncProduct,
   cloudDeleteProduct,
   cloudDeleteProductsBatch,
@@ -451,6 +452,15 @@ export const StoreProvider: React.FC<{ children: React.ReactNode }> = ({ childre
         localStorage.setItem(LOCAL_AUTH_SESSION_KEY, JSON.stringify(restored));
         setAuthSession(restored);
         setIsScreenLocked(false);
+      } else {
+        setAuthSession(prev => {
+          if (prev && prev.authSource === 'supabase') {
+            localStorage.removeItem(LOCAL_AUTH_SESSION_KEY);
+            setIsScreenLocked(true);
+            return null;
+          }
+          return prev;
+        });
       }
     }).catch(() => {});
   }, []);
@@ -795,6 +805,20 @@ export const StoreProvider: React.FC<{ children: React.ReactNode }> = ({ childre
       }
 
       if (!pullRes) {
+        // If Supabase RLS is locked (`to authenticated`) and this browser still holds a legacy
+        // non-JWT session (`store_config`) from before SQL setup, prompt a clean 1-time re-login.
+        const isOnline = typeof navigator === 'undefined' ? true : navigator.onLine !== false;
+        const hasJwtSession = await hasActiveSupabaseAuthSession();
+        if (isOnline && !hasJwtSession) {
+          localStorage.removeItem(LOCAL_AUTH_SESSION_KEY);
+          setAuthSession(null);
+          setIsScreenLocked(true);
+          setCloudSyncError(null);
+          return {
+            success: false,
+            message: 'Phiên đăng nhập cũ cần xác thực lại với Cloud. Vui lòng đăng nhập lại 1 lần.',
+          };
+        }
         const errMsg = 'Không thể kết nối hoặc tải dữ liệu từ Supabase Cloud!';
         setCloudSyncError(errMsg);
         return { success: false, message: errMsg };

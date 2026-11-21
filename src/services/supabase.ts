@@ -84,13 +84,18 @@ export const getSupabaseConfig = (): CloudConfig => {
   };
 };
 
+let cachedClient: SupabaseClient | null = null;
+let cachedClientKey = '';
+
 export const saveSupabaseConfig = (config: CloudConfig): void => {
   localStorage.setItem(CLOUD_CONFIG_KEY, JSON.stringify(config));
-  // Reset singleton so next call re-instantiates
-  cachedClient = null;
+  const nextKey = `${config.supabaseUrl}::${config.supabaseAnonKey}`;
+  // Only reset singleton when URL or Anon Key actually changes; updating lastSyncedAt must preserve active JWT/Realtime
+  if (cachedClientKey && cachedClientKey !== nextKey) {
+    cachedClient = null;
+    cachedClientKey = '';
+  }
 };
-
-let cachedClient: SupabaseClient | null = null;
 
 export const getSupabaseClient = (): SupabaseClient | null => {
   if (cachedClient) return cachedClient;
@@ -109,6 +114,7 @@ export const getSupabaseClient = (): SupabaseClient | null => {
         detectSessionInUrl: hasWindowStorage,
       },
     });
+    cachedClientKey = `${config.supabaseUrl}::${config.supabaseAnonKey}`;
     return cachedClient;
   } catch (e) {
     console.error('Failed to create Supabase client:', e);
@@ -1569,6 +1575,17 @@ export const adminCreateOrUpdateStoreUser = async (params: {
       needsEdgeDeploy: true,
       message: e?.message || 'Không gọi được Edge Function create-store-user.',
     };
+  }
+};
+
+export const hasActiveSupabaseAuthSession = async (): Promise<boolean> => {
+  const client = getSupabaseClient();
+  if (!client) return false;
+  try {
+    const { data } = await client.auth.getSession();
+    return Boolean(data?.session?.access_token);
+  } catch {
+    return false;
   }
 };
 
