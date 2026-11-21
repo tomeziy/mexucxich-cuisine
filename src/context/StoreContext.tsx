@@ -62,6 +62,7 @@ import {
   reconstructMissingProductsFromOrders,
   pushAllDataToCloud,
   pullAllDataFromCloud,
+  pushCloudTombstones,
   cloudAdjustProductStock,
   cloudAdjustProductsStockBatch,
   mergeProductsWithConflictResolution,
@@ -69,6 +70,7 @@ import {
   mergeOrders,
   mergeDebtPayments,
   calculateStockDelta,
+  getEntityTimestamp,
   applyCatalogAntiShrinkGuard,
   isCloudExtraAddressesUnsupported,
   subscribeCloudExtraAddressesSupport,
@@ -84,6 +86,9 @@ interface StoreContextType {
   receiptSettings: ReceiptSettings;
   cloudConfig: CloudConfig;
   cloudExtraAddressesPendingSync: boolean;
+  isCloudSyncing: boolean;
+  lastCloudSyncAt: string | null;
+  cloudSyncError: string | null;
   sentinelAcks: SentinelAcknowledgments;
   addProduct: (product: Omit<Product, 'id'>) => Product;
   addProductsBatch: (products: Array<Omit<Product, 'id'>>) => Product[];
@@ -137,10 +142,13 @@ const STORAGE_KEYS = {
   DEBT_PAYMENTS: 'mxc_debt_payments',
   SETTINGS: 'mxc_receipt_settings',
   ADR0020_PHONE_MIGRATION: 'mxc_adr0020_phone_repair_v1',
+  ADR0023_CLOUD_TRUTH: 'mxc_adr0023_cloud_truth_v1',
   DELETED_PRODUCTS: 'mxc_deleted_product_ids_v1',
   PURGED_PRODUCTS: 'mxc_purged_product_ids_v1',
   DELETED_ORDERS: 'mxc_deleted_order_ids_v1',
   PURGED_ORDERS: 'mxc_purged_order_ids_v1',
+  DIRTY_PRODUCTS: 'mxc_dirty_product_ids_v1',
+  DIRTY_ORDERS: 'mxc_dirty_order_ids_v1',
 };
 
 function loadIdList(key: string): string[] {
@@ -208,6 +216,30 @@ function removePendingDeletedOrderIds(ids: string[]): void {
   removeIdsFromKey(STORAGE_KEYS.DELETED_ORDERS, ids);
 }
 
+function loadDirtyProductIds(): string[] {
+  return loadIdList(STORAGE_KEYS.DIRTY_PRODUCTS);
+}
+
+function addDirtyProductIds(ids: string[]): void {
+  appendIdsToKey(STORAGE_KEYS.DIRTY_PRODUCTS, ids);
+}
+
+function removeDirtyProductIds(ids: string[]): void {
+  removeIdsFromKey(STORAGE_KEYS.DIRTY_PRODUCTS, ids);
+}
+
+function loadDirtyOrderIds(): string[] {
+  return loadIdList(STORAGE_KEYS.DIRTY_ORDERS);
+}
+
+function addDirtyOrderIds(ids: string[]): void {
+  appendIdsToKey(STORAGE_KEYS.DIRTY_ORDERS, ids);
+}
+
+function removeDirtyOrderIds(ids: string[]): void {
+  removeIdsFromKey(STORAGE_KEYS.DIRTY_ORDERS, ids);
+}
+
 function filterOutDemoAndDeletedProducts(list: Product[], extraDeletedIds: string[] = []): Product[] {
   const deletedSet = new Set([
     ...loadPendingDeletedProductIds(),
@@ -245,6 +277,11 @@ export const StoreProvider: React.FC<{ children: React.ReactNode }> = ({ childre
   const [cloudExtraAddressesUnsupported, setCloudExtraAddressesUnsupported] = useState<boolean>(
     isCloudExtraAddressesUnsupported
   );
+  const [isCloudSyncing, setIsCloudSyncing] = useState<boolean>(false);
+  const [lastCloudSyncAt, setLastCloudSyncAt] = useState<string | null>(
+    () => getSupabaseConfig().lastSyncedAt || null
+  );
+  const [cloudSyncError, setCloudSyncError] = useState<string | null>(null);
   const [sentinelAcks, setSentinelAcks] = useState<SentinelAcknowledgments>(() => loadSentinelAcks());
 
   useEffect(() => {
@@ -464,6 +501,20 @@ export const StoreProvider: React.FC<{ children: React.ReactNode }> = ({ childre
       localStorage.setItem(STORAGE_KEYS.ADR0020_PHONE_MIGRATION, '1');
     }
 
+    // One-time ADR-0023 dirty tracking seed: only recent local records (Nov 12+) not yet confirmed on Cloud
+    if (localStorage.getItem(STORAGE_KEYS.ADR0023_CLOUD_TRUTH) !== '1') {
+      const nov12Cutoff = new Date('2026-11-12T00:00:00Z').getTime();
+      const recentProdIds = (stateRef.current.products || [])
+        .filter(p => p && p.id && !DEMO_PRODUCT_IDS.has(p.id) && getEntityTimestamp(p) >= nov12Cutoff)
+        .map(p => p.id);
+      const recentOrderIds = (stateRef.current.orders || [])
+        .filter(o => o && o.id && getEntityTimestamp(o) >= nov12Cutoff)
+        .map(o => o.id);
+      if (recentProdIds.length > 0) addDirtyProductIds(recentProdIds);
+      if (recentOrderIds.length > 0) addDirtyOrderIds(recentOrderIds);
+      localStorage.setItem(STORAGE_KEYS.ADR0023_CLOUD_TRUTH, '1');
+    }
+
     // One-time scrub if SP01-SP08 demo products existed in legacy storage
     const savedProdsRaw = localStorage.getItem(STORAGE_KEYS.PRODUCTS);
     const hadDemoInStorage =
@@ -476,119 +527,244 @@ export const StoreProvider: React.FC<{ children: React.ReactNode }> = ({ childre
       cloudConfig.autoSync
     ) {
       cloudDeleteProductsBatch(Array.from(DEMO_PRODUCT_IDS));
+      pushCloudTombstones({ deletedProductIds: Array.from(DEMO_PRODUCT_IDS) });
     }
   }, []);
 
-  // Initial pull and auto-refresh on tab focus/visibility change from Supabase
-  useEffect(() => {
-    const refreshCloud = async () => {
-      if (cloudConfig.supabaseUrl && cloudConfig.supabaseAnonKey && cloudConfig.autoSync) {
-        const pendingDeletes = loadPendingDeletedCustomerIds();
-        if (pendingDeletes.length > 0) {
-          const delRes = await cloudDeleteCustomersBatch(pendingDeletes);
-          if (delRes.success) {
-            removePendingDeletedCustomerIds(pendingDeletes);
-          }
+  // Shared bidirectional cloud sync pull + apply helper (ADR-0023)
+  const activePullPromiseRef = useRef<Promise<{ success: boolean; message: string }> | null>(null);
+  const executeCloudPullRef = useRef<(() => Promise<{ success: boolean; message: string }>) | null>(null);
+  executeCloudPullRef.current = async () => {
+    if (activePullPromiseRef.current) {
+      return await activePullPromiseRef.current;
+    }
+
+    const activeConfig = getSupabaseConfig();
+    if (!activeConfig.supabaseUrl || !activeConfig.supabaseAnonKey) {
+      return { success: false, message: 'Chưa cấu hình kết nối Supabase!' };
+    }
+
+    const runPull = async (): Promise<{ success: boolean; message: string }> => {
+      setIsCloudSyncing(true);
+      try {
+      // Idempotent ADR-0023 first-run dirty seed check
+      if (localStorage.getItem(STORAGE_KEYS.ADR0023_CLOUD_TRUTH) !== '1') {
+        const nov12Cutoff = new Date('2026-11-12T00:00:00Z').getTime();
+        const recentProdIds = (stateRef.current.products || [])
+          .filter(p => p && p.id && !DEMO_PRODUCT_IDS.has(p.id) && getEntityTimestamp(p) >= nov12Cutoff)
+          .map(p => p.id);
+        const recentOrderIds = (stateRef.current.orders || [])
+          .filter(o => o && o.id && getEntityTimestamp(o) >= nov12Cutoff)
+          .map(o => o.id);
+        if (recentProdIds.length > 0) addDirtyProductIds(recentProdIds);
+        if (recentOrderIds.length > 0) addDirtyOrderIds(recentOrderIds);
+        localStorage.setItem(STORAGE_KEYS.ADR0023_CLOUD_TRUTH, '1');
+      }
+
+      const pendingDeletes = loadPendingDeletedCustomerIds();
+      if (pendingDeletes.length > 0) {
+        const delRes = await cloudDeleteCustomersBatch(pendingDeletes);
+        if (delRes.success) {
+          removePendingDeletedCustomerIds(pendingDeletes);
+          pushCloudTombstones({ deletedCustomerIds: pendingDeletes });
         }
+      }
 
-        const pendingProdDeletes = loadPendingDeletedProductIds();
-        if (pendingProdDeletes.length > 0) {
-          const delProdRes = await cloudDeleteProductsBatch(pendingProdDeletes);
-          if (delProdRes.success) {
-            removePendingDeletedProductIds(pendingProdDeletes);
-          }
+      const pendingProdDeletes = loadPendingDeletedProductIds();
+      if (pendingProdDeletes.length > 0) {
+        const delProdRes = await cloudDeleteProductsBatch(pendingProdDeletes);
+        if (delProdRes.success) {
+          removePendingDeletedProductIds(pendingProdDeletes);
+          pushCloudTombstones({ deletedProductIds: pendingProdDeletes });
         }
+      }
 
-        const pendingOrderDeletes = loadPendingDeletedOrderIds();
-        if (pendingOrderDeletes.length > 0) {
-          const delOrdRes = await cloudDeleteOrdersBatch(pendingOrderDeletes);
-          if (delOrdRes.success) {
-            removePendingDeletedOrderIds(pendingOrderDeletes);
-          }
+      const pendingOrderDeletes = loadPendingDeletedOrderIds();
+      if (pendingOrderDeletes.length > 0) {
+        const delOrdRes = await cloudDeleteOrdersBatch(pendingOrderDeletes);
+        if (delOrdRes.success) {
+          removePendingDeletedOrderIds(pendingOrderDeletes);
+          pushCloudTombstones({ deletedOrderIds: pendingOrderDeletes });
         }
+      }
 
-        const excludedProductIds = Array.from(new Set([...loadPendingDeletedProductIds(), ...loadPurgedProductIds()]));
-        const excludedOrderIds = Array.from(new Set([...loadPendingDeletedOrderIds(), ...loadPurgedOrderIds()]));
+      const cleanLocalProducts = filterOutDemoAndDeletedProducts(stateRef.current.products);
+      const cleanLocalOrders = filterOutDeletedOrders(stateRef.current.orders);
+      const excludedProductIds = Array.from(new Set([...loadPendingDeletedProductIds(), ...loadPurgedProductIds()]));
+      const excludedOrderIds = Array.from(new Set([...loadPendingDeletedOrderIds(), ...loadPurgedOrderIds()]));
+      const dirtyProductIds = loadDirtyProductIds();
+      const dirtyOrderIds = loadDirtyOrderIds();
 
-        const localData = {
-          products: filterOutDemoAndDeletedProducts(stateRef.current.products),
-          customers: stateRef.current.customers,
-          orders: filterOutDeletedOrders(stateRef.current.orders),
-          debtPayments: stateRef.current.debtPayments,
-          excludedProductIds,
-          excludedOrderIds,
-        };
+      const localData = {
+        products: cleanLocalProducts,
+        customers: stateRef.current.customers,
+        orders: cleanLocalOrders,
+        debtPayments: stateRef.current.debtPayments,
+        excludedProductIds,
+        excludedOrderIds,
+        dirtyProductIds,
+        dirtyOrderIds,
+      };
 
-        pullAllDataFromCloud(localData).then(cloudData => {
-          if (cloudData && (cloudData.products.length > 0 || cloudData.orders.length > 0)) {
-            // ADR-0018 & ADR-0022: Catalog Anti-Shrink Guard + purge demo/deleted products
-            const guarded = applyCatalogAntiShrinkGuard(localData.products, cloudData.products);
-            const cleanProducts = filterOutDemoAndDeletedProducts(guarded.products);
-            stateRef.current.products = cleanProducts;
-            localStorage.setItem(STORAGE_KEYS.PRODUCTS, JSON.stringify(cleanProducts));
-            setProducts(cleanProducts);
+      const pullRes = await pullAllDataFromCloud(localData);
+      if (!pullRes) {
+        const errMsg = 'Không thể kết nối hoặc tải dữ liệu từ Supabase Cloud!';
+        setCloudSyncError(errMsg);
+        return { success: false, message: errMsg };
+      }
 
-            // Auto-push any stranded unsynced local products or orders back to Cloud
-            const unsyncedProds = filterOutDemoAndDeletedProducts(cloudData.unsyncedLocalProducts || []);
-            if (unsyncedProds.length > 0) {
-              cloudSyncProductsBatch(unsyncedProds);
-            }
-            const cleanUnsyncedOrders = filterOutDeletedOrders(cloudData.unsyncedLocalOrders || []);
-            if (cleanUnsyncedOrders.length > 0) {
-              cloudSyncOrdersBatch(cleanUnsyncedOrders);
-            }
+      // Absorb shared Cloud Tombstone Ledger locally and strip deleted dirty flags
+      if (pullRes.cloudTombstones) {
+        if (pullRes.cloudTombstones.deletedProductIds.length > 0) {
+          appendIdsToKey(STORAGE_KEYS.PURGED_PRODUCTS, pullRes.cloudTombstones.deletedProductIds);
+          removeDirtyProductIds(pullRes.cloudTombstones.deletedProductIds);
+        }
+        if (pullRes.cloudTombstones.deletedOrderIds.length > 0) {
+          appendIdsToKey(STORAGE_KEYS.PURGED_ORDERS, pullRes.cloudTombstones.deletedOrderIds);
+          removeDirtyOrderIds(pullRes.cloudTombstones.deletedOrderIds);
+        }
+        if (pullRes.cloudTombstones.deletedCustomerIds.length > 0) {
+          addPendingDeletedCustomerIds(pullRes.cloudTombstones.deletedCustomerIds);
+        }
+      }
 
-            const stillPendingDeletes = loadPendingDeletedCustomerIds();
-            const safeCloudCustomers = filterOutDeletedCustomers(cloudData.customers, stillPendingDeletes);
-            const safeCloudOrders = filterOutDeletedOrders(cloudData.orders);
-            const { repairedCustomers, repairedOrders } = repairAndMigrateCustomers(
-              safeCloudCustomers,
-              safeCloudOrders
+      const reconciledProducts =
+        pullRes.products.length > 0
+          ? filterOutDemoAndDeletedProducts(pullRes.products)
+          : filterOutDemoAndDeletedProducts(
+              applyCatalogAntiShrinkGuard(cleanLocalProducts, pullRes.products).products
             );
-            const phoneRepair = repairFusedPhonesBatch(repairedCustomers);
-            stateRef.current.customers = phoneRepair.customers;
-            stateRef.current.orders = repairedOrders;
-            stateRef.current.debtPayments = cloudData.debtPayments;
-            localStorage.setItem(STORAGE_KEYS.CUSTOMERS, JSON.stringify(phoneRepair.customers));
-            localStorage.setItem(STORAGE_KEYS.ORDERS, JSON.stringify(repairedOrders));
-            localStorage.setItem(STORAGE_KEYS.DEBT_PAYMENTS, JSON.stringify(cloudData.debtPayments));
-            setCustomers(phoneRepair.customers);
-            setOrders(repairedOrders);
-            setDebtPayments(cloudData.debtPayments);
-            if (cloudData.settings) {
-              setReceiptSettings(prev => {
-                const nextSettings = { ...prev, ...cloudData.settings };
-                stateRef.current.receiptSettings = nextSettings;
-                localStorage.setItem(STORAGE_KEYS.SETTINGS, JSON.stringify(nextSettings));
-                return nextSettings;
-              });
-            }
-            if (phoneRepair.changedCustomers.length > 0) {
-              cloudSyncCustomersBatch(phoneRepair.changedCustomers);
-            }
-            console.log('✅ Đã đồng bộ dữ liệu mới nhất từ Supabase Cloud kèm giải quyết xung đột & chuẩn hóa Sentinel!');
-          }
-        }).catch(err => {
-          console.warn('Không thể tự động đồng bộ từ Cloud:', err);
+
+      const unsyncedProds = filterOutDemoAndDeletedProducts(pullRes.unsyncedLocalProducts || []);
+      const unsyncedProdIdSet = new Set(unsyncedProds.map(p => p.id));
+      const confirmedSyncedProdIds = dirtyProductIds.filter(id => !unsyncedProdIdSet.has(id));
+      if (confirmedSyncedProdIds.length > 0) {
+        removeDirtyProductIds(confirmedSyncedProdIds);
+      }
+      if (unsyncedProds.length > 0) {
+        cloudSyncProductsBatch(unsyncedProds).then(ok => {
+          if (ok) removeDirtyProductIds(unsyncedProds.map(p => p.id));
         });
+      }
+
+      const cleanUnsyncedOrders = filterOutDeletedOrders(pullRes.unsyncedLocalOrders || []);
+      const unsyncedOrdIdSet = new Set(cleanUnsyncedOrders.map(o => o.id));
+      const confirmedSyncedOrdIds = dirtyOrderIds.filter(id => !unsyncedOrdIdSet.has(id));
+      if (confirmedSyncedOrdIds.length > 0) {
+        removeDirtyOrderIds(confirmedSyncedOrdIds);
+      }
+      if (cleanUnsyncedOrders.length > 0) {
+        cloudSyncOrdersBatch(cleanUnsyncedOrders).then(ok => {
+          if (ok) removeDirtyOrderIds(cleanUnsyncedOrders.map(o => o.id));
+        });
+      }
+
+      const stillPendingDeletes = loadPendingDeletedCustomerIds();
+      const ledgerDeletedCusts = pullRes.cloudTombstones?.deletedCustomerIds || [];
+      const safePulledCustomers = filterOutDeletedCustomers(pullRes.customers, [
+        ...stillPendingDeletes,
+        ...ledgerDeletedCusts,
+      ]);
+      const safePulledOrders = filterOutDeletedOrders(pullRes.orders);
+
+      const { repairedCustomers, repairedOrders } = repairAndMigrateCustomers(
+        safePulledCustomers,
+        safePulledOrders
+      );
+      const phoneRepair = repairFusedPhonesBatch(repairedCustomers);
+      const finalPulledCustomers = phoneRepair.customers;
+
+      stateRef.current.products = reconciledProducts;
+      stateRef.current.customers = finalPulledCustomers;
+      stateRef.current.orders = repairedOrders;
+      stateRef.current.debtPayments = pullRes.debtPayments;
+
+      localStorage.setItem(STORAGE_KEYS.PRODUCTS, JSON.stringify(reconciledProducts));
+      localStorage.setItem(STORAGE_KEYS.CUSTOMERS, JSON.stringify(finalPulledCustomers));
+      localStorage.setItem(STORAGE_KEYS.ORDERS, JSON.stringify(repairedOrders));
+      localStorage.setItem(STORAGE_KEYS.DEBT_PAYMENTS, JSON.stringify(pullRes.debtPayments));
+
+      setProducts(reconciledProducts);
+      setCustomers(finalPulledCustomers);
+      setOrders(repairedOrders);
+      setDebtPayments(pullRes.debtPayments);
+
+      if (pullRes.settings) {
+        setReceiptSettings(prev => {
+          const nextSettings = { ...prev, ...pullRes.settings };
+          stateRef.current.receiptSettings = nextSettings;
+          localStorage.setItem(STORAGE_KEYS.SETTINGS, JSON.stringify(nextSettings));
+          return nextSettings;
+        });
+      }
+
+      if (phoneRepair.changedCustomers.length > 0) {
+        cloudSyncCustomersBatch(phoneRepair.changedCustomers);
+      }
+
+      const syncNow = new Date().toISOString();
+      setLastCloudSyncAt(syncNow);
+      setCloudSyncError(null);
+      saveSupabaseConfig({ ...activeConfig, autoSync: true, lastSyncedAt: syncNow });
+
+      const preservedCount = pullRes.localPreservedCount || 0;
+      const note =
+        preservedCount > 0 ? ` (Đã bảo toàn ${preservedCount} bản ghi có cập nhật mới hơn trên máy)` : '';
+
+      console.log(`✅ Đã đồng bộ dữ liệu mới nhất từ Supabase Cloud: ${reconciledProducts.length} món, ${finalPulledCustomers.length} khách, ${repairedOrders.length} đơn.`);
+
+      return {
+        success: true,
+        message: `Đã nạp thành công ${reconciledProducts.length} món, ${finalPulledCustomers.length} khách, ${repairedOrders.length} đơn từ Cloud về máy!${note}`,
+      };
+    } catch (err: any) {
+      const errMsg = err?.message || 'Lỗi đồng bộ Cloud';
+      console.warn('Không thể tự động đồng bộ từ Cloud:', err);
+      setCloudSyncError(errMsg);
+      return { success: false, message: errMsg };
+    } finally {
+      setIsCloudSyncing(false);
+    }
+    };
+
+    activePullPromiseRef.current = runPull();
+    try {
+      return await activePullPromiseRef.current;
+    } finally {
+      activePullPromiseRef.current = null;
+    }
+  };
+
+  // Initial pull, focus/visibility/online triggers, and 45s periodic foreground polling (ADR-0023)
+  useEffect(() => {
+    const refreshCloud = () => {
+      if (cloudConfig.supabaseUrl && cloudConfig.supabaseAnonKey && cloudConfig.autoSync !== false) {
+        executeCloudPullRef.current?.();
       }
     };
 
-    // Run on mount
     refreshCloud();
 
-    // Auto-refresh when user switches back to browser tab on mobile
     const handleVisibility = () => {
       if (document.visibilityState === 'visible') {
         refreshCloud();
       }
     };
 
+    const intervalId = window.setInterval(() => {
+      if (document.visibilityState === 'visible') {
+        refreshCloud();
+      }
+    }, 45000);
+
     window.addEventListener('focus', refreshCloud);
+    window.addEventListener('online', refreshCloud);
     document.addEventListener('visibilitychange', handleVisibility);
 
     return () => {
+      window.clearInterval(intervalId);
       window.removeEventListener('focus', refreshCloud);
+      window.removeEventListener('online', refreshCloud);
       document.removeEventListener('visibilitychange', handleVisibility);
     };
   }, [cloudConfig.supabaseUrl, cloudConfig.supabaseAnonKey, cloudConfig.autoSync]);
@@ -609,105 +785,10 @@ export const StoreProvider: React.FC<{ children: React.ReactNode }> = ({ childre
   }, [products, customers, orders, debtPayments, receiptSettings]);
 
   const syncCloudToLocal = useCallback(async (): Promise<{ success: boolean; message: string }> => {
-    const pendingDeletes = loadPendingDeletedCustomerIds();
-    if (pendingDeletes.length > 0) {
-      const delRes = await cloudDeleteCustomersBatch(pendingDeletes);
-      if (delRes.success) {
-        removePendingDeletedCustomerIds(pendingDeletes);
-      }
+    if (!executeCloudPullRef.current) {
+      return { success: false, message: 'Hệ thống đồng bộ chưa sẵn sàng!' };
     }
-
-    const pendingProdDeletes = loadPendingDeletedProductIds();
-    if (pendingProdDeletes.length > 0) {
-      const delProdRes = await cloudDeleteProductsBatch(pendingProdDeletes);
-      if (delProdRes.success) {
-        removePendingDeletedProductIds(pendingProdDeletes);
-      }
-    }
-
-    const pendingOrderDeletes = loadPendingDeletedOrderIds();
-    if (pendingOrderDeletes.length > 0) {
-      const delOrdRes = await cloudDeleteOrdersBatch(pendingOrderDeletes);
-      if (delOrdRes.success) {
-        removePendingDeletedOrderIds(pendingOrderDeletes);
-      }
-    }
-
-    const cleanLocalProducts = filterOutDemoAndDeletedProducts(stateRef.current.products);
-    const cleanLocalOrders = filterOutDeletedOrders(stateRef.current.orders);
-    const excludedProductIds = Array.from(new Set([...loadPendingDeletedProductIds(), ...loadPurgedProductIds()]));
-    const excludedOrderIds = Array.from(new Set([...loadPendingDeletedOrderIds(), ...loadPurgedOrderIds()]));
-    const localData = {
-      products: cleanLocalProducts,
-      customers: stateRef.current.customers,
-      orders: cleanLocalOrders,
-      debtPayments: stateRef.current.debtPayments,
-      excludedProductIds,
-      excludedOrderIds,
-    };
-
-    const pullRes = await pullAllDataFromCloud(localData);
-    if (!pullRes) {
-      return { success: false, message: 'Không thể kết nối hoặc tải dữ liệu từ Supabase Cloud!' };
-    }
-
-    const guarded = applyCatalogAntiShrinkGuard(cleanLocalProducts, pullRes.products);
-    pullRes.products = filterOutDemoAndDeletedProducts(guarded.products);
-
-    const unsyncedProds = filterOutDemoAndDeletedProducts(pullRes.unsyncedLocalProducts || []);
-    if (unsyncedProds.length > 0) {
-      cloudSyncProductsBatch(unsyncedProds);
-    }
-    const cleanUnsyncedOrders = filterOutDeletedOrders(pullRes.unsyncedLocalOrders || []);
-    if (cleanUnsyncedOrders.length > 0) {
-      cloudSyncOrdersBatch(cleanUnsyncedOrders);
-    }
-
-    const stillPendingDeletes = loadPendingDeletedCustomerIds();
-    const safePulledCustomers = filterOutDeletedCustomers(pullRes.customers, stillPendingDeletes);
-    const safePulledOrders = filterOutDeletedOrders(pullRes.orders);
-
-    const { repairedCustomers, repairedOrders } = repairAndMigrateCustomers(
-      safePulledCustomers,
-      safePulledOrders
-    );
-    const phoneRepair = repairFusedPhonesBatch(repairedCustomers);
-    const finalPulledCustomers = phoneRepair.customers;
-
-    // 1. Đồng bộ tức thời vào localStorage tránh Race Condition khi trang reload (ADR-0008)
-    stateRef.current.products = pullRes.products;
-    stateRef.current.customers = finalPulledCustomers;
-    stateRef.current.orders = repairedOrders;
-    localStorage.setItem(STORAGE_KEYS.PRODUCTS, JSON.stringify(pullRes.products));
-    localStorage.setItem(STORAGE_KEYS.CUSTOMERS, JSON.stringify(finalPulledCustomers));
-    localStorage.setItem(STORAGE_KEYS.ORDERS, JSON.stringify(repairedOrders));
-    localStorage.setItem(STORAGE_KEYS.DEBT_PAYMENTS, JSON.stringify(pullRes.debtPayments));
-    if (pullRes.settings) {
-      localStorage.setItem(STORAGE_KEYS.SETTINGS, JSON.stringify(pullRes.settings));
-    }
-
-    // 2. Cập nhật React state
-    setProducts(pullRes.products);
-    setCustomers(finalPulledCustomers);
-    setOrders(repairedOrders);
-    setDebtPayments(pullRes.debtPayments);
-    if (pullRes.settings) {
-      setReceiptSettings(pullRes.settings);
-    }
-
-    if (phoneRepair.changedCustomers.length > 0) {
-      cloudSyncCustomersBatch(phoneRepair.changedCustomers);
-    }
-
-    const preservedCount = pullRes.localPreservedCount || 0;
-    const note = preservedCount > 0
-      ? ` (Đã bảo toàn ${preservedCount} bản ghi có cập nhật mới hơn trên máy)`
-      : '';
-
-    return {
-      success: true,
-      message: `Đã nạp thành công ${pullRes.products.length} món, ${pullRes.customers.length} khách, ${pullRes.orders.length} đơn từ Cloud về máy!${note}`,
-    };
+    return await executeCloudPullRef.current();
   }, []);
 
   // Product actions
@@ -720,11 +801,14 @@ export const StoreProvider: React.FC<{ children: React.ReactNode }> = ({ childre
       createdAt: now,
       updatedAt: now,
     };
+    addDirtyProductIds([newId]);
     const nextProducts = [newProduct, ...stateRef.current.products];
     stateRef.current.products = nextProducts;
     localStorage.setItem(STORAGE_KEYS.PRODUCTS, JSON.stringify(nextProducts));
     setProducts(nextProducts);
-    cloudSyncProduct(newProduct);
+    cloudSyncProduct(newProduct).then(ok => {
+      if (ok) removeDirtyProductIds([newId]);
+    });
     return newProduct;
   };
 
@@ -737,11 +821,15 @@ export const StoreProvider: React.FC<{ children: React.ReactNode }> = ({ childre
       createdAt: now,
       updatedAt: now,
     }));
+    const newIds = newProducts.map(p => p.id);
+    addDirtyProductIds(newIds);
     const nextProducts = [...newProducts, ...stateRef.current.products];
     stateRef.current.products = nextProducts;
     localStorage.setItem(STORAGE_KEYS.PRODUCTS, JSON.stringify(nextProducts));
     setProducts(nextProducts);
-    cloudSyncProductsBatch(newProducts);
+    cloudSyncProductsBatch(newProducts).then(ok => {
+      if (ok) removeDirtyProductIds(newIds);
+    });
     return newProducts;
   };
 
@@ -755,20 +843,27 @@ export const StoreProvider: React.FC<{ children: React.ReactNode }> = ({ childre
       }
       return p;
     });
+    if (updatedItem) {
+      addDirtyProductIds([id]);
+    }
     stateRef.current.products = nextProducts;
     localStorage.setItem(STORAGE_KEYS.PRODUCTS, JSON.stringify(nextProducts));
     setProducts(nextProducts);
     if (updatedItem) {
-      cloudSyncProduct(updatedItem);
+      cloudSyncProduct(updatedItem).then(ok => {
+        if (ok) removeDirtyProductIds([id]);
+      });
     }
   };
 
   const deleteProduct = (id: string) => {
+    removeDirtyProductIds([id]);
     addPendingDeletedProductIds([id]);
     const nextProducts = stateRef.current.products.filter(p => p.id !== id);
     stateRef.current.products = nextProducts;
     localStorage.setItem(STORAGE_KEYS.PRODUCTS, JSON.stringify(nextProducts));
     setProducts(nextProducts);
+    pushCloudTombstones({ deletedProductIds: [id] });
     cloudDeleteProduct(id).then(res => {
       if (res.success) {
         removePendingDeletedProductIds([id]);
@@ -844,6 +939,7 @@ export const StoreProvider: React.FC<{ children: React.ReactNode }> = ({ childre
     localStorage.setItem(STORAGE_KEYS.CUSTOMERS, JSON.stringify(nextCustomers));
     setCustomers(nextCustomers);
     addPendingDeletedCustomerIds([id]);
+    pushCloudTombstones({ deletedCustomerIds: [id] });
     cloudDeleteCustomer(id).then(res => {
       if (res?.success) removePendingDeletedCustomerIds([id]);
     });
@@ -866,6 +962,7 @@ export const StoreProvider: React.FC<{ children: React.ReactNode }> = ({ childre
     localStorage.setItem(STORAGE_KEYS.CUSTOMERS, JSON.stringify(res.nextCustomers));
     setCustomers(res.nextCustomers);
     addPendingDeletedCustomerIds(res.deletedIds);
+    pushCloudTombstones({ deletedCustomerIds: res.deletedIds });
     cloudDeleteCustomersBatch(res.deletedIds).then(cloudRes => {
       if (cloudRes?.success) removePendingDeletedCustomerIds(res.deletedIds);
     });
@@ -1040,6 +1137,7 @@ export const StoreProvider: React.FC<{ children: React.ReactNode }> = ({ childre
     setCustomers(nextCustomers);
     cloudSyncCustomer(mergedCustomer);
     addPendingDeletedCustomerIds(dupIds);
+    pushCloudTombstones({ deletedCustomerIds: dupIds });
     cloudDeleteCustomersBatch(dupIds).then(cloudRes => {
       if (cloudRes?.success) removePendingDeletedCustomerIds(dupIds);
     });
@@ -1103,6 +1201,7 @@ export const StoreProvider: React.FC<{ children: React.ReactNode }> = ({ childre
       if (deletedIds.size > 0) {
         const delArr = Array.from(deletedIds);
         addPendingDeletedCustomerIds(delArr);
+        pushCloudTombstones({ deletedCustomerIds: delArr });
         cloudDeleteCustomersBatch(delArr).then(cloudRes => {
           if (cloudRes?.success) removePendingDeletedCustomerIds(delArr);
         });
@@ -1207,26 +1306,36 @@ export const StoreProvider: React.FC<{ children: React.ReactNode }> = ({ childre
     }
 
     // 3. Save order to list & Cloud
-    setOrders(prev => [newOrder, ...prev]);
-    cloudSyncOrder(newOrder);
+    addDirtyOrderIds([newOrder.id]);
+    const nextOrders = [newOrder, ...stateRef.current.orders];
+    stateRef.current.orders = nextOrders;
+    localStorage.setItem(STORAGE_KEYS.ORDERS, JSON.stringify(nextOrders));
+    setOrders(nextOrders);
+    cloudSyncOrder(newOrder).then(ok => {
+      if (ok) removeDirtyOrderIds([newOrder.id]);
+    });
     return newOrder;
   };
 
   const updateOrderStatus = (orderId: string, newStatus: OrderStatus) => {
     const now = new Date().toISOString();
     let updatedOrder: Order | null = null;
-    setOrders(prev =>
-      prev.map(order => {
-        if (order.id === orderId) {
-          const updated = { ...order, status: newStatus, updatedAt: now };
-          updatedOrder = updated;
-          return updated;
-        }
-        return order;
-      })
-    );
+    const nextOrders = stateRef.current.orders.map(order => {
+      if (order.id === orderId) {
+        const updated = { ...order, status: newStatus, updatedAt: now };
+        updatedOrder = updated;
+        return updated;
+      }
+      return order;
+    });
     if (updatedOrder) {
-      cloudSyncOrder(updatedOrder);
+      addDirtyOrderIds([orderId]);
+      stateRef.current.orders = nextOrders;
+      localStorage.setItem(STORAGE_KEYS.ORDERS, JSON.stringify(nextOrders));
+      setOrders(nextOrders);
+      cloudSyncOrder(updatedOrder).then(ok => {
+        if (ok) removeDirtyOrderIds([orderId]);
+      });
     }
   };
 
@@ -1359,8 +1468,14 @@ export const StoreProvider: React.FC<{ children: React.ReactNode }> = ({ childre
 
     // 3. CẬP NHẬT ĐƠN HÀNG TRONG DANH SÁCH & CLOUD
     const orderToSave: Order = { ...updatedOrder, updatedAt: now };
-    setOrders(prev => prev.map(o => (o.id === orderId ? orderToSave : o)));
-    cloudSyncOrder(orderToSave);
+    addDirtyOrderIds([orderId]);
+    const nextOrders = stateRef.current.orders.map(o => (o.id === orderId ? orderToSave : o));
+    stateRef.current.orders = nextOrders;
+    localStorage.setItem(STORAGE_KEYS.ORDERS, JSON.stringify(nextOrders));
+    setOrders(nextOrders);
+    cloudSyncOrder(orderToSave).then(ok => {
+      if (ok) removeDirtyOrderIds([orderId]);
+    });
   };
 
   // XÓA VĨNH VIỄN HÓA ĐƠN KÈM HOÀN KHO & TRỪ NỢ (ADR-0006 & ADR-0008)
@@ -1440,12 +1555,14 @@ export const StoreProvider: React.FC<{ children: React.ReactNode }> = ({ childre
       }
     }
 
-    // 3. Xóa đơn khỏi danh sách & Cloud (kèm tombstone chống tái sinh)
+    // 3. Xóa đơn khỏi danh sách & Cloud (kèm tombstone chống tái sinh đa thiết bị)
+    removeDirtyOrderIds([orderId]);
     addPendingDeletedOrderIds([orderId]);
     const nextOrders = stateRef.current.orders.filter(o => o.id !== orderId);
     stateRef.current.orders = nextOrders;
     localStorage.setItem(STORAGE_KEYS.ORDERS, JSON.stringify(nextOrders));
     setOrders(nextOrders);
+    pushCloudTombstones({ deletedOrderIds: [orderId] });
     cloudDeleteOrder(orderId).then(res => {
       if (res.success) {
         removePendingDeletedOrderIds([orderId]);
@@ -1529,16 +1646,23 @@ export const StoreProvider: React.FC<{ children: React.ReactNode }> = ({ childre
     }
 
     // 3. Mark as cancelled & Cloud
-    setOrders(prev =>
-      prev.map(o => {
-        if (o.id === orderId) {
-          const updated = { ...o, status: 'cancelled' as OrderStatus, updatedAt: now };
-          cloudSyncOrder(updated);
-          return updated;
-        }
-        return o;
-      })
-    );
+    let cancelledOrder: Order | null = null;
+    const nextOrders = stateRef.current.orders.map(o => {
+      if (o.id === orderId) {
+        cancelledOrder = { ...o, status: 'cancelled' as OrderStatus, updatedAt: now };
+        return cancelledOrder;
+      }
+      return o;
+    });
+    if (cancelledOrder) {
+      addDirtyOrderIds([orderId]);
+      stateRef.current.orders = nextOrders;
+      localStorage.setItem(STORAGE_KEYS.ORDERS, JSON.stringify(nextOrders));
+      setOrders(nextOrders);
+      cloudSyncOrder(cancelledOrder).then(ok => {
+        if (ok) removeDirtyOrderIds([orderId]);
+      });
+    }
   };
 
   // Debt payment action (ADR-0002 - Running Balance)
@@ -1697,9 +1821,21 @@ export const StoreProvider: React.FC<{ children: React.ReactNode }> = ({ childre
       true
     );
 
-    if (finalProds.length > 0) cloudSyncProductsBatch(finalProds);
+    if (finalProds.length > 0) {
+      const pIds = finalProds.map(p => p.id);
+      addDirtyProductIds(pIds);
+      cloudSyncProductsBatch(finalProds).then(ok => {
+        if (ok) removeDirtyProductIds(pIds);
+      });
+    }
     if (finalCustomers.length > 0) cloudSyncCustomersBatch(finalCustomers);
-    if (repairedOrders.length > 0) cloudSyncOrdersBatch(repairedOrders);
+    if (repairedOrders.length > 0) {
+      const oIds = repairedOrders.map(o => o.id);
+      addDirtyOrderIds(oIds);
+      cloudSyncOrdersBatch(repairedOrders).then(ok => {
+        if (ok) removeDirtyOrderIds(oIds);
+      });
+    }
     if (mergedD.length > 0) cloudSyncDebtPaymentsBatch(mergedD);
     if (snapshot.receiptSettings) cloudSyncSettings(nextSettings);
 
@@ -1771,8 +1907,14 @@ export const StoreProvider: React.FC<{ children: React.ReactNode }> = ({ childre
 
     const nextProducts = createdProducts.length > 0 ? [...createdProducts, ...currentProds] : currentProds;
     if (createdProducts.length > 0) {
+      const createdIds = createdProducts.map(p => p.id);
+      addDirtyProductIds(createdIds);
+      stateRef.current.products = nextProducts;
+      localStorage.setItem(STORAGE_KEYS.PRODUCTS, JSON.stringify(nextProducts));
       setProducts(nextProducts);
-      cloudSyncProductsBatch(createdProducts);
+      cloudSyncProductsBatch(createdProducts).then(ok => {
+        if (ok) removeDirtyProductIds(createdIds);
+      });
     }
 
     // 2. Re-link order items to product IDs where matching
@@ -1802,10 +1944,17 @@ export const StoreProvider: React.FC<{ children: React.ReactNode }> = ({ childre
     const existingOrderIds = new Set(stateRef.current.orders.map(o => o.id));
     const newOrders = linkedOrders.filter(o => !existingOrderIds.has(o.id));
     const nextOrders = [...newOrders, ...stateRef.current.orders];
-    setOrders(nextOrders);
-
     if (newOrders.length > 0) {
-      cloudSyncOrdersBatch(newOrders);
+      const newOrdIds = newOrders.map(o => o.id);
+      addDirtyOrderIds(newOrdIds);
+      stateRef.current.orders = nextOrders;
+      localStorage.setItem(STORAGE_KEYS.ORDERS, JSON.stringify(nextOrders));
+      setOrders(nextOrders);
+      cloudSyncOrdersBatch(newOrders).then(ok => {
+        if (ok) removeDirtyOrderIds(newOrdIds);
+      });
+    } else {
+      setOrders(nextOrders);
     }
 
     // 4. Auto-restore customers from order contacts
@@ -2056,6 +2205,9 @@ export const StoreProvider: React.FC<{ children: React.ReactNode }> = ({ childre
         receiptSettings,
         cloudConfig,
         cloudExtraAddressesPendingSync,
+        isCloudSyncing,
+        lastCloudSyncAt,
+        cloudSyncError,
         sentinelAcks,
         addProduct,
         addProductsBatch,

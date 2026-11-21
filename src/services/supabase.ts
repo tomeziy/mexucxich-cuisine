@@ -1,6 +1,6 @@
 import { createClient, SupabaseClient } from '@supabase/supabase-js';
 import type { Product, Customer, Order, DebtPayment, ReceiptSettings, CloudConfig } from '../types/index.ts';
-import { DEMO_PRODUCT_IDS } from '../data/initialData.ts';
+import { DEMO_PRODUCT_IDS, DEMO_CUSTOMER_IDS } from '../data/initialData.ts';
 import { removeVietnameseTones } from '../utils/vietnamese.ts';
 import { normalizeAddressList } from '../utils/addressUtils.ts';
 import {
@@ -28,26 +28,43 @@ export {
 };
 
 const CLOUD_CONFIG_KEY = 'mexucxich_cloud_config';
+export const CLOUD_TOMBSTONES_ROW_ID = 'cloud_tombstones_v1';
 
 export const DEFAULT_SUPABASE_URL = 'https://lfbrlicpptedjypryswo.supabase.co';
 export const DEFAULT_SUPABASE_ANON_KEY = 'sb_publishable_XmpBtPNysCkaLPnPR1gSkQ_eCfnjNbt';
 
 export const getSupabaseConfig = (): CloudConfig => {
+  const envUrl = (import.meta as any).env?.VITE_SUPABASE_URL || DEFAULT_SUPABASE_URL;
+  const envKey = (import.meta as any).env?.VITE_SUPABASE_ANON_KEY || DEFAULT_SUPABASE_ANON_KEY;
+
   try {
-    const saved = localStorage.getItem(CLOUD_CONFIG_KEY);
-    if (saved) {
-      const parsed = JSON.parse(saved);
-      if (parsed.supabaseUrl && parsed.supabaseAnonKey) {
-        return parsed;
+    if (typeof localStorage !== 'undefined') {
+      const saved = localStorage.getItem(CLOUD_CONFIG_KEY);
+      if (saved) {
+        const parsed = JSON.parse(saved);
+        const rawUrl = typeof parsed?.supabaseUrl === 'string' ? parsed.supabaseUrl.trim() : '';
+        const rawKey = typeof parsed?.supabaseAnonKey === 'string' ? parsed.supabaseAnonKey.trim() : '';
+        const isValidUrl = rawUrl.startsWith('http://') || rawUrl.startsWith('https://');
+        const healed: CloudConfig = {
+          supabaseUrl: isValidUrl ? rawUrl : envUrl,
+          supabaseAnonKey: rawKey || envKey,
+          // Always enforce autoSync: true so any opened browser pulls latest Cloud data
+          autoSync: true,
+          lastSyncedAt: parsed?.lastSyncedAt,
+        };
+        if (!isValidUrl || !rawKey || parsed?.autoSync !== true) {
+          try {
+            localStorage.setItem(CLOUD_CONFIG_KEY, JSON.stringify(healed));
+          } catch {
+            // ignore storage errors
+          }
+        }
+        return healed;
       }
     }
   } catch (e) {
     console.error('Error reading cloud config:', e);
   }
-
-  // Fallback to Vite env variables or project defaults
-  const envUrl = (import.meta as any).env?.VITE_SUPABASE_URL || DEFAULT_SUPABASE_URL;
-  const envKey = (import.meta as any).env?.VITE_SUPABASE_ANON_KEY || DEFAULT_SUPABASE_ANON_KEY;
 
   return {
     supabaseUrl: envUrl,
@@ -433,16 +450,35 @@ async function fetchTableWithPagination(
 
   while (from < maxLimit) {
     const to = from + batchSize - 1;
-    const { data, error } = await client
-      .from(table)
-      .select('*')
-      .range(from, to)
-      .order('created_at', { ascending: false })
-      .order('id', { ascending: true });
+    let data: any[] | null = null;
+    let lastError: any = null;
 
-    if (error) {
-      console.error(`Error fetching paginated data from ${table} (range ${from}-${to}):`, error);
-      break;
+    for (let attempt = 0; attempt < 3; attempt++) {
+      try {
+        const res = await client
+          .from(table)
+          .select('*')
+          .range(from, to)
+          .order('created_at', { ascending: false })
+          .order('id', { ascending: true });
+
+        if (!res.error) {
+          data = res.data;
+          lastError = null;
+          break;
+        }
+        lastError = res.error;
+      } catch (err) {
+        lastError = err;
+      }
+      if (attempt < 2) {
+        await new Promise(resolve => setTimeout(resolve, 400));
+      }
+    }
+
+    if (lastError) {
+      console.error(`Error fetching paginated data from ${table} (range ${from}-${to}):`, lastError);
+      throw new Error(`Failed fetching ${table}: ${lastError.message || lastError}`);
     }
     if (!data || data.length === 0) break;
 
@@ -590,49 +626,312 @@ export function reconstructMissingProductsFromOrders(
   return reconstructed;
 }
 
+export interface CloudTombstoneLedger {
+  deletedProductIds: string[];
+  deletedOrderIds: string[];
+  deletedCustomerIds: string[];
+  updatedAt: string;
+}
+
+const DEFAULT_DEMO_CUST_LIST = Array.from(DEMO_CUSTOMER_IDS);
+const DEFAULT_DEMO_PROD_LIST = Array.from(DEMO_PRODUCT_IDS);
+
+function sanitizeLedgerIds(list: any, defaults: string[] = []): string[] {
+  const arr = Array.isArray(list)
+    ? list.map(x => String(x || '').trim()).filter(Boolean)
+    : [];
+  const merged = Array.from(new Set([...defaults, ...arr]));
+  return merged.length > 2000 ? merged.slice(merged.length - 2000) : merged;
+}
+
 /**
- * Tải toàn bộ dữ liệu từ Supabase về kèm cơ chế giải quyết xung đột (ADR-0008)
- * Sử dụng fetchTableWithPagination để vượt qua giới hạn 1000 dòng của Supabase.
+ * Fetch the shared Cloud Tombstone Ledger stored in `store_settings` (`id = 'cloud_tombstones_v1'`).
+ * Ensures cross-device deletions stay deleted regardless of stale localStorage on other PCs/phones.
  */
-export const pullAllDataFromCloud = async (localData?: {
+export const fetchCloudTombstones = async (
+  clientArg?: SupabaseClient | null
+): Promise<CloudTombstoneLedger> => {
+  const fallback: CloudTombstoneLedger = {
+    deletedProductIds: DEFAULT_DEMO_PROD_LIST,
+    deletedOrderIds: [],
+    deletedCustomerIds: DEFAULT_DEMO_CUST_LIST,
+    updatedAt: '',
+  };
+  const client = clientArg === undefined ? getSupabaseClient() : clientArg;
+  if (!client) return fallback;
+
+  try {
+    const { data, error } = await client
+      .from('store_settings')
+      .select('data, updated_at')
+      .eq('id', CLOUD_TOMBSTONES_ROW_ID)
+      .maybeSingle();
+
+    if (error || !data || !data.data || typeof data.data !== 'object') {
+      return fallback;
+    }
+
+    const rawData: any = data.data;
+    return {
+      deletedProductIds: sanitizeLedgerIds(rawData.deletedProductIds, DEFAULT_DEMO_PROD_LIST),
+      deletedOrderIds: sanitizeLedgerIds(rawData.deletedOrderIds, []),
+      deletedCustomerIds: sanitizeLedgerIds(rawData.deletedCustomerIds, DEFAULT_DEMO_CUST_LIST),
+      updatedAt: String(rawData.updatedAt || data.updated_at || ''),
+    };
+  } catch (e) {
+    console.warn('fetchCloudTombstones error:', e);
+    return fallback;
+  }
+};
+
+/**
+ * Append newly deleted entity IDs into the shared Cloud Tombstone Ledger (`cloud_tombstones_v1`).
+ */
+export const pushCloudTombstones = async (patch: {
+  deletedProductIds?: string[];
+  deletedOrderIds?: string[];
+  deletedCustomerIds?: string[];
+}): Promise<boolean> => {
+  const client = getSupabaseClient();
+  if (!client) return false;
+
+  try {
+    const current = await fetchCloudTombstones(client);
+    const nextLedger: CloudTombstoneLedger = {
+      deletedProductIds: sanitizeLedgerIds(
+        [...current.deletedProductIds, ...(patch.deletedProductIds || [])],
+        DEFAULT_DEMO_PROD_LIST
+      ),
+      deletedOrderIds: sanitizeLedgerIds([...current.deletedOrderIds, ...(patch.deletedOrderIds || [])], []),
+      deletedCustomerIds: sanitizeLedgerIds(
+        [...current.deletedCustomerIds, ...(patch.deletedCustomerIds || [])],
+        DEFAULT_DEMO_CUST_LIST
+      ),
+      updatedAt: new Date().toISOString(),
+    };
+
+    const { error } = await safeUpsert(
+      client,
+      'store_settings',
+      {
+        id: CLOUD_TOMBSTONES_ROW_ID,
+        data: nextLedger,
+        updated_at: nextLedger.updatedAt,
+      },
+      'id'
+    );
+
+    if (error) {
+      console.warn('pushCloudTombstones error:', error);
+      return false;
+    }
+    return true;
+  } catch (e) {
+    console.warn('pushCloudTombstones error:', e);
+    return false;
+  }
+};
+
+export interface CloudPullLocalInput {
   products?: Product[];
   customers?: Customer[];
   orders?: Order[];
   debtPayments?: DebtPayment[];
   excludedProductIds?: string[];
   excludedOrderIds?: string[];
-}): Promise<{
+  dirtyProductIds?: string[];
+  dirtyOrderIds?: string[];
+}
+
+export interface CloudPullReconcileResult {
   products: Product[];
   customers: Customer[];
   orders: Order[];
   debtPayments: DebtPayment[];
   settings?: ReceiptSettings;
-  localPreservedCount?: number;
-  unsyncedLocalProducts?: Product[];
-  unsyncedLocalOrders?: Order[];
-} | null> => {
+  cloudTombstones: CloudTombstoneLedger;
+  localPreservedCount: number;
+  unsyncedLocalProducts: Product[];
+  unsyncedLocalOrders: Order[];
+}
+
+/**
+ * Pure reconciliation engine combining authoritative Cloud state, Cloud Tombstone Ledger,
+ * and genuine dirty local edits (ADR-0023). Exported for direct deterministic verification.
+ */
+export function reconcileCloudAndLocalPullData(params: {
+  cloudProductsRaw: Product[];
+  cloudCustomersRaw: Customer[];
+  cloudOrdersRaw: Order[];
+  cloudDebtPaymentsRaw: DebtPayment[];
+  cloudHasExtraAddressesCol: boolean;
+  cloudTombstones: CloudTombstoneLedger;
+  cloudCustomersOk?: boolean;
+  cloudDebtPaymentsOk?: boolean;
+  settings?: ReceiptSettings;
+  localData?: CloudPullLocalInput;
+}): CloudPullReconcileResult {
+  const {
+    cloudProductsRaw,
+    cloudCustomersRaw,
+    cloudOrdersRaw,
+    cloudDebtPaymentsRaw,
+    cloudHasExtraAddressesCol,
+    cloudTombstones,
+    cloudCustomersOk = true,
+    cloudDebtPaymentsOk = true,
+    settings,
+    localData,
+  } = params;
+
+  const excludedProdSet = new Set([
+    ...DEFAULT_DEMO_PROD_LIST,
+    ...(localData?.excludedProductIds || []),
+    ...(cloudTombstones.deletedProductIds || []),
+  ]);
+  const excludedOrdSet = new Set([
+    ...(localData?.excludedOrderIds || []),
+    ...(cloudTombstones.deletedOrderIds || []),
+  ]);
+  const excludedCustSet = new Set([
+    ...(cloudTombstones.deletedCustomerIds || []),
+  ]);
+
+  const cloudProducts = (cloudProductsRaw || []).filter(
+    p => p && p.id && !DEMO_PRODUCT_IDS.has(p.id) && !excludedProdSet.has(p.id)
+  );
+  const cloudCustomers = (cloudCustomersRaw || []).filter(
+    c => c && c.id && (c.id === 'KH01' || !excludedCustSet.has(c.id))
+  );
+  const cloudOrders = (cloudOrdersRaw || []).filter(
+    o => o && o.id && !excludedOrdSet.has(o.id)
+  );
+  const cloudDebtPayments = cloudDebtPaymentsRaw || [];
+
+  let finalProducts = cloudProducts;
+  let finalCustomers = cloudCustomersOk ? cloudCustomers : (localData?.customers || []);
+  let finalOrders = cloudOrders;
+  let finalDebtPayments = cloudDebtPaymentsOk ? cloudDebtPayments : (localData?.debtPayments || []);
+  let localPreservedCount = 0;
+  let unsyncedLocalProducts: Product[] = [];
+  let unsyncedLocalOrders: Order[] = [];
+
+  if (localData) {
+    if (localData.products && localData.products.length > 0) {
+      const cleanLocalProds = localData.products.filter(
+        p => p && p.id && !DEMO_PRODUCT_IDS.has(p.id) && !excludedProdSet.has(p.id)
+      );
+      const useDirtyGating = localData.dirtyProductIds !== undefined && cloudProducts.length > 0;
+      const dirtyProdSet = new Set(localData.dirtyProductIds || []);
+      const cloudProdIdSet = new Set(cloudProducts.map(p => p.id));
+
+      const eligibleLocalProds = useDirtyGating
+        ? cleanLocalProds.filter(p => cloudProdIdSet.has(p.id) || dirtyProdSet.has(p.id))
+        : cleanLocalProds;
+
+      const pMerge = mergeProductsWithConflictResolution(eligibleLocalProds, cloudProducts);
+      if (useDirtyGating) {
+        finalProducts = pMerge.merged;
+      } else {
+        // Legacy anti-shrink guard when dirty tracking isn't provided
+        finalProducts = pMerge.merged.length >= eligibleLocalProds.length ? pMerge.merged : eligibleLocalProds;
+      }
+      unsyncedLocalProducts = pMerge.localPreserved;
+      localPreservedCount += pMerge.localPreserved.length;
+    }
+
+    if (localData.customers && localData.customers.length > 0 && cloudCustomersOk) {
+      const cleanLocalCustomers = localData.customers.filter(
+        c => c && c.id && (c.id === 'KH01' || !excludedCustSet.has(c.id))
+      );
+      const cMerge = mergeCustomersWithConflictResolution(cleanLocalCustomers, cloudCustomers, {
+        preserveLocalExtraAddressesWhenCloudLacksColumn: !cloudHasExtraAddressesCol,
+      });
+      finalCustomers = cMerge.merged;
+      localPreservedCount += cMerge.localPreserved.length;
+    }
+
+    if (localData.orders && localData.orders.length > 0) {
+      const cleanLocalOrders = localData.orders.filter(o => o && o.id && !excludedOrdSet.has(o.id));
+      const useDirtyOrderGating = localData.dirtyOrderIds !== undefined && cloudOrders.length > 0;
+      const dirtyOrdSet = new Set(localData.dirtyOrderIds || []);
+      const cloudOrderMap = new Map(cloudOrders.map(o => [o.id, o]));
+
+      const eligibleLocalOrders = useDirtyOrderGating
+        ? cleanLocalOrders.filter(o => cloudOrderMap.has(o.id) || dirtyOrdSet.has(o.id))
+        : cleanLocalOrders;
+
+      const unsyncedOrders = eligibleLocalOrders.filter(o => {
+        const cloudO = cloudOrderMap.get(o.id);
+        if (!cloudO) return true;
+        return getEntityTimestamp(o) > getEntityTimestamp(cloudO);
+      });
+      finalOrders = mergeOrders(eligibleLocalOrders, cloudOrders);
+      unsyncedLocalOrders = unsyncedOrders;
+      localPreservedCount += unsyncedOrders.length;
+    }
+
+    if (localData.debtPayments && localData.debtPayments.length > 0 && cloudDebtPaymentsOk) {
+      finalDebtPayments = mergeDebtPayments(localData.debtPayments, cloudDebtPayments);
+    }
+  }
+
+  const reconstructed = reconstructMissingProductsFromOrders(finalOrders, finalProducts, excludedProdSet);
+  if (reconstructed.length > 0) {
+    finalProducts = [...finalProducts, ...reconstructed];
+    unsyncedLocalProducts = [...unsyncedLocalProducts, ...reconstructed];
+  }
+
+  return {
+    products: finalProducts,
+    customers: finalCustomers,
+    orders: finalOrders,
+    debtPayments: finalDebtPayments,
+    settings,
+    cloudTombstones,
+    localPreservedCount,
+    unsyncedLocalProducts,
+    unsyncedLocalOrders,
+  };
+}
+
+/**
+ * Tải toàn bộ dữ liệu từ Supabase về kèm cơ chế giải quyết xung đột (ADR-0008 & ADR-0023)
+ * Sử dụng fetchTableWithPagination để vượt qua giới hạn 1000 dòng của Supabase.
+ */
+export const pullAllDataFromCloud = async (
+  localData?: CloudPullLocalInput
+): Promise<CloudPullReconcileResult | null> => {
   const client = getSupabaseClient();
   if (!client) return null;
 
   try {
-    const [pData, cData, oData, dpData, sRes] = await Promise.all([
+    let customersOk = true;
+    let debtPaymentsOk = true;
+
+    const [pData, cData, oData, dpData, sRes, cloudTombstones] = await Promise.all([
       fetchTableWithPagination(client, 'products', 20000),
-      fetchTableWithPagination(client, 'customers', 20000),
+      fetchTableWithPagination(client, 'customers', 20000).catch(err => {
+        customersOk = false;
+        console.warn('Customers pull fault-isolated:', err);
+        return [] as any[];
+      }),
       fetchTableWithPagination(client, 'orders', 20000),
-      fetchTableWithPagination(client, 'debt_payments', 20000),
-      client.from('store_settings').select('*').eq('id', 'default_settings').maybeSingle(),
+      fetchTableWithPagination(client, 'debt_payments', 20000).catch(err => {
+        debtPaymentsOk = false;
+        console.warn('Debt payments pull fault-isolated:', err);
+        return [] as any[];
+      }),
+      Promise.resolve(client.from('store_settings').select('*').eq('id', 'default_settings').maybeSingle()).catch(() => ({
+        data: null,
+        error: null,
+      })),
+      fetchCloudTombstones(client),
     ]);
 
-    const excludedProdSet = new Set(localData?.excludedProductIds || []);
-    const excludedOrdSet = new Set(localData?.excludedOrderIds || []);
-
-    const cloudProducts = pData
-      .map(transformProductFromDb)
-      .filter(p => p && p.id && !DEMO_PRODUCT_IDS.has(p.id) && !excludedProdSet.has(p.id));
+    const cloudProducts = pData.map(transformProductFromDb);
     const cloudCustomers = cData.map(transformCustomerFromDb);
-    const cloudOrders = oData
-      .map(transformOrderFromDb)
-      .filter(o => o && o.id && !excludedOrdSet.has(o.id));
+    const cloudOrders = oData.map(transformOrderFromDb);
     const cloudDebtPayments = dpData.map(transformDebtPaymentFromDb);
 
     // Detect if Cloud `customers` table already has `extra_addresses` column
@@ -642,65 +941,18 @@ export const pullAllDataFromCloud = async (localData?: {
       setCloudExtraAddressesUnsupported(!cloudHasExtraAddressesCol);
     }
 
-    let finalProducts = cloudProducts;
-    let finalCustomers = cloudCustomers;
-    let finalOrders = cloudOrders;
-    let finalDebtPayments = cloudDebtPayments;
-    let localPreservedCount = 0;
-    let unsyncedLocalProducts: Product[] = [];
-    let unsyncedLocalOrders: Order[] = [];
-
-    if (localData) {
-      if (localData.products && localData.products.length > 0) {
-        const cleanLocalProds = localData.products.filter(
-          p => p && p.id && !DEMO_PRODUCT_IDS.has(p.id) && !excludedProdSet.has(p.id)
-        );
-        const pMerge = mergeProductsWithConflictResolution(cleanLocalProds, cloudProducts);
-        // Anti-shrink guard: never return a product catalog smaller than local in-memory catalog
-        finalProducts = pMerge.merged.length >= cleanLocalProds.length ? pMerge.merged : cleanLocalProds;
-        unsyncedLocalProducts = pMerge.localPreserved;
-        localPreservedCount += pMerge.localPreserved.length;
-      }
-      if (localData.customers && localData.customers.length > 0) {
-        const cMerge = mergeCustomersWithConflictResolution(localData.customers, cloudCustomers, {
-          preserveLocalExtraAddressesWhenCloudLacksColumn: !cloudHasExtraAddressesCol,
-        });
-        finalCustomers = cMerge.merged;
-        localPreservedCount += cMerge.localPreserved.length;
-      }
-      if (localData.orders && localData.orders.length > 0) {
-        const cleanLocalOrders = localData.orders.filter(o => o && o.id && !excludedOrdSet.has(o.id));
-        const cloudOrderMap = new Map(cloudOrders.map(o => [o.id, o]));
-        const unsyncedOrders = cleanLocalOrders.filter(o => {
-          const cloudO = cloudOrderMap.get(o.id);
-          if (!cloudO) return true;
-          return getEntityTimestamp(o) > getEntityTimestamp(cloudO);
-        });
-        finalOrders = mergeOrders(cleanLocalOrders, cloudOrders);
-        unsyncedLocalOrders = unsyncedOrders;
-        localPreservedCount += unsyncedOrders.length;
-      }
-      if (localData.debtPayments && localData.debtPayments.length > 0) {
-        finalDebtPayments = mergeDebtPayments(localData.debtPayments, cloudDebtPayments);
-      }
-    }
-
-    const reconstructed = reconstructMissingProductsFromOrders(finalOrders, finalProducts, excludedProdSet);
-    if (reconstructed.length > 0) {
-      finalProducts = [...finalProducts, ...reconstructed];
-      unsyncedLocalProducts = [...unsyncedLocalProducts, ...reconstructed];
-    }
-
-    return {
-      products: finalProducts,
-      customers: finalCustomers,
-      orders: finalOrders,
-      debtPayments: finalDebtPayments,
-      settings: sRes.data?.data as ReceiptSettings | undefined,
-      localPreservedCount,
-      unsyncedLocalProducts,
-      unsyncedLocalOrders,
-    };
+    return reconcileCloudAndLocalPullData({
+      cloudProductsRaw: cloudProducts,
+      cloudCustomersRaw: cloudCustomers,
+      cloudOrdersRaw: cloudOrders,
+      cloudDebtPaymentsRaw: cloudDebtPayments,
+      cloudHasExtraAddressesCol,
+      cloudTombstones,
+      cloudCustomersOk: customersOk,
+      cloudDebtPaymentsOk: debtPaymentsOk,
+      settings: (sRes as any)?.data?.data as ReceiptSettings | undefined,
+      localData,
+    });
   } catch (e) {
     console.error('Failed to pull data from Supabase:', e);
     return null;
@@ -798,14 +1050,19 @@ export const cloudAdjustProductsStockBatch = async (
 };
 
 // Single item sync helpers
-export const cloudSyncProduct = async (p: Product) => {
+export const cloudSyncProduct = async (p: Product): Promise<boolean> => {
   const client = getSupabaseClient();
-  if (!client) return;
+  if (!client) return false;
   try {
     const { error } = await safeUpsert(client, 'products', transformProductToDb(p));
-    if (error) console.error('cloudSyncProduct error:', error);
+    if (error) {
+      console.error('cloudSyncProduct error:', error);
+      return false;
+    }
+    return true;
   } catch (e) {
     console.error('cloudSyncProduct error:', e);
+    return false;
   }
 };
 
@@ -922,14 +1179,16 @@ export const cloudDeleteCustomersBatch = async (
 };
 
 // Batch items sync helpers
-export const cloudSyncProductsBatch = async (products: Product[]) => {
+export const cloudSyncProductsBatch = async (products: Product[]): Promise<boolean> => {
   const client = getSupabaseClient();
-  if (!client || products.length === 0) return;
+  if (!client || products.length === 0) return true;
   try {
     const pRows = products.map(transformProductToDb);
     await upsertInChunks(client, 'products', pRows, 500);
+    return true;
   } catch (e) {
     console.error('cloudSyncProductsBatch error:', e);
+    return false;
   }
 };
 
@@ -944,25 +1203,32 @@ export const cloudSyncCustomersBatch = async (customers: Customer[]) => {
   }
 };
 
-export const cloudSyncOrdersBatch = async (orders: Order[]) => {
+export const cloudSyncOrdersBatch = async (orders: Order[]): Promise<boolean> => {
   const client = getSupabaseClient();
-  if (!client || orders.length === 0) return;
+  if (!client || orders.length === 0) return true;
   try {
     const oRows = orders.map(transformOrderToDb);
     await upsertInChunks(client, 'orders', oRows, 500);
+    return true;
   } catch (e) {
     console.error('cloudSyncOrdersBatch error:', e);
+    return false;
   }
 };
 
-export const cloudSyncOrder = async (o: Order) => {
+export const cloudSyncOrder = async (o: Order): Promise<boolean> => {
   const client = getSupabaseClient();
-  if (!client) return;
+  if (!client) return false;
   try {
     const { error } = await safeUpsert(client, 'orders', transformOrderToDb(o));
-    if (error) console.error('cloudSyncOrder error:', error);
+    if (error) {
+      console.error('cloudSyncOrder error:', error);
+      return false;
+    }
+    return true;
   } catch (e) {
     console.error('cloudSyncOrder error:', e);
+    return false;
   }
 };
 
