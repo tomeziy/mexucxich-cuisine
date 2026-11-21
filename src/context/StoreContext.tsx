@@ -175,6 +175,7 @@ const STORAGE_KEYS = {
   PURGED_ORDERS: 'mxc_purged_order_ids_v1',
   DIRTY_PRODUCTS: 'mxc_dirty_product_ids_v1',
   DIRTY_ORDERS: 'mxc_dirty_order_ids_v1',
+  DIRTY_CUSTOMERS: 'mxc_dirty_customer_ids_v1',
 };
 
 function loadIdList(key: string): string[] {
@@ -264,6 +265,18 @@ function addDirtyOrderIds(ids: string[]): void {
 
 function removeDirtyOrderIds(ids: string[]): void {
   removeIdsFromKey(STORAGE_KEYS.DIRTY_ORDERS, ids);
+}
+
+function loadDirtyCustomerIds(): string[] {
+  return loadIdList(STORAGE_KEYS.DIRTY_CUSTOMERS);
+}
+
+function addDirtyCustomerIds(ids: string[]): void {
+  appendIdsToKey(STORAGE_KEYS.DIRTY_CUSTOMERS, ids);
+}
+
+function removeDirtyCustomerIds(ids: string[]): void {
+  removeIdsFromKey(STORAGE_KEYS.DIRTY_CUSTOMERS, ids);
 }
 
 function filterOutDemoAndDeletedProducts(list: Product[], extraDeletedIds: string[] = []): Product[] {
@@ -654,8 +667,10 @@ export const StoreProvider: React.FC<{ children: React.ReactNode }> = ({ childre
       const cleanLocalOrders = filterOutDeletedOrders(stateRef.current.orders);
       const excludedProductIds = Array.from(new Set([...loadPendingDeletedProductIds(), ...loadPurgedProductIds()]));
       const excludedOrderIds = Array.from(new Set([...loadPendingDeletedOrderIds(), ...loadPurgedOrderIds()]));
+      const excludedCustomerIds = loadPendingDeletedCustomerIds();
       const dirtyProductIds = loadDirtyProductIds();
       const dirtyOrderIds = loadDirtyOrderIds();
+      const dirtyCustomerIds = loadDirtyCustomerIds();
 
       const localData = {
         products: cleanLocalProducts,
@@ -664,8 +679,10 @@ export const StoreProvider: React.FC<{ children: React.ReactNode }> = ({ childre
         debtPayments: stateRef.current.debtPayments,
         excludedProductIds,
         excludedOrderIds,
+        excludedCustomerIds,
         dirtyProductIds,
         dirtyOrderIds,
+        dirtyCustomerIds,
       };
 
       const [pullRes, cloudAuth] = await Promise.all([
@@ -703,7 +720,20 @@ export const StoreProvider: React.FC<{ children: React.ReactNode }> = ({ childre
         }
         if (pullRes.cloudTombstones.deletedCustomerIds.length > 0) {
           addPendingDeletedCustomerIds(pullRes.cloudTombstones.deletedCustomerIds);
+          removeDirtyCustomerIds(pullRes.cloudTombstones.deletedCustomerIds);
         }
+      }
+
+      const unsyncedCusts = pullRes.unsyncedLocalCustomers || [];
+      const unsyncedCustIdSet = new Set(unsyncedCusts.map(c => c.id));
+      const confirmedSyncedCustIds = dirtyCustomerIds.filter(id => !unsyncedCustIdSet.has(id));
+      if (confirmedSyncedCustIds.length > 0) {
+        removeDirtyCustomerIds(confirmedSyncedCustIds);
+      }
+      if (unsyncedCusts.length > 0) {
+        cloudSyncCustomersBatch(unsyncedCusts).then(ok => {
+          if (ok) removeDirtyCustomerIds(unsyncedCusts.map(c => c.id));
+        });
       }
 
       const reconciledProducts =
@@ -1091,8 +1121,14 @@ export const StoreProvider: React.FC<{ children: React.ReactNode }> = ({ childre
       createdAt: now,
       updatedAt: now,
     };
-    setCustomers(prev => [newCustomer, ...prev]);
-    cloudSyncCustomer(newCustomer);
+    const nextCustomers = [newCustomer, ...stateRef.current.customers];
+    stateRef.current.customers = nextCustomers;
+    localStorage.setItem(STORAGE_KEYS.CUSTOMERS, JSON.stringify(nextCustomers));
+    setCustomers(nextCustomers);
+    addDirtyCustomerIds([newId]);
+    cloudSyncCustomer(newCustomer).then(ok => {
+      if (ok) removeDirtyCustomerIds([newId]);
+    });
     return newCustomer;
   };
 
@@ -1113,28 +1149,43 @@ export const StoreProvider: React.FC<{ children: React.ReactNode }> = ({ childre
         updatedAt: now,
       };
     });
-    setCustomers(prev => [...newCustomers, ...prev]);
-    cloudSyncCustomersBatch(newCustomers);
+    const nextCustomers = [...newCustomers, ...stateRef.current.customers];
+    stateRef.current.customers = nextCustomers;
+    localStorage.setItem(STORAGE_KEYS.CUSTOMERS, JSON.stringify(nextCustomers));
+    setCustomers(nextCustomers);
+    const newIds = newCustomers.map(c => c.id);
+    addDirtyCustomerIds(newIds);
+    cloudSyncCustomersBatch(newCustomers).then(ok => {
+      if (ok) removeDirtyCustomerIds(newIds);
+    });
     return newCustomers;
   };
 
   const updateCustomer = (id: string, updatedData: Partial<Customer>) => {
     const now = new Date().toISOString();
-    setCustomers(prev =>
-      prev.map(c => {
-        if (c.id === id) {
-          const merged = { ...c, ...updatedData, updatedAt: now };
-          if ('address' in updatedData || 'extraAddresses' in updatedData) {
-            const normAddr = normalizeAddressList(merged.address || '', merged.extraAddresses);
-            merged.address = normAddr.address;
-            merged.extraAddresses = normAddr.extraAddresses;
-          }
-          cloudSyncCustomer(merged);
-          return merged;
+    let updatedItem: Customer | null = null;
+    const nextCustomers = stateRef.current.customers.map(c => {
+      if (c.id === id) {
+        const merged = { ...c, ...updatedData, updatedAt: now };
+        if ('address' in updatedData || 'extraAddresses' in updatedData) {
+          const normAddr = normalizeAddressList(merged.address || '', merged.extraAddresses);
+          merged.address = normAddr.address;
+          merged.extraAddresses = normAddr.extraAddresses;
         }
-        return c;
-      })
-    );
+        updatedItem = merged;
+        return merged;
+      }
+      return c;
+    });
+    stateRef.current.customers = nextCustomers;
+    localStorage.setItem(STORAGE_KEYS.CUSTOMERS, JSON.stringify(nextCustomers));
+    setCustomers(nextCustomers);
+    if (updatedItem) {
+      addDirtyCustomerIds([id]);
+      cloudSyncCustomer(updatedItem).then(ok => {
+        if (ok) removeDirtyCustomerIds([id]);
+      });
+    }
   };
 
   const updateCustomersBatch = (
@@ -1164,7 +1215,11 @@ export const StoreProvider: React.FC<{ children: React.ReactNode }> = ({ childre
     stateRef.current.customers = nextCustomers;
     localStorage.setItem(STORAGE_KEYS.CUSTOMERS, JSON.stringify(nextCustomers));
     setCustomers(nextCustomers);
-    cloudSyncCustomersBatch(changedCustomers);
+    const changedIds = changedCustomers.map(c => c.id);
+    addDirtyCustomerIds(changedIds);
+    cloudSyncCustomersBatch(changedCustomers).then(ok => {
+      if (ok) removeDirtyCustomerIds(changedIds);
+    });
     return changedCustomers.length;
   };
 
@@ -1173,6 +1228,7 @@ export const StoreProvider: React.FC<{ children: React.ReactNode }> = ({ childre
     stateRef.current.customers = nextCustomers;
     localStorage.setItem(STORAGE_KEYS.CUSTOMERS, JSON.stringify(nextCustomers));
     setCustomers(nextCustomers);
+    removeDirtyCustomerIds([id]);
     addPendingDeletedCustomerIds([id]);
     pushCloudTombstones({ deletedCustomerIds: [id] });
     cloudDeleteCustomer(id).then(res => {
@@ -1196,6 +1252,7 @@ export const StoreProvider: React.FC<{ children: React.ReactNode }> = ({ childre
     stateRef.current.customers = res.nextCustomers;
     localStorage.setItem(STORAGE_KEYS.CUSTOMERS, JSON.stringify(res.nextCustomers));
     setCustomers(res.nextCustomers);
+    removeDirtyCustomerIds(res.deletedIds);
     addPendingDeletedCustomerIds(res.deletedIds);
     pushCloudTombstones({ deletedCustomerIds: res.deletedIds });
     cloudDeleteCustomersBatch(res.deletedIds).then(cloudRes => {

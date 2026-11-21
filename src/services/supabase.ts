@@ -743,8 +743,10 @@ export interface CloudPullLocalInput {
   debtPayments?: DebtPayment[];
   excludedProductIds?: string[];
   excludedOrderIds?: string[];
+  excludedCustomerIds?: string[];
   dirtyProductIds?: string[];
   dirtyOrderIds?: string[];
+  dirtyCustomerIds?: string[];
 }
 
 export interface CloudPullReconcileResult {
@@ -757,6 +759,7 @@ export interface CloudPullReconcileResult {
   localPreservedCount: number;
   unsyncedLocalProducts: Product[];
   unsyncedLocalOrders: Order[];
+  unsyncedLocalCustomers?: Customer[];
 }
 
 /**
@@ -798,6 +801,8 @@ export function reconcileCloudAndLocalPullData(params: {
     ...(cloudTombstones.deletedOrderIds || []),
   ]);
   const excludedCustSet = new Set([
+    ...DEFAULT_DEMO_CUST_LIST,
+    ...(localData?.excludedCustomerIds || []),
     ...(cloudTombstones.deletedCustomerIds || []),
   ]);
 
@@ -819,6 +824,7 @@ export function reconcileCloudAndLocalPullData(params: {
   let localPreservedCount = 0;
   let unsyncedLocalProducts: Product[] = [];
   let unsyncedLocalOrders: Order[] = [];
+  let unsyncedLocalCustomers: Customer[] = [];
 
   if (localData) {
     if (localData.products && localData.products.length > 0) {
@@ -848,10 +854,19 @@ export function reconcileCloudAndLocalPullData(params: {
       const cleanLocalCustomers = localData.customers.filter(
         c => c && c.id && (c.id === 'KH01' || !excludedCustSet.has(c.id))
       );
-      const cMerge = mergeCustomersWithConflictResolution(cleanLocalCustomers, cloudCustomers, {
+      const useDirtyCustGating = localData.dirtyCustomerIds !== undefined && cloudCustomers.length > 0;
+      const dirtyCustSet = new Set(localData.dirtyCustomerIds || []);
+      const cloudCustIdSet = new Set(cloudCustomers.map(c => c.id));
+
+      const eligibleLocalCustomers = useDirtyCustGating
+        ? cleanLocalCustomers.filter(c => cloudCustIdSet.has(c.id) || dirtyCustSet.has(c.id))
+        : cleanLocalCustomers;
+
+      const cMerge = mergeCustomersWithConflictResolution(eligibleLocalCustomers, cloudCustomers, {
         preserveLocalExtraAddressesWhenCloudLacksColumn: !cloudHasExtraAddressesCol,
       });
       finalCustomers = cMerge.merged;
+      unsyncedLocalCustomers = cMerge.localPreserved;
       localPreservedCount += cMerge.localPreserved.length;
     }
 
@@ -896,6 +911,7 @@ export function reconcileCloudAndLocalPullData(params: {
     localPreservedCount,
     unsyncedLocalProducts,
     unsyncedLocalOrders,
+    unsyncedLocalCustomers,
   };
 }
 
@@ -1098,14 +1114,19 @@ export const cloudDeleteProductsBatch = async (
   return executeChunkedTableDelete(client, 'products', cleanIds, 100);
 };
 
-export const cloudSyncCustomer = async (c: Customer) => {
+export const cloudSyncCustomer = async (c: Customer): Promise<boolean> => {
   const client = getSupabaseClient();
-  if (!client) return;
+  if (!client) return false;
   try {
     const { error } = await safeUpsert(client, 'customers', transformCustomerToDb(c));
-    if (error) console.error('cloudSyncCustomer error:', error);
+    if (error) {
+      console.error('cloudSyncCustomer error:', error);
+      return false;
+    }
+    return true;
   } catch (e) {
     console.error('cloudSyncCustomer error:', e);
+    return false;
   }
 };
 
@@ -1196,14 +1217,16 @@ export const cloudSyncProductsBatch = async (products: Product[]): Promise<boole
   }
 };
 
-export const cloudSyncCustomersBatch = async (customers: Customer[]) => {
+export const cloudSyncCustomersBatch = async (customers: Customer[]): Promise<boolean> => {
   const client = getSupabaseClient();
-  if (!client || customers.length === 0) return;
+  if (!client || customers.length === 0) return true;
   try {
     const cRows = customers.map(transformCustomerToDb);
     await upsertInChunks(client, 'customers', cRows, 500);
+    return true;
   } catch (e) {
     console.error('cloudSyncCustomersBatch error:', e);
+    return false;
   }
 };
 
