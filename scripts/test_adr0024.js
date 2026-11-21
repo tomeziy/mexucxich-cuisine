@@ -21,6 +21,7 @@ import {
 import {
   hashStorePassword,
   createDefaultStoreAuthConfig,
+  createDefaultAdminAuthConfig,
   verifyStoreCredentials,
   createStoreAuthSession,
   isStoreSessionValid,
@@ -366,33 +367,38 @@ const PROJECT_ROOT = path.resolve(__dirname, '..');
 // =========================================================================
 {
   const defaultCfg = createDefaultStoreAuthConfig();
-  assert.equal(defaultCfg.requireSignIn, false, 'Default requireSignIn must be false so existing devices stay unlocked');
-  assert.equal(defaultCfg.username, 'hang');
-  assert.equal(hashStorePassword('hang', 'mexucxich', 'mxc_salt_v1'), defaultCfg.passwordHash);
-  assert.notEqual(hashStorePassword('hang', 'wrongpass', 'mxc_salt_v1'), defaultCfg.passwordHash);
+  const defaultAdminCfg = createDefaultAdminAuthConfig();
+  assert.equal(defaultCfg.requireSignIn, true, 'ADR-0025: requireSignIn defaults to true on unauthenticated devices');
+  assert.equal(defaultCfg.username, 'mexucxich');
+  assert.equal(defaultAdminCfg.username, 'admin');
+  assert.equal(hashStorePassword('mexucxich', 'mexucxich123', 'mxc_salt_v1'), defaultCfg.passwordHash);
+  assert.notEqual(hashStorePassword('mexucxich', 'wrongpass', 'mxc_salt_v1'), defaultCfg.passwordHash);
 
-  assert.equal(verifyStoreCredentials('hang', 'mexucxich', defaultCfg), true);
-  assert.equal(verifyStoreCredentials('HANG@mexucxich.pos', 'mexucxich', defaultCfg), true);
-  assert.equal(verifyStoreCredentials('mexucxich', 'mexucxich', defaultCfg), true);
-  assert.equal(verifyStoreCredentials('hang', 'wrong', defaultCfg), false);
-  assert.equal(verifyStoreCredentials('stranger', 'mexucxich', defaultCfg), false);
+  assert.equal(verifyStoreCredentials('mexucxich', 'mexucxich123', defaultCfg), true);
+  assert.equal(verifyStoreCredentials('MEXUCXICH@mexucxich.pos', 'mexucxich123', defaultCfg), true);
+  assert.equal(verifyStoreCredentials('hang', 'mexucxich123', defaultCfg), true);
+  assert.equal(verifyStoreCredentials('mexucxich', 'wrong', defaultCfg), false);
+  assert.equal(verifyStoreCredentials('stranger', 'mexucxich123', defaultCfg), false);
+  assert.equal(verifyStoreCredentials('admin', 'admin2026', defaultAdminCfg), true);
 
   const t0 = new Date('2026-11-21T10:00:00Z').getTime();
   const session = createStoreAuthSession(defaultCfg, t0);
-  assert.equal(isStoreSessionValid(session, defaultCfg, t0 + 1000), true);
+  assert.equal(isStoreSessionValid(session, defaultCfg, defaultAdminCfg, t0 + 1000), true);
 
   // Expired after 31 days
   const tExpired = t0 + 31 * 24 * 60 * 60 * 1000;
-  assert.equal(isStoreSessionValid(session, defaultCfg, tExpired), false);
+  assert.equal(isStoreSessionValid(session, defaultCfg, defaultAdminCfg, tExpired), false);
 
   // Password change immediately invalidates prior session
   const rotatedCfg = {
     ...defaultCfg,
-    passwordHash: hashStorePassword('hang', 'newsecret2026', defaultCfg.salt),
+    passwordHash: hashStorePassword('mexucxich', 'newsecret2026', defaultCfg.salt),
   };
-  assert.equal(isStoreSessionValid(session, rotatedCfg, t0 + 1000), false);
+  assert.equal(isStoreSessionValid(session, rotatedCfg, defaultAdminCfg, t0 + 1000), false);
 
-  assert.equal(normalizeUsernameToEmail('hang'), 'hang@mexucxich.pos');
+  assert.equal(normalizeUsernameToEmail('mexucxich'), 'mexucxich@mexucxich.pos');
+  assert.equal(normalizeUsernameToEmail('hang'), 'mexucxich@mexucxich.pos');
+  assert.equal(normalizeUsernameToEmail('admin'), 'admin@mexucxich.pos');
   assert.equal(normalizeUsernameToEmail('Hang@Gmail.com'), 'hang@gmail.com');
 
   console.log('PASS Block 4: Store auth password hashing, credential checks & session invalidation verified.');
@@ -433,11 +439,11 @@ const PROJECT_ROOT = path.resolve(__dirname, '..');
     ],
     [
       'src/pages/SettingsPage.tsx',
-      ['Bảo mật & Đăng nhập nhanh', 'updateAuthConfig', 'logoutOrLockScreen', 'KIỂM TRA ĐỐI SOÁT'],
+      ['Tài khoản & Bảo mật đăng nhập', 'changeOwnPassword', 'logoutOrLockScreen', 'KIỂM TRA ĐỐI SOÁT'],
     ],
     [
       'src/components/layout/Navbar.tsx',
-      ['Khóa máy', 'Đăng nhập', 'AuthGateModal'],
+      ['Đăng xuất', 'pendingOutboxCount', 'currentUser'],
     ],
     [
       'src/context/StoreContext.tsx',

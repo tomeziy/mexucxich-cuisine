@@ -15,8 +15,13 @@ import {
   applyCatalogAntiShrinkGuard,
 } from './syncConflict.ts';
 
-import type { StoreAuthConfig } from '../utils/auth.ts';
-import { STORE_AUTH_CONFIG_ROW_ID } from '../utils/auth.ts';
+import type { StoreAuthConfig, StoreRole } from '../utils/auth.ts';
+import {
+  STORE_AUTH_CONFIG_ROW_ID,
+  ADMIN_AUTH_CONFIG_ROW_ID,
+  normalizeUsernameToEmail,
+  inferRoleFromUsernameOrMetadata,
+} from '../utils/auth.ts';
 
 export {
   calculateStockDelta,
@@ -29,6 +34,7 @@ export {
   mergeDebtPayments,
   applyCatalogAntiShrinkGuard,
   STORE_AUTH_CONFIG_ROW_ID,
+  ADMIN_AUTH_CONFIG_ROW_ID,
 };
 
 const CLOUD_CONFIG_KEY = 'mexucxich_cloud_config';
@@ -95,8 +101,13 @@ export const getSupabaseClient = (): SupabaseClient | null => {
   }
 
   try {
+    const hasWindowStorage = typeof window !== 'undefined' && typeof localStorage !== 'undefined';
     cachedClient = createClient(config.supabaseUrl, config.supabaseAnonKey, {
-      auth: { persistSession: false },
+      auth: {
+        persistSession: hasWindowStorage,
+        autoRefreshToken: hasWindowStorage,
+        detectSessionInUrl: hasWindowStorage,
+      },
     });
     return cachedClient;
   } catch (e) {
@@ -906,10 +917,12 @@ export function reconcileCloudAndLocalPullData(params: {
     }
   }
 
-  const reconstructed = reconstructMissingProductsFromOrders(finalOrders, finalProducts, excludedProdSet);
-  if (reconstructed.length > 0) {
-    finalProducts = [...finalProducts, ...reconstructed];
-    unsyncedLocalProducts = [...unsyncedLocalProducts, ...reconstructed];
+  if (cloudProducts.length === 0) {
+    const reconstructed = reconstructMissingProductsFromOrders(finalOrders, finalProducts, excludedProdSet);
+    if (reconstructed.length > 0) {
+      finalProducts = [...finalProducts, ...reconstructed];
+      unsyncedLocalProducts = [...unsyncedLocalProducts, ...reconstructed];
+    }
   }
 
   return {
@@ -1349,10 +1362,8 @@ export const cloudSyncSettings = async (s: ReceiptSettings) => {
   }
 };
 
-/**
- * Fetch store-wide authentication config (`store_auth_config_v1`) from Cloud `store_settings`.
- */
-export const fetchStoreAuthConfig = async (
+const fetchAuthConfigById = async (
+  rowId: string,
   clientArg?: SupabaseClient | null
 ): Promise<StoreAuthConfig | null> => {
   const client = clientArg === undefined ? getSupabaseClient() : clientArg;
@@ -1362,7 +1373,7 @@ export const fetchStoreAuthConfig = async (
     const { data, error } = await client
       .from('store_settings')
       .select('data, updated_at')
-      .eq('id', STORE_AUTH_CONFIG_ROW_ID)
+      .eq('id', rowId)
       .maybeSingle();
 
     if (error || !data || !data.data || typeof data.data !== 'object') {
@@ -1375,7 +1386,7 @@ export const fetchStoreAuthConfig = async (
     }
 
     return {
-      requireSignIn: Boolean(raw.requireSignIn),
+      requireSignIn: raw.requireSignIn !== false,
       username: raw.username,
       passwordHash: raw.passwordHash,
       salt: String(raw.salt || 'mxc_salt_v1'),
@@ -1383,15 +1394,13 @@ export const fetchStoreAuthConfig = async (
       updatedAt: String(raw.updatedAt || data.updated_at || ''),
     };
   } catch (e) {
-    console.warn('fetchStoreAuthConfig error:', e);
+    console.warn(`fetchAuthConfigById(${rowId}) error:`, e);
     return null;
   }
 };
 
-/**
- * Persist updated store authentication config (`store_auth_config_v1`) to Cloud `store_settings`.
- */
-export const pushStoreAuthConfig = async (
+const pushAuthConfigById = async (
+  rowId: string,
   config: StoreAuthConfig,
   clientArg?: SupabaseClient | null
 ): Promise<boolean> => {
@@ -1403,20 +1412,163 @@ export const pushStoreAuthConfig = async (
       client,
       'store_settings',
       {
-        id: STORE_AUTH_CONFIG_ROW_ID,
+        id: rowId,
         data: config,
         updated_at: config.updatedAt || new Date().toISOString(),
       },
       'id'
     );
     if (error) {
-      console.warn('pushStoreAuthConfig error:', error);
+      console.warn(`pushAuthConfigById(${rowId}) error:`, error);
       return false;
     }
     return true;
   } catch (e) {
-    console.warn('pushStoreAuthConfig error:', e);
+    console.warn(`pushAuthConfigById(${rowId}) error:`, e);
     return false;
+  }
+};
+
+export const fetchStoreAuthConfig = (clientArg?: SupabaseClient | null) =>
+  fetchAuthConfigById(STORE_AUTH_CONFIG_ROW_ID, clientArg);
+
+export const pushStoreAuthConfig = (config: StoreAuthConfig, clientArg?: SupabaseClient | null) =>
+  pushAuthConfigById(STORE_AUTH_CONFIG_ROW_ID, config, clientArg);
+
+export const fetchAdminAuthConfig = (clientArg?: SupabaseClient | null) =>
+  fetchAuthConfigById(ADMIN_AUTH_CONFIG_ROW_ID, clientArg);
+
+export const pushAdminAuthConfig = (config: StoreAuthConfig, clientArg?: SupabaseClient | null) =>
+  pushAuthConfigById(ADMIN_AUTH_CONFIG_ROW_ID, config, clientArg);
+
+/**
+ * Authenticate against real Supabase Auth (`signInWithPassword`) mapping short POS usernames
+ * like `mexucxich` / `admin` to canonical POS emails.
+ */
+export const signInWithSupabaseUsernamePassword = async (
+  usernameOrEmail: string,
+  password: string
+): Promise<{
+  success: boolean;
+  email?: string;
+  role?: StoreRole;
+  expiresAt?: string;
+  errorMessage?: string;
+}> => {
+  const client = getSupabaseClient();
+  const email = normalizeUsernameToEmail(usernameOrEmail);
+  if (!client || !email || !password) {
+    return { success: false, errorMessage: 'Missing credentials or Supabase client' };
+  }
+
+  try {
+    const { data, error } = await client.auth.signInWithPassword({ email, password });
+    if (error || !data?.session || !data?.user) {
+      return { success: false, errorMessage: error?.message || 'Invalid login credentials' };
+    }
+    const role = inferRoleFromUsernameOrMetadata(
+      email,
+      data.user.app_metadata?.role as string | undefined
+    );
+    const expiresAt = data.session.expires_at
+      ? new Date(data.session.expires_at * 1000).toISOString()
+      : new Date(Date.now() + 30 * 24 * 60 * 60 * 1000).toISOString();
+    return {
+      success: true,
+      email: data.user.email || email,
+      role,
+      expiresAt,
+    };
+  } catch (e: any) {
+    return { success: false, errorMessage: e?.message || 'Auth network error' };
+  }
+};
+
+export const signOutSupabaseAuth = async (): Promise<void> => {
+  const client = getSupabaseClient();
+  if (!client) return;
+  try {
+    await client.auth.signOut();
+  } catch {
+    // ignore signOut errors
+  }
+};
+
+export const updateOwnSupabasePassword = async (
+  newPassword: string
+): Promise<{ success: boolean; message: string }> => {
+  const client = getSupabaseClient();
+  if (!client || !newPassword || newPassword.length < 6) {
+    return { success: false, message: 'Mật khẩu cần tối thiểu 6 ký tự.' };
+  }
+  try {
+    const { data: sessionData } = await client.auth.getSession();
+    if (!sessionData?.session) {
+      return { success: false, message: 'Chưa có phiên Supabase Auth' };
+    }
+    const { error } = await client.auth.updateUser({ password: newPassword });
+    if (error) {
+      return { success: false, message: error.message };
+    }
+    return { success: true, message: 'Đã cập nhật mật khẩu trên Supabase Auth!' };
+  } catch (e: any) {
+    return { success: false, message: e?.message || 'Lỗi cập nhật mật khẩu' };
+  }
+};
+
+/**
+ * Invoke the `create-store-user` Supabase Edge Function as an Admin to create
+ * new staff/owner accounts or reset user passwords without touching Supabase Dashboard.
+ */
+export const adminCreateOrUpdateStoreUser = async (params: {
+  username: string;
+  password: string;
+  role: StoreRole;
+  mode?: 'create_or_update' | 'update_password';
+}): Promise<{ success: boolean; message: string; needsEdgeDeploy?: boolean }> => {
+  const client = getSupabaseClient();
+  if (!client) {
+    return { success: false, message: 'Không kết nối được Supabase.' };
+  }
+  try {
+    const { data, error } = await client.functions.invoke('create-store-user', {
+      body: {
+        username: params.username.trim().toLowerCase(),
+        password: params.password,
+        role: params.role,
+        mode: params.mode || 'create_or_update',
+      },
+    });
+    if (error) {
+      const msg = String(error.message || error);
+      const isMissingFn =
+        msg.includes('404') ||
+        msg.includes('FunctionsHttpError') ||
+        msg.includes('Failed to send a request');
+      return {
+        success: false,
+        needsEdgeDeploy: isMissingFn,
+        message: isMissingFn
+          ? 'Edge Function `create-store-user` chưa được deploy lên Supabase. Mở hướng dẫn 1-bước bên dưới để kích hoạt tính năng tạo user tự động.'
+          : `Lỗi Edge Function: ${msg}`,
+      };
+    }
+    if (data?.error) {
+      return { success: false, message: String(data.error) };
+    }
+    return {
+      success: true,
+      message:
+        data?.action === 'created'
+          ? `Đã tạo tài khoản "${params.username}" (${params.role}) thành công!`
+          : `Đã cập nhật mật khẩu & quyền cho "${params.username}"!`,
+    };
+  } catch (e: any) {
+    return {
+      success: false,
+      needsEdgeDeploy: true,
+      message: e?.message || 'Không gọi được Edge Function create-store-user.',
+    };
   }
 };
 
@@ -1556,7 +1708,74 @@ begin
 end;
 $$;
 
-grant execute on function adjust_product_stock(p_id text, p_delta numeric) to anon, authenticated, service_role;
+grant execute on function adjust_product_stock(p_id text, p_delta numeric) to authenticated, service_role;
+
+-- Tạo sẵn 2 tài khoản Supabase Auth: mexucxich (Chủ quán) & admin (Quản trị)
+create extension if not exists pgcrypto;
+
+do $$
+declare
+  v_owner_id uuid;
+  v_admin_id uuid;
+begin
+  select id into v_owner_id from auth.users where email = 'mexucxich@mexucxich.pos' limit 1;
+  if v_owner_id is null then
+    v_owner_id := gen_random_uuid();
+    insert into auth.users (
+      instance_id, id, aud, role, email, encrypted_password,
+      email_confirmed_at, raw_app_meta_data, raw_user_meta_data,
+      created_at, updated_at, confirmation_token, email_change, email_change_token_new, recovery_token
+    ) values (
+      '00000000-0000-0000-0000-000000000000', v_owner_id, 'authenticated', 'authenticated',
+      'mexucxich@mexucxich.pos', crypt('mexucxich123', gen_salt('bf')),
+      now(), '{"provider":"email","providers":["email"],"role":"owner"}'::jsonb,
+      '{"username":"mexucxich","displayName":"Hoàng Minh Hằng"}'::jsonb,
+      now(), now(), '', '', '', ''
+    );
+    insert into auth.identities (
+      id, user_id, identity_data, provider, provider_id, last_sign_in_at, created_at, updated_at
+    ) values (
+      gen_random_uuid(), v_owner_id,
+      jsonb_build_object('sub', v_owner_id::text, 'email', 'mexucxich@mexucxich.pos'),
+      'email', v_owner_id::text, now(), now(), now()
+    );
+  end if;
+
+  select id into v_admin_id from auth.users where email = 'admin@mexucxich.pos' limit 1;
+  if v_admin_id is null then
+    v_admin_id := gen_random_uuid();
+    insert into auth.users (
+      instance_id, id, aud, role, email, encrypted_password,
+      email_confirmed_at, raw_app_meta_data, raw_user_meta_data,
+      created_at, updated_at, confirmation_token, email_change, email_change_token_new, recovery_token
+    ) values (
+      '00000000-0000-0000-0000-000000000000', v_admin_id, 'authenticated', 'authenticated',
+      'admin@mexucxich.pos', crypt('admin2026', gen_salt('bf')),
+      now(), '{"provider":"email","providers":["email"],"role":"admin"}'::jsonb,
+      '{"username":"admin","displayName":"Admin"}'::jsonb,
+      now(), now(), '', '', '', ''
+    );
+    insert into auth.identities (
+      id, user_id, identity_data, provider, provider_id, last_sign_in_at, created_at, updated_at
+    ) values (
+      gen_random_uuid(), v_admin_id,
+      jsonb_build_object('sub', v_admin_id::text, 'email', 'admin@mexucxich.pos'),
+      'email', v_admin_id::text, now(), now(), now()
+    );
+  end if;
+end $$;
+
+revoke all on public.products from anon;
+revoke all on public.customers from anon;
+revoke all on public.orders from anon;
+revoke all on public.debt_payments from anon;
+revoke all on public.store_settings from anon;
+
+grant select, insert, update, delete on public.products to authenticated, service_role;
+grant select, insert, update, delete on public.customers to authenticated, service_role;
+grant select, insert, update, delete on public.orders to authenticated, service_role;
+grant select, insert, update, delete on public.debt_payments to authenticated, service_role;
+grant select, insert, update, delete on public.store_settings to authenticated, service_role;
 
 alter table products enable row level security;
 alter table customers enable row level security;
@@ -1565,17 +1784,31 @@ alter table debt_payments enable row level security;
 alter table store_settings enable row level security;
 
 drop policy if exists "Anon full access products" on products;
-create policy "Anon full access products" on products for all using (true) with check (true);
+drop policy if exists "Authenticated full access products" on products;
+create policy "Authenticated full access products" on products for all to authenticated using (true) with check (true);
 
 drop policy if exists "Anon full access customers" on customers;
-create policy "Anon full access customers" on customers for all using (true) with check (true);
+drop policy if exists "Authenticated full access customers" on customers;
+create policy "Authenticated full access customers" on customers for all to authenticated using (true) with check (true);
 
 drop policy if exists "Anon full access orders" on orders;
-create policy "Anon full access orders" on orders for all using (true) with check (true);
+drop policy if exists "Authenticated full access orders" on orders;
+create policy "Authenticated full access orders" on orders for all to authenticated using (true) with check (true);
 
 drop policy if exists "Anon full access debt_payments" on debt_payments;
-create policy "Anon full access debt_payments" on debt_payments for all using (true) with check (true);
+drop policy if exists "Authenticated full access debt_payments" on debt_payments;
+create policy "Authenticated full access debt_payments" on debt_payments for all to authenticated using (true) with check (true);
 
 drop policy if exists "Anon full access store_settings" on store_settings;
-create policy "Anon full access store_settings" on store_settings for all using (true) with check (true);
+drop policy if exists "Authenticated full access store_settings" on store_settings;
+create policy "Authenticated full access store_settings" on store_settings for all to authenticated using (true) with check (true);
+
+do $$
+begin
+  begin alter publication supabase_realtime add table public.products; exception when duplicate_object then null; end;
+  begin alter publication supabase_realtime add table public.customers; exception when duplicate_object then null; end;
+  begin alter publication supabase_realtime add table public.orders; exception when duplicate_object then null; end;
+  begin alter publication supabase_realtime add table public.debt_payments; exception when duplicate_object then null; end;
+  begin alter publication supabase_realtime add table public.store_settings; exception when duplicate_object then null; end;
+end $$;
 `;

@@ -1,14 +1,6 @@
 -- ==============================================================================
--- MEXUCXICH CUISINE - SUPABASE DATABASE INITIALIZATION SCRIPT (ADR-0006 & ADR-0008)
--- ==============================================================================
--- Hướng dẫn:
--- 1. Đăng nhập vào https://supabase.com và tạo một Project mới (Miễn phí 100%).
--- 2. Vào mục "SQL Editor" ở menu bên trái.
--- 3. Sao chép toàn bộ nội dung file này, dán vào và nhấn "Run" (hoặc F5).
--- 4. Vào mục "Project Settings" -> "API", sao chép:
---    - Project URL
---    - Project API Keys (anon public)
--- 5. Mở ứng dụng MexucxichCuisine -> vào tab "Cài đặt" -> dán URL và Key -> Bấm "Kiểm tra & Kết nối".
+-- MEXUCXICH CUISINE - SUPABASE SCHEMA, AUTH USERS & RLS (ADR-0025)
+-- Cài đặt 1 lần duy nhất trong Supabase -> SQL Editor -> Run
 -- ==============================================================================
 
 -- 1. BẢNG SẢN PHẨM & KHO HÀNG (PRODUCTS)
@@ -30,7 +22,9 @@ create table if not exists customers (
   id text primary key,
   name text not null,
   phone text default '',
+  phone2 text,
   address text default '',
+  extra_addresses jsonb default '[]'::jsonb,
   debt numeric default 0,
   total_spent numeric default 0,
   order_count integer default 0,
@@ -83,16 +77,17 @@ create table if not exists store_settings (
   updated_at timestamptz default now()
 );
 
--- Đảm bảo tương thích ngược: Bổ sung cột updated_at nếu bảng đã tồn tại từ trước
+-- Tương thích ngược cột mới
+alter table customers add column if not exists extra_addresses jsonb default '[]'::jsonb;
+alter table customers add column if not exists phone2 text;
 alter table products add column if not exists updated_at timestamptz default now();
 alter table customers add column if not exists updated_at timestamptz default now();
 alter table orders add column if not exists updated_at timestamptz default now();
 alter table debt_payments add column if not exists updated_at timestamptz default now();
+alter table store_settings add column if not exists updated_at timestamptz default now();
+notify pgrst, 'reload schema';
 
--- ==============================================================================
 -- 6. HÀM ĐIỀU CHỈNH TỒN KHO NGUYÊN TỬ (ATOMIC STOCK ADJUSTMENT - ADR-0008)
--- Ngăn chặn Race Condition khi nhiều thiết bị (PC quầy & ĐT chủ) bán hàng đồng thời
--- ==============================================================================
 create or replace function adjust_product_stock(p_id text, p_delta numeric)
 returns numeric
 language plpgsql
@@ -111,39 +106,110 @@ begin
 end;
 $$;
 
-grant execute on function adjust_product_stock(p_id text, p_delta numeric) to anon, authenticated, service_role;
+grant execute on function adjust_product_stock(p_id text, p_delta numeric) to authenticated, service_role;
 
--- ==============================================================================
--- PHÂN QUYỀN TRUY CẬP (DATA API GRANTS & ROW LEVEL SECURITY - SUPABASE OCT 30 COMPLIANT)
--- Cho phép ứng dụng đọc/ghi trực tiếp qua Anon Public Key mà không cần đăng nhập
--- ==============================================================================
+-- 7. TẠO SẴN 2 TÀI KHOẢN SUPABASE AUTH (ĐÃ XÁC NHẬN SẴN EMAIL, KHÔNG CẦN MAIL XÁC NHẬN)
+--    - Hằng (Chủ quán): username `mexucxich` / pass `mexucxich123`
+--    - Quản trị (Admin): username `admin` / pass `admin2026`
+create extension if not exists pgcrypto;
 
--- 1. Cấp quyền truy cập Data API (Bắt buộc theo chuẩn Supabase từ 30/10)
-grant select, insert, update, delete on public.products to anon, authenticated, service_role;
-grant select, insert, update, delete on public.customers to anon, authenticated, service_role;
-grant select, insert, update, delete on public.orders to anon, authenticated, service_role;
-grant select, insert, update, delete on public.debt_payments to anon, authenticated, service_role;
-grant select, insert, update, delete on public.store_settings to anon, authenticated, service_role;
+do $$
+declare
+  v_owner_id uuid;
+  v_admin_id uuid;
+begin
+  select id into v_owner_id from auth.users where email = 'mexucxich@mexucxich.pos' limit 1;
+  if v_owner_id is null then
+    v_owner_id := gen_random_uuid();
+    insert into auth.users (
+      instance_id, id, aud, role, email, encrypted_password,
+      email_confirmed_at, raw_app_meta_data, raw_user_meta_data,
+      created_at, updated_at, confirmation_token, email_change, email_change_token_new, recovery_token
+    ) values (
+      '00000000-0000-0000-0000-000000000000', v_owner_id, 'authenticated', 'authenticated',
+      'mexucxich@mexucxich.pos', crypt('mexucxich123', gen_salt('bf')),
+      now(), '{"provider":"email","providers":["email"],"role":"owner"}'::jsonb,
+      '{"username":"mexucxich","displayName":"Hoàng Minh Hằng"}'::jsonb,
+      now(), now(), '', '', '', ''
+    );
+    insert into auth.identities (
+      id, user_id, identity_data, provider, provider_id, last_sign_in_at, created_at, updated_at
+    ) values (
+      gen_random_uuid(), v_owner_id,
+      jsonb_build_object('sub', v_owner_id::text, 'email', 'mexucxich@mexucxich.pos'),
+      'email', v_owner_id::text, now(), now(), now()
+    );
+  end if;
 
--- 2. Kích hoạt Row Level Security (RLS)
+  select id into v_admin_id from auth.users where email = 'admin@mexucxich.pos' limit 1;
+  if v_admin_id is null then
+    v_admin_id := gen_random_uuid();
+    insert into auth.users (
+      instance_id, id, aud, role, email, encrypted_password,
+      email_confirmed_at, raw_app_meta_data, raw_user_meta_data,
+      created_at, updated_at, confirmation_token, email_change, email_change_token_new, recovery_token
+    ) values (
+      '00000000-0000-0000-0000-000000000000', v_admin_id, 'authenticated', 'authenticated',
+      'admin@mexucxich.pos', crypt('admin2026', gen_salt('bf')),
+      now(), '{"provider":"email","providers":["email"],"role":"admin"}'::jsonb,
+      '{"username":"admin","displayName":"Admin"}'::jsonb,
+      now(), now(), '', '', '', ''
+    );
+    insert into auth.identities (
+      id, user_id, identity_data, provider, provider_id, last_sign_in_at, created_at, updated_at
+    ) values (
+      gen_random_uuid(), v_admin_id,
+      jsonb_build_object('sub', v_admin_id::text, 'email', 'admin@mexucxich.pos'),
+      'email', v_admin_id::text, now(), now(), now()
+    );
+  end if;
+end $$;
+
+-- 8. KHÓA BẢO MẬT DATABASE (CHỈ CHO PHÉP TÀI KHOẢN ĐÃ ĐĂNG NHẬP TRUY CẬP - CHẶN ANON)
+revoke all on public.products from anon;
+revoke all on public.customers from anon;
+revoke all on public.orders from anon;
+revoke all on public.debt_payments from anon;
+revoke all on public.store_settings from anon;
+
+grant select, insert, update, delete on public.products to authenticated, service_role;
+grant select, insert, update, delete on public.customers to authenticated, service_role;
+grant select, insert, update, delete on public.orders to authenticated, service_role;
+grant select, insert, update, delete on public.debt_payments to authenticated, service_role;
+grant select, insert, update, delete on public.store_settings to authenticated, service_role;
+
 alter table products enable row level security;
 alter table customers enable row level security;
 alter table orders enable row level security;
 alter table debt_payments enable row level security;
 alter table store_settings enable row level security;
 
--- 3. Tạo policies cho phép public anon full quyền (SELECT, INSERT, UPDATE, DELETE)
 drop policy if exists "Anon full access products" on products;
-create policy "Anon full access products" on products for all using (true) with check (true);
+drop policy if exists "Authenticated full access products" on products;
+create policy "Authenticated full access products" on products for all to authenticated using (true) with check (true);
 
 drop policy if exists "Anon full access customers" on customers;
-create policy "Anon full access customers" on customers for all using (true) with check (true);
+drop policy if exists "Authenticated full access customers" on customers;
+create policy "Authenticated full access customers" on customers for all to authenticated using (true) with check (true);
 
 drop policy if exists "Anon full access orders" on orders;
-create policy "Anon full access orders" on orders for all using (true) with check (true);
+drop policy if exists "Authenticated full access orders" on orders;
+create policy "Authenticated full access orders" on orders for all to authenticated using (true) with check (true);
 
 drop policy if exists "Anon full access debt_payments" on debt_payments;
-create policy "Anon full access debt_payments" on debt_payments for all using (true) with check (true);
+drop policy if exists "Authenticated full access debt_payments" on debt_payments;
+create policy "Authenticated full access debt_payments" on debt_payments for all to authenticated using (true) with check (true);
 
 drop policy if exists "Anon full access store_settings" on store_settings;
-create policy "Anon full access store_settings" on store_settings for all using (true) with check (true);
+drop policy if exists "Authenticated full access store_settings" on store_settings;
+create policy "Authenticated full access store_settings" on store_settings for all to authenticated using (true) with check (true);
+
+-- 9. BẬT ĐỒNG BỘ REALTIME TỨC THÌ GIỮA NHIỀU THIẾT BỊ
+do $$
+begin
+  begin alter publication supabase_realtime add table public.products; exception when duplicate_object then null; end;
+  begin alter publication supabase_realtime add table public.customers; exception when duplicate_object then null; end;
+  begin alter publication supabase_realtime add table public.orders; exception when duplicate_object then null; end;
+  begin alter publication supabase_realtime add table public.debt_payments; exception when duplicate_object then null; end;
+  begin alter publication supabase_realtime add table public.store_settings; exception when duplicate_object then null; end;
+end $$;

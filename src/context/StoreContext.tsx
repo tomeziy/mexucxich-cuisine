@@ -77,18 +77,30 @@ import {
   subscribeCloudExtraAddressesSupport,
   fetchStoreAuthConfig,
   pushStoreAuthConfig,
+  fetchAdminAuthConfig,
+  pushAdminAuthConfig,
+  signInWithSupabaseUsernamePassword,
+  signOutSupabaseAuth,
+  updateOwnSupabasePassword,
+  adminCreateOrUpdateStoreUser,
+  getSupabaseClient,
   subscribeToCloudRealtimeChanges,
 } from '../services/supabase';
 import {
+  StoreRole,
   StoreAuthConfig,
   StoreAuthSession,
   LOCAL_AUTH_CONFIG_KEY,
+  LOCAL_ADMIN_AUTH_CONFIG_KEY,
   LOCAL_AUTH_SESSION_KEY,
   createDefaultStoreAuthConfig,
+  createDefaultAdminAuthConfig,
   hashStorePassword,
   verifyStoreCredentials,
   createStoreAuthSession,
   isStoreSessionValid,
+  inferRoleFromUsernameOrMetadata,
+  stripAuthEmailDomain,
 } from '../utils/auth';
 
 export { applyCatalogAntiShrinkGuard };
@@ -104,13 +116,23 @@ interface StoreContextType {
   isCloudSyncing: boolean;
   lastCloudSyncAt: string | null;
   cloudSyncError: string | null;
+  pendingOutboxCount: number;
   sentinelAcks: SentinelAcknowledgments;
   authConfig: StoreAuthConfig;
+  adminAuthConfig: StoreAuthConfig;
+  currentUser: { username: string; role: StoreRole; authSource: 'supabase' | 'store_config' } | null;
   isAuthenticated: boolean;
   isScreenLocked: boolean;
-  loginWithPassword: (username: string, password: string) => boolean;
-  logoutOrLockScreen: () => void;
+  loginWithPassword: (username: string, password: string) => Promise<{ success: boolean; error?: string }>;
+  logoutOrLockScreen: () => Promise<void>;
   updateAuthConfig: (patch: { requireSignIn?: boolean; newUsername?: string; newPassword?: string }) => Promise<boolean>;
+  changeOwnPassword: (newPassword: string) => Promise<{ success: boolean; message: string }>;
+  adminManageStoreUser: (params: {
+    username: string;
+    password: string;
+    role: StoreRole;
+    mode?: 'create_or_update' | 'update_password';
+  }) => Promise<{ success: boolean; message: string; needsEdgeDeploy?: boolean }>;
   addProduct: (product: Omit<Product, 'id'>) => Product;
   addProductsBatch: (products: Array<Omit<Product, 'id'>>) => Product[];
   updateProduct: (id: string, product: Partial<Product>) => void;
@@ -324,14 +346,27 @@ export const StoreProvider: React.FC<{ children: React.ReactNode }> = ({ childre
   const [cloudSyncError, setCloudSyncError] = useState<string | null>(null);
   const [sentinelAcks, setSentinelAcks] = useState<SentinelAcknowledgments>(() => loadSentinelAcks());
 
-  // ADR-0024: Store-wide authentication config & session gate
+  const computePendingOutboxCount = (): number =>
+    loadDirtyProductIds().length +
+    loadDirtyOrderIds().length +
+    loadDirtyCustomerIds().length +
+    loadPendingDeletedProductIds().length +
+    loadPendingDeletedOrderIds().length +
+    loadPendingDeletedCustomerIds().length;
+
+  const [pendingOutboxCount, setPendingOutboxCount] = useState<number>(computePendingOutboxCount);
+  const refreshOutboxCount = useCallback(() => {
+    setPendingOutboxCount(computePendingOutboxCount());
+  }, []);
+
+  // ADR-0024 & ADR-0025: Dual-Role Store Authentication (`mexucxich` Owner + `admin` Admin)
   const [authConfig, setAuthConfig] = useState<StoreAuthConfig>(() => {
     try {
       const raw = localStorage.getItem(LOCAL_AUTH_CONFIG_KEY);
       if (raw) {
         const parsed = JSON.parse(raw);
         if (parsed && typeof parsed.username === 'string' && typeof parsed.passwordHash === 'string') {
-          return parsed as StoreAuthConfig;
+          return { ...parsed, requireSignIn: parsed.requireSignIn !== false } as StoreAuthConfig;
         }
       }
     } catch {
@@ -339,10 +374,30 @@ export const StoreProvider: React.FC<{ children: React.ReactNode }> = ({ childre
     }
     return createDefaultStoreAuthConfig();
   });
+  const [adminAuthConfig, setAdminAuthConfig] = useState<StoreAuthConfig>(() => {
+    try {
+      const raw = localStorage.getItem(LOCAL_ADMIN_AUTH_CONFIG_KEY);
+      if (raw) {
+        const parsed = JSON.parse(raw);
+        if (parsed && typeof parsed.username === 'string' && typeof parsed.passwordHash === 'string') {
+          return parsed as StoreAuthConfig;
+        }
+      }
+    } catch {
+      // ignore corrupted admin auth config
+    }
+    return createDefaultAdminAuthConfig();
+  });
   const [authSession, setAuthSession] = useState<StoreAuthSession | null>(() => {
     try {
       const raw = localStorage.getItem(LOCAL_AUTH_SESSION_KEY);
-      return raw ? (JSON.parse(raw) as StoreAuthSession) : null;
+      if (!raw) return null;
+      const parsed = JSON.parse(raw);
+      if (parsed && !parsed.role) {
+        parsed.role = inferRoleFromUsernameOrMetadata(parsed.username || '');
+        parsed.authSource = parsed.authSource || 'store_config';
+      }
+      return parsed as StoreAuthSession;
     } catch {
       return null;
     }
@@ -350,21 +405,61 @@ export const StoreProvider: React.FC<{ children: React.ReactNode }> = ({ childre
   const [isScreenLocked, setIsScreenLocked] = useState<boolean>(false);
 
   const authConfigRef = useRef<StoreAuthConfig>(authConfig);
+  const adminAuthConfigRef = useRef<StoreAuthConfig>(adminAuthConfig);
   const isCloudSyncingRef = useRef<boolean>(isCloudSyncing);
   useEffect(() => {
     authConfigRef.current = authConfig;
   }, [authConfig]);
   useEffect(() => {
+    adminAuthConfigRef.current = adminAuthConfig;
+  }, [adminAuthConfig]);
+  useEffect(() => {
     isCloudSyncingRef.current = isCloudSyncing;
   }, [isCloudSyncing]);
 
-  const isAuthenticated = isStoreSessionValid(authSession, authConfig);
+  const isAuthenticated = isStoreSessionValid(authSession, authConfig, adminAuthConfig);
+  const currentUser = isAuthenticated && authSession
+    ? {
+        username: stripAuthEmailDomain(authSession.username),
+        role: authSession.role || inferRoleFromUsernameOrMetadata(authSession.username),
+        authSource: authSession.authSource || ('store_config' as const),
+      }
+    : null;
+
+  // Restore real Supabase Auth session if already present in browser storage
+  useEffect(() => {
+    const client = getSupabaseClient();
+    if (!client) return;
+    client.auth.getSession().then(({ data }) => {
+      const supaSession = data?.session;
+      if (supaSession?.user) {
+        const email = supaSession.user.email || '';
+        const role = inferRoleFromUsernameOrMetadata(
+          email,
+          supaSession.user.app_metadata?.role as string | undefined
+        );
+        const restored: StoreAuthSession = {
+          username: stripAuthEmailDomain(supaSession.user.user_metadata?.username || email),
+          email,
+          role,
+          authSource: 'supabase',
+          authenticatedAt: new Date().toISOString(),
+          expiresAt: supaSession.expires_at
+            ? new Date(supaSession.expires_at * 1000).toISOString()
+            : new Date(Date.now() + 30 * 24 * 60 * 60 * 1000).toISOString(),
+        };
+        localStorage.setItem(LOCAL_AUTH_SESSION_KEY, JSON.stringify(restored));
+        setAuthSession(restored);
+        setIsScreenLocked(false);
+      }
+    }).catch(() => {});
+  }, []);
 
   useEffect(() => {
     return subscribeCloudExtraAddressesSupport(setCloudExtraAddressesUnsupported);
   }, []);
 
-  // Products state
+  // Products state (Cloud-First read cache; never resurrects Emergency Vault snapshots)
   const [products, setProducts] = useState<Product[]>(() => {
     const saved = localStorage.getItem(STORAGE_KEYS.PRODUCTS);
     let initial: Product[] | null = null;
@@ -378,19 +473,6 @@ export const StoreProvider: React.FC<{ children: React.ReactNode }> = ({ childre
         initial = null;
       }
     }
-    // If no saved real products, auto-shield from Emergency Vault on boot (excluding demo SP01-SP08)
-    if (!initial || initial.length === 0) {
-      const vault = loadVaultSnapshot(EMERGENCY_VAULT_KEY);
-      if (vault && Array.isArray(vault.products) && vault.products.length > 0) {
-        const vaultReal = filterOutDemoAndDeletedProducts(vault.products);
-        if (vaultReal.length > 0) {
-          console.warn(
-            `[Vault Shield] Auto-recovering ${vaultReal.length} real products from Emergency Vault on boot.`
-          );
-          initial = vaultReal;
-        }
-      }
-    }
     if (!initial) {
       initial = INITIAL_PRODUCTS;
     }
@@ -400,7 +482,7 @@ export const StoreProvider: React.FC<{ children: React.ReactNode }> = ({ childre
     }));
   });
 
-  // Customers state
+  // Customers state (Cloud-First read cache; never resurrects Emergency Vault snapshots)
   const [customers, setCustomers] = useState<Customer[]>(() => {
     const saved = localStorage.getItem(STORAGE_KEYS.CUSTOMERS);
     let initial: Customer[] = [];
@@ -410,15 +492,6 @@ export const StoreProvider: React.FC<{ children: React.ReactNode }> = ({ childre
         if (Array.isArray(parsed)) initial = parsed;
       } catch {
         initial = [];
-      }
-    }
-    if (initial.length === 0) {
-      const vault = loadVaultSnapshot(EMERGENCY_VAULT_KEY);
-      if (vault && Array.isArray(vault.customers) && vault.customers.length > 0) {
-        console.warn(
-          `[Vault Shield] Auto-recovering ${vault.customers.length} customers from Emergency Vault on boot.`
-        );
-        initial = vault.customers;
       }
     }
     if (initial.length === 0) {
@@ -436,7 +509,7 @@ export const StoreProvider: React.FC<{ children: React.ReactNode }> = ({ childre
     }));
   });
 
-  // Orders state
+  // Orders state (Cloud-First read cache; never resurrects Emergency Vault snapshots)
   const [orders, setOrders] = useState<Order[]>(() => {
     const saved = localStorage.getItem(STORAGE_KEYS.ORDERS);
     let initial: Order[] = [];
@@ -446,15 +519,6 @@ export const StoreProvider: React.FC<{ children: React.ReactNode }> = ({ childre
         if (Array.isArray(parsed)) initial = parsed;
       } catch {
         initial = [];
-      }
-    }
-    if (initial.length === 0) {
-      const vault = loadVaultSnapshot(EMERGENCY_VAULT_KEY);
-      if (vault && Array.isArray(vault.orders) && vault.orders.length > 0) {
-        console.warn(
-          `[Vault Shield] Auto-recovering ${vault.orders.length} orders from Emergency Vault on boot.`
-        );
-        initial = vault.orders;
       }
     }
     return filterOutDeletedOrders(initial);
@@ -512,6 +576,7 @@ export const StoreProvider: React.FC<{ children: React.ReactNode }> = ({ childre
     stateRef.current.products = nextProducts;
     localStorage.setItem(STORAGE_KEYS.PRODUCTS, JSON.stringify(nextProducts));
     setProducts(nextProducts);
+    refreshOutboxCount();
   };
 
   const commitCustomers = (nextCustomers: Customer[], dirtyAddIds: string[] = [], dirtyClearIds: string[] = []) => {
@@ -521,6 +586,7 @@ export const StoreProvider: React.FC<{ children: React.ReactNode }> = ({ childre
     stateRef.current.customers = nextCustomers;
     localStorage.setItem(STORAGE_KEYS.CUSTOMERS, JSON.stringify(nextCustomers));
     setCustomers(nextCustomers);
+    refreshOutboxCount();
   };
 
   const commitOrders = (nextOrders: Order[], dirtyAddIds: string[] = [], dirtyClearIds: string[] = []) => {
@@ -530,6 +596,7 @@ export const StoreProvider: React.FC<{ children: React.ReactNode }> = ({ childre
     stateRef.current.orders = nextOrders;
     localStorage.setItem(STORAGE_KEYS.ORDERS, JSON.stringify(nextOrders));
     setOrders(nextOrders);
+    refreshOutboxCount();
   };
 
   // Sync to localStorage
@@ -552,24 +619,6 @@ export const StoreProvider: React.FC<{ children: React.ReactNode }> = ({ childre
   useEffect(() => {
     localStorage.setItem(STORAGE_KEYS.SETTINGS, JSON.stringify(receiptSettings));
   }, [receiptSettings]);
-
-  // ADR-0018: Rolling daily backups and emergency vault snapshots
-  useEffect(() => {
-    if (products.length > 0 || orders.length > 0 || customers.length > 0) {
-      const timer = setTimeout(() => {
-        saveVaultSnapshot({
-          timestamp: new Date().toISOString(),
-          reason: 'auto_rolling',
-          products,
-          customers,
-          orders,
-          debtPayments,
-          receiptSettings,
-        }, false);
-      }, 1000);
-      return () => clearTimeout(timer);
-    }
-  }, [products, customers, orders, debtPayments, receiptSettings]);
 
   // One-time Sentinel local data integrity audit & ADR-0020 fused phone repair on boot
   useEffect(() => {
@@ -715,9 +764,10 @@ export const StoreProvider: React.FC<{ children: React.ReactNode }> = ({ childre
       };
 
       const startEpoch = mutationEpochRef.current;
-      const [pullRes, cloudAuth] = await Promise.all([
+      const [pullRes, cloudAuth, cloudAdminAuth] = await Promise.all([
         pullAllDataFromCloud(localData),
         fetchStoreAuthConfig().catch(() => null),
+        fetchAdminAuthConfig().catch(() => null),
       ]);
 
       if (cloudAuth && cloudAuth.updatedAt) {
@@ -729,6 +779,18 @@ export const StoreProvider: React.FC<{ children: React.ReactNode }> = ({ childre
           authConfigRef.current = cloudAuth;
           localStorage.setItem(LOCAL_AUTH_CONFIG_KEY, JSON.stringify(cloudAuth));
           setAuthConfig(cloudAuth);
+        }
+      }
+
+      if (cloudAdminAuth && cloudAdminAuth.updatedAt) {
+        const localAdminTs = adminAuthConfigRef.current?.updatedAt
+          ? new Date(adminAuthConfigRef.current.updatedAt).getTime()
+          : 0;
+        const remoteAdminTs = new Date(cloudAdminAuth.updatedAt).getTime();
+        if (!Number.isFinite(localAdminTs) || (Number.isFinite(remoteAdminTs) && remoteAdminTs > localAdminTs)) {
+          adminAuthConfigRef.current = cloudAdminAuth;
+          localStorage.setItem(LOCAL_ADMIN_AUTH_CONFIG_KEY, JSON.stringify(cloudAdminAuth));
+          setAdminAuthConfig(cloudAdminAuth);
         }
       }
 
@@ -902,6 +964,7 @@ export const StoreProvider: React.FC<{ children: React.ReactNode }> = ({ childre
       return { success: false, message: errMsg };
     } finally {
       setIsCloudSyncing(false);
+      refreshOutboxCount();
     }
     };
 
@@ -913,8 +976,10 @@ export const StoreProvider: React.FC<{ children: React.ReactNode }> = ({ childre
     }
   };
 
-  // Initial pull, focus/visibility/online triggers, and 45s periodic foreground polling (ADR-0023)
+  // Cloud-First Pull triggers: only active while authenticated (ADR-0025)
   useEffect(() => {
+    if (!isAuthenticated || isScreenLocked) return;
+
     let lastPassivePullAt = 0;
 
     const refreshCloud = (passive = false) => {
@@ -982,7 +1047,7 @@ export const StoreProvider: React.FC<{ children: React.ReactNode }> = ({ childre
       }
       unsubscribeRealtime();
     };
-  }, [cloudConfig.supabaseUrl, cloudConfig.supabaseAnonKey, cloudConfig.autoSync]);
+  }, [isAuthenticated, isScreenLocked, cloudConfig.supabaseUrl, cloudConfig.supabaseAnonKey, cloudConfig.autoSync]);
 
   const updateCloudConfig = (newConfig: CloudConfig) => {
     saveSupabaseConfig(newConfig);
@@ -1006,23 +1071,99 @@ export const StoreProvider: React.FC<{ children: React.ReactNode }> = ({ childre
     return await executeCloudPullRef.current();
   }, []);
 
-  // ADR-0024: Authentication gate & Cloud auth config actions
-  const loginWithPassword = (username: string, password: string): boolean => {
-    const activeCfg = authConfigRef.current;
-    if (!verifyStoreCredentials(username, password, activeCfg)) {
-      return false;
+  // ADR-0025: Cloud-First Supabase Auth + Dual Role Sign-In Gate
+  const loginWithPassword = async (
+    username: string,
+    password: string
+  ): Promise<{ success: boolean; error?: string }> => {
+    const cleanUsername = stripAuthEmailDomain(username);
+    if (!cleanUsername || !password) {
+      return { success: false, error: 'Vui lòng nhập đầy đủ Tên đăng nhập và Mật khẩu!' };
     }
-    const nextSession = createStoreAuthSession(activeCfg);
+
+    let nextSession: StoreAuthSession | null = null;
+
+    // 1. Primary path: real Supabase Auth (`signInWithPassword`)
+    const supaRes = await signInWithSupabaseUsernamePassword(cleanUsername, password);
+    if (supaRes.success) {
+      nextSession = createStoreAuthSession({
+        username: cleanUsername,
+        email: supaRes.email,
+        role: supaRes.role || inferRoleFromUsernameOrMetadata(cleanUsername),
+        authSource: 'supabase',
+        sessionTtlDays: 30,
+      });
+    } else {
+      // 2. Graceful transition fallback (before 1-time SQL creates `auth.users`)
+      const [remoteOwner, remoteAdmin] = await Promise.all([
+        fetchStoreAuthConfig().catch(() => null),
+        fetchAdminAuthConfig().catch(() => null),
+      ]);
+
+      if (remoteOwner && remoteOwner.updatedAt) {
+        authConfigRef.current = remoteOwner;
+        localStorage.setItem(LOCAL_AUTH_CONFIG_KEY, JSON.stringify(remoteOwner));
+        setAuthConfig(remoteOwner);
+      }
+      if (remoteAdmin && remoteAdmin.updatedAt) {
+        adminAuthConfigRef.current = remoteAdmin;
+        localStorage.setItem(LOCAL_ADMIN_AUTH_CONFIG_KEY, JSON.stringify(remoteAdmin));
+        setAdminAuthConfig(remoteAdmin);
+      }
+
+      if (verifyStoreCredentials(cleanUsername, password, authConfigRef.current)) {
+        nextSession = createStoreAuthSession({
+          username: authConfigRef.current.username,
+          role: 'owner',
+          authSource: 'store_config',
+          sessionTtlDays: authConfigRef.current.sessionTtlDays || 30,
+          passwordHash: authConfigRef.current.passwordHash,
+        });
+      } else if (verifyStoreCredentials(cleanUsername, password, adminAuthConfigRef.current)) {
+        nextSession = createStoreAuthSession({
+          username: adminAuthConfigRef.current.username,
+          role: 'admin',
+          authSource: 'store_config',
+          sessionTtlDays: adminAuthConfigRef.current.sessionTtlDays || 30,
+          passwordHash: adminAuthConfigRef.current.passwordHash,
+        });
+      }
+    }
+
+    if (!nextSession) {
+      return { success: false, error: 'Tên đăng nhập hoặc mật khẩu chưa đúng!' };
+    }
+
     localStorage.setItem(LOCAL_AUTH_SESSION_KEY, JSON.stringify(nextSession));
     setAuthSession(nextSession);
     setIsScreenLocked(false);
-    return true;
+
+    // Immediately pull 100% latest Cloud dataset upon login so POS enters synced state
+    await executeCloudPullRef.current?.();
+    return { success: true };
   };
 
-  const logoutOrLockScreen = () => {
+  const logoutOrLockScreen = async (): Promise<void> => {
     localStorage.removeItem(LOCAL_AUTH_SESSION_KEY);
     setAuthSession(null);
     setIsScreenLocked(true);
+    await signOutSupabaseAuth();
+
+    // Clear sensitive local cache when signed out (only if Offline Outbox is clean)
+    if (computePendingOutboxCount() === 0) {
+      stateRef.current.products = [];
+      stateRef.current.customers = [];
+      stateRef.current.orders = [];
+      stateRef.current.debtPayments = [];
+      localStorage.removeItem(STORAGE_KEYS.PRODUCTS);
+      localStorage.removeItem(STORAGE_KEYS.CUSTOMERS);
+      localStorage.removeItem(STORAGE_KEYS.ORDERS);
+      localStorage.removeItem(STORAGE_KEYS.DEBT_PAYMENTS);
+      setProducts([]);
+      setCustomers([]);
+      setOrders([]);
+      setDebtPayments([]);
+    }
   };
 
   const updateAuthConfig = async (patch: {
@@ -1052,13 +1193,106 @@ export const StoreProvider: React.FC<{ children: React.ReactNode }> = ({ childre
     localStorage.setItem(LOCAL_AUTH_CONFIG_KEY, JSON.stringify(nextConfig));
     setAuthConfig(nextConfig);
 
-    // Keep current admin device signed in after updating credentials
-    const nextSession = createStoreAuthSession(nextConfig);
-    localStorage.setItem(LOCAL_AUTH_SESSION_KEY, JSON.stringify(nextSession));
-    setAuthSession(nextSession);
-    setIsScreenLocked(false);
+    if (authSession?.role !== 'admin') {
+      const nextSession = createStoreAuthSession(nextConfig);
+      localStorage.setItem(LOCAL_AUTH_SESSION_KEY, JSON.stringify(nextSession));
+      setAuthSession(nextSession);
+      setIsScreenLocked(false);
+    }
 
     return await pushStoreAuthConfig(nextConfig);
+  };
+
+  const changeOwnPassword = async (
+    newPassword: string
+  ): Promise<{ success: boolean; message: string }> => {
+    const trimmed = newPassword.trim();
+    if (trimmed.length < 6) {
+      return { success: false, message: 'Mật khẩu mới cần ít nhất 6 ký tự.' };
+    }
+
+    const activeRole = currentUser?.role || 'owner';
+    const supaRes = await updateOwnSupabasePassword(trimmed);
+
+    if (activeRole === 'admin') {
+      const cur = adminAuthConfigRef.current;
+      const nextAdmin: StoreAuthConfig = {
+        ...cur,
+        passwordHash: hashStorePassword(cur.username, trimmed, cur.salt || 'mxc_salt_v1'),
+        updatedAt: new Date().toISOString(),
+      };
+      adminAuthConfigRef.current = nextAdmin;
+      localStorage.setItem(LOCAL_ADMIN_AUTH_CONFIG_KEY, JSON.stringify(nextAdmin));
+      setAdminAuthConfig(nextAdmin);
+
+      const nextSession = createStoreAuthSession({
+        username: nextAdmin.username,
+        role: 'admin',
+        authSource: supaRes.success ? 'supabase' : (authSession?.authSource || 'store_config'),
+        sessionTtlDays: 30,
+        passwordHash: nextAdmin.passwordHash,
+      });
+      localStorage.setItem(LOCAL_AUTH_SESSION_KEY, JSON.stringify(nextSession));
+      setAuthSession(nextSession);
+      await pushAdminAuthConfig(nextAdmin);
+    } else {
+      await updateAuthConfig({ requireSignIn: true, newPassword: trimmed });
+    }
+
+    return {
+      success: true,
+      message: supaRes.success
+        ? 'Đã đổi mật khẩu trên Cloud Supabase thành công!'
+        : 'Đã cập nhật & đồng bộ mật khẩu mới cho các thiết bị!',
+    };
+  };
+
+  const adminManageStoreUser = async (params: {
+    username: string;
+    password: string;
+    role: StoreRole;
+    mode?: 'create_or_update' | 'update_password';
+  }): Promise<{ success: boolean; message: string; needsEdgeDeploy?: boolean }> => {
+    const cleanUser = stripAuthEmailDomain(params.username);
+    if (!cleanUser || !params.password || params.password.length < 6) {
+      return { success: false, message: 'Vui lòng nhập Tên đăng nhập và Mật khẩu (>= 6 ký tự).' };
+    }
+
+    const edgeRes = await adminCreateOrUpdateStoreUser({
+      ...params,
+      username: cleanUser,
+    });
+
+    // Also keep fallback config in sync if modifying primary owner (`mexucxich`/`hang`) or `admin`
+    if (cleanUser === 'mexucxich' || cleanUser === 'hang') {
+      const cur = authConfigRef.current;
+      const nextOwnerCfg: StoreAuthConfig = {
+        ...cur,
+        requireSignIn: true,
+        username: 'mexucxich',
+        passwordHash: hashStorePassword('mexucxich', params.password, cur.salt || 'mxc_salt_v1'),
+        updatedAt: new Date().toISOString(),
+      };
+      authConfigRef.current = nextOwnerCfg;
+      localStorage.setItem(LOCAL_AUTH_CONFIG_KEY, JSON.stringify(nextOwnerCfg));
+      setAuthConfig(nextOwnerCfg);
+      await pushStoreAuthConfig(nextOwnerCfg);
+    } else if (cleanUser === 'admin' || cleanUser === 'tung') {
+      const cur = adminAuthConfigRef.current;
+      const nextAdminCfg: StoreAuthConfig = {
+        ...cur,
+        requireSignIn: true,
+        username: 'admin',
+        passwordHash: hashStorePassword('admin', params.password, cur.salt || 'mxc_salt_v1'),
+        updatedAt: new Date().toISOString(),
+      };
+      adminAuthConfigRef.current = nextAdminCfg;
+      localStorage.setItem(LOCAL_ADMIN_AUTH_CONFIG_KEY, JSON.stringify(nextAdminCfg));
+      setAdminAuthConfig(nextAdminCfg);
+      await pushAdminAuthConfig(nextAdminCfg);
+    }
+
+    return edgeRes;
   };
 
   // Product actions
@@ -2521,13 +2755,18 @@ export const StoreProvider: React.FC<{ children: React.ReactNode }> = ({ childre
         isCloudSyncing,
         lastCloudSyncAt,
         cloudSyncError,
+        pendingOutboxCount,
         sentinelAcks,
         authConfig,
+        adminAuthConfig,
+        currentUser,
         isAuthenticated,
         isScreenLocked,
         loginWithPassword,
         logoutOrLockScreen,
         updateAuthConfig,
+        changeOwnPassword,
+        adminManageStoreUser,
         addProduct,
         addProductsBatch,
         updateProduct,

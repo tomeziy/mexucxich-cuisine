@@ -1,6 +1,6 @@
 import React, { useState, useEffect } from 'react';
 import { useStore } from '../../context/StoreContext';
-import { Lock, User, KeyRound, Eye, EyeOff, AlertTriangle, RefreshCw, X, ShieldCheck } from 'lucide-react';
+import { Lock, User, KeyRound, Eye, EyeOff, AlertTriangle, X, ShieldCheck, Loader2 } from 'lucide-react';
 
 interface AuthGateModalProps {
   isOpen: boolean;
@@ -13,43 +13,53 @@ export const AuthGateModal: React.FC<AuthGateModalProps> = ({
   isMandatoryLock,
   onClose,
 }) => {
-  const { authConfig, loginWithPassword, syncCloudToLocal, isCloudSyncing } = useStore();
+  const { authConfig, loginWithPassword } = useStore();
 
-  const [username, setUsername] = useState(authConfig.username || 'hang');
+  const [username, setUsername] = useState(authConfig.username || 'mexucxich');
   const [password, setPassword] = useState('');
   const [showPassword, setShowPassword] = useState(false);
+  const [isSubmitting, setIsSubmitting] = useState(false);
   const [errorMsg, setErrorMsg] = useState<string | null>(null);
 
   useEffect(() => {
     if (isOpen) {
-      setUsername(authConfig.username || 'hang');
+      setUsername(prev => prev || authConfig.username || 'mexucxich');
       setPassword('');
       setErrorMsg(null);
+      setIsSubmitting(false);
     }
   }, [isOpen, authConfig.username]);
 
   if (!isOpen) return null;
 
-  const handleSubmit = (e: React.FormEvent) => {
+  const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
+    if (isSubmitting) return;
     setErrorMsg(null);
+
     if (!username.trim() || !password) {
       setErrorMsg('Vui lòng nhập đầy đủ Tên đăng nhập và Mật khẩu!');
       return;
     }
 
-    const ok = loginWithPassword(username.trim(), password);
-    if (!ok) {
-      setErrorMsg('Tên đăng nhập hoặc mật khẩu chưa đúng. Thử lại hoặc đồng bộ cấu hình từ Cloud.');
-      return;
+    setIsSubmitting(true);
+    try {
+      const res = await loginWithPassword(username.trim(), password);
+      if (!res.success) {
+        setErrorMsg(res.error || 'Tên đăng nhập hoặc mật khẩu chưa đúng.');
+        return;
+      }
+      setPassword('');
+      onClose?.();
+    } catch {
+      setErrorMsg('Không thể kết nối máy chủ. Vui lòng thử lại.');
+    } finally {
+      setIsSubmitting(false);
     }
-
-    setPassword('');
-    onClose?.();
   };
 
   return (
-    <div className="fixed inset-0 bg-slate-900/75 backdrop-blur-sm z-[100] flex items-center justify-center p-4">
+    <div className="fixed inset-0 bg-gradient-to-br from-slate-900 via-slate-800 to-amber-950/90 backdrop-blur-sm z-[100] flex items-center justify-center p-4">
       <div className="bg-white rounded-3xl max-w-md w-full p-6 shadow-2xl border border-slate-200 space-y-5 relative animate-in fade-in zoom-in duration-150">
         {!isMandatoryLock && onClose && (
           <button
@@ -63,17 +73,15 @@ export const AuthGateModal: React.FC<AuthGateModalProps> = ({
         )}
 
         <div className="flex items-center gap-3">
-          <div className="w-12 h-12 rounded-2xl bg-gradient-to-br from-amber-400 to-amber-600 text-white flex items-center justify-center shadow-lg shadow-amber-500/25 shrink-0">
-            <Lock className="w-6 h-6" />
+          <div className="w-12 h-12 rounded-2xl bg-gradient-to-br from-amber-400 to-amber-600 text-white flex items-center justify-center shadow-lg shadow-amber-500/25 shrink-0 font-black text-2xl">
+            🌭
           </div>
           <div>
             <h2 className="text-base font-extrabold text-slate-900 flex items-center gap-1.5">
-              <span>Đăng nhập MexucxichCuisine</span>
+              <span>MexucxichCuisine POS</span>
             </h2>
             <p className="text-xs text-slate-500 mt-0.5">
-              {isMandatoryLock
-                ? 'Phiên làm việc đang khóa. Đăng nhập nhanh để tiếp tục bán hàng.'
-                : 'Đăng nhập để mở khóa hoặc lưu mật khẩu trên trình duyệt này.'}
+              Đăng nhập để đồng bộ tự động dữ liệu cửa hàng mới nhất từ Cloud.
             </p>
           </div>
         </div>
@@ -91,10 +99,11 @@ export const AuthGateModal: React.FC<AuthGateModalProps> = ({
                 name="username"
                 autoComplete="username"
                 autoFocus
+                disabled={isSubmitting}
                 value={username}
                 onChange={e => setUsername(e.target.value)}
-                placeholder="hang hoặc mexucxich"
-                className="w-full pl-9 pr-3 py-2.5 bg-slate-50 border border-slate-200 rounded-xl font-bold text-slate-900 focus:outline-none focus:ring-2 focus:ring-amber-400 focus:bg-white transition"
+                placeholder="mexucxich"
+                className="w-full pl-9 pr-3 py-2.5 bg-slate-50 border border-slate-200 rounded-xl font-bold text-slate-900 focus:outline-none focus:ring-2 focus:ring-amber-400 focus:bg-white transition disabled:opacity-60"
               />
             </div>
           </div>
@@ -110,10 +119,11 @@ export const AuthGateModal: React.FC<AuthGateModalProps> = ({
                 type={showPassword ? 'text' : 'password'}
                 name="password"
                 autoComplete="current-password"
+                disabled={isSubmitting}
                 value={password}
                 onChange={e => setPassword(e.target.value)}
-                placeholder="Nhập mật khẩu cửa hàng..."
-                className="w-full pl-9 pr-10 py-2.5 bg-slate-50 border border-slate-200 rounded-xl font-bold text-slate-900 focus:outline-none focus:ring-2 focus:ring-amber-400 focus:bg-white transition"
+                placeholder="Nhập mật khẩu..."
+                className="w-full pl-9 pr-10 py-2.5 bg-slate-50 border border-slate-200 rounded-xl font-bold text-slate-900 focus:outline-none focus:ring-2 focus:ring-amber-400 focus:bg-white transition disabled:opacity-60"
               />
               <button
                 type="button"
@@ -135,27 +145,26 @@ export const AuthGateModal: React.FC<AuthGateModalProps> = ({
 
           <button
             type="submit"
-            className="w-full py-3 rounded-xl bg-amber-500 hover:bg-amber-600 text-white font-extrabold text-sm shadow-md shadow-amber-500/25 transition flex items-center justify-center gap-2"
+            disabled={isSubmitting}
+            className="w-full py-3 rounded-xl bg-amber-500 hover:bg-amber-600 text-white font-extrabold text-sm shadow-md shadow-amber-500/25 transition flex items-center justify-center gap-2 disabled:opacity-70"
           >
-            <ShieldCheck className="w-4 h-4" />
-            <span>Đăng nhập ngay (Nhớ 30 ngày)</span>
+            {isSubmitting ? (
+              <>
+                <Loader2 className="w-4 h-4 animate-spin" />
+                <span>Đang đăng nhập & tải dữ liệu Cloud...</span>
+              </>
+            ) : (
+              <>
+                <ShieldCheck className="w-4 h-4" />
+                <span>Đăng nhập (Tự nhớ trên máy này)</span>
+              </>
+            )}
           </button>
         </form>
 
-        <div className="pt-2 border-t border-slate-100 flex items-center justify-between text-[11px] text-slate-500">
-          <span>
-            Mẹo: Lưu mật khẩu trên Chrome để tự điền trong 1 giây.
-          </span>
-          <button
-            type="button"
-            onClick={() => syncCloudToLocal()}
-            disabled={isCloudSyncing}
-            className="text-amber-700 hover:text-amber-800 font-bold flex items-center gap-1 shrink-0 ml-2"
-            title="Cập nhật mật khẩu mới nhất nếu vừa đổi từ máy khác"
-          >
-            <RefreshCw className={`w-3 h-3 ${isCloudSyncing ? 'animate-spin' : ''}`} />
-            <span>Đồng bộ Cloud</span>
-          </button>
+        <div className="pt-2 border-t border-slate-100 flex items-center justify-center gap-1.5 text-[11px] text-slate-400 text-center">
+          <Lock className="w-3.5 h-3.5 text-amber-500 shrink-0" />
+          <span>Kết nối Cloud tự động • Cho phép Chrome lưu mật khẩu để mở nhanh 1 giây</span>
         </div>
       </div>
     </div>

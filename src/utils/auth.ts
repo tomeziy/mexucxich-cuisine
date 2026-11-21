@@ -1,14 +1,21 @@
 /**
- * ADR-0024: Store Authentication Gate & Session Management
- * Pure deterministic SHA-256 password stretching + 30-day persistent local session
- * synced across devices via Supabase `store_settings` (`store_auth_config_v1`).
+ * ADR-0024 & ADR-0025: Store Authentication Gate & Session Management
+ * Supports dual store roles (`mexucxich` Owner + `admin` Admin + Edge-created staff)
+ * with Supabase Auth (`signInWithPassword`) and seamless pre-RLS config fallback.
  */
 
 export const STORE_AUTH_CONFIG_ROW_ID = 'store_auth_config_v1';
+export const ADMIN_AUTH_CONFIG_ROW_ID = 'store_admin_auth_v1';
 export const LOCAL_AUTH_CONFIG_KEY = 'mxc_auth_config_v1';
+export const LOCAL_ADMIN_AUTH_CONFIG_KEY = 'mxc_admin_auth_config_v1';
 export const LOCAL_AUTH_SESSION_KEY = 'mxc_auth_session_v1';
-export const DEFAULT_STORE_USERNAME = 'hang';
-export const DEFAULT_STORE_PASSWORD_PLAIN = 'mexucxich';
+
+export const DEFAULT_STORE_USERNAME = 'mexucxich';
+export const DEFAULT_STORE_PASSWORD_PLAIN = 'mexucxich123';
+export const DEFAULT_ADMIN_USERNAME = 'admin';
+export const DEFAULT_ADMIN_PASSWORD_PLAIN = 'admin2026';
+
+export type StoreRole = 'admin' | 'owner' | 'staff';
 
 export interface StoreAuthConfig {
   requireSignIn: boolean;
@@ -21,9 +28,12 @@ export interface StoreAuthConfig {
 
 export interface StoreAuthSession {
   username: string;
+  email?: string;
+  role: StoreRole;
+  authSource: 'supabase' | 'store_config';
   authenticatedAt: string;
   expiresAt: string;
-  passwordHashSnapshot: string;
+  passwordHashSnapshot?: string;
 }
 
 const SHA256_K = new Uint32Array([
@@ -122,29 +132,61 @@ export function hashStorePassword(
 
 export function createDefaultStoreAuthConfig(): StoreAuthConfig {
   return {
-    requireSignIn: false,
+    requireSignIn: true,
     username: DEFAULT_STORE_USERNAME,
     passwordHash: hashStorePassword(DEFAULT_STORE_USERNAME, DEFAULT_STORE_PASSWORD_PLAIN, 'mxc_salt_v1'),
     salt: 'mxc_salt_v1',
     sessionTtlDays: 30,
-    updatedAt: '2026-11-21T00:00:00.000Z',
+    updatedAt: '2026-11-22T00:00:00.000Z',
   };
+}
+
+export function createDefaultAdminAuthConfig(): StoreAuthConfig {
+  return {
+    requireSignIn: true,
+    username: DEFAULT_ADMIN_USERNAME,
+    passwordHash: hashStorePassword(DEFAULT_ADMIN_USERNAME, DEFAULT_ADMIN_PASSWORD_PLAIN, 'mxc_salt_v1'),
+    salt: 'mxc_salt_v1',
+    sessionTtlDays: 30,
+    updatedAt: '2026-11-22T00:00:00.000Z',
+  };
+}
+
+export function stripAuthEmailDomain(usernameOrEmail: string): string {
+  return String(usernameOrEmail || '')
+    .trim()
+    .toLowerCase()
+    .replace(/@mexucxich\.(pos|local)$/i, '');
 }
 
 /**
  * Normalize a short POS username into an email format compatible with Supabase `signInWithPassword`.
+ * Resolves known aliases (`hang` -> `mexucxich@mexucxich.pos`, `tung` -> `admin@mexucxich.pos`).
  */
 export function normalizeUsernameToEmail(usernameOrEmail: string): string {
   const clean = String(usernameOrEmail || '').trim().toLowerCase();
   if (!clean) return '';
   if (clean.includes('@')) return clean;
+  if (clean === 'hang') return 'mexucxich@mexucxich.pos';
+  if (clean === 'tung') return 'admin@mexucxich.pos';
   return `${clean}@mexucxich.pos`;
 }
 
+export function inferRoleFromUsernameOrMetadata(
+  usernameOrEmail: string,
+  appMetadataRole?: string
+): StoreRole {
+  if (appMetadataRole === 'admin' || appMetadataRole === 'owner' || appMetadataRole === 'staff') {
+    return appMetadataRole;
+  }
+  const clean = stripAuthEmailDomain(usernameOrEmail);
+  if (clean === 'admin' || clean === 'tung') return 'admin';
+  if (clean === 'mexucxich' || clean === 'hang') return 'owner';
+  return 'staff';
+}
+
 /**
- * Verify username + password against StoreAuthConfig.
- * Strips `@mexucxich.pos` / `@mexucxich.local` suffix if entered via email autofill,
- * and allows `'mexucxich'` convenience alias when username is `'hang'`.
+ * Verify username + password against a StoreAuthConfig (`mexucxich` owner or `admin` admin).
  */
 export function verifyStoreCredentials(
   inputUsername: string,
@@ -152,39 +194,80 @@ export function verifyStoreCredentials(
   config: StoreAuthConfig
 ): boolean {
   if (!config || !inputPassword) return false;
-  let cleanUser = String(inputUsername || '').trim().toLowerCase();
-  cleanUser = cleanUser.replace(/@mexucxich\.(pos|local)$/i, '');
+  const cleanUser = stripAuthEmailDomain(inputUsername);
+  const expectedUser = stripAuthEmailDomain(config.username || '');
 
-  const expectedUser = String(config.username || '').trim().toLowerCase();
-  const isUserMatch =
-    cleanUser === expectedUser || (expectedUser === 'hang' && cleanUser === 'mexucxich');
-  if (!isUserMatch) return false;
+  const isOwnerMatch =
+    (expectedUser === 'mexucxich' || expectedUser === 'hang') &&
+    (cleanUser === 'mexucxich' || cleanUser === 'hang');
+  const isAdminMatch =
+    (expectedUser === 'admin' || expectedUser === 'tung') &&
+    (cleanUser === 'admin' || cleanUser === 'tung');
+
+  if (cleanUser !== expectedUser && !isOwnerMatch && !isAdminMatch) {
+    return false;
+  }
 
   const computedHash = hashStorePassword(config.username, inputPassword, config.salt || 'mxc_salt_v1');
   return computedHash === config.passwordHash;
 }
 
 export function createStoreAuthSession(
-  config: StoreAuthConfig,
+  configOrUser:
+    | StoreAuthConfig
+    | {
+        username: string;
+        email?: string;
+        role: StoreRole;
+        authSource?: 'supabase' | 'store_config';
+        sessionTtlDays?: number;
+        passwordHash?: string;
+      },
   nowMs = Date.now()
 ): StoreAuthSession {
-  const ttlDays = Math.max(1, Number(config.sessionTtlDays) || 30);
+  const isCfg = 'passwordHash' in configOrUser && !('role' in configOrUser);
+  const username = stripAuthEmailDomain(configOrUser.username);
+  const role: StoreRole = isCfg
+    ? inferRoleFromUsernameOrMetadata(username)
+    : configOrUser.role;
+  const ttlDays = Math.max(1, Number(configOrUser.sessionTtlDays) || 30);
   const expiresMs = nowMs + ttlDays * 24 * 60 * 60 * 1000;
+
   return {
-    username: config.username,
+    username,
+    email: !isCfg && configOrUser.email ? configOrUser.email : normalizeUsernameToEmail(username),
+    role,
+    authSource: !isCfg && configOrUser.authSource ? configOrUser.authSource : 'store_config',
     authenticatedAt: new Date(nowMs).toISOString(),
     expiresAt: new Date(expiresMs).toISOString(),
-    passwordHashSnapshot: config.passwordHash,
+    passwordHashSnapshot: 'passwordHash' in configOrUser ? configOrUser.passwordHash : undefined,
   };
 }
 
 export function isStoreSessionValid(
   session: StoreAuthSession | null | undefined,
-  config: StoreAuthConfig,
-  nowMs = Date.now()
+  ownerConfig: StoreAuthConfig,
+  adminConfigOrNow?: StoreAuthConfig | number,
+  maybeNowMs?: number
 ): boolean {
-  if (!session || !config) return false;
+  const adminConfig = typeof adminConfigOrNow === 'object' ? adminConfigOrNow : undefined;
+  const nowMs =
+    typeof adminConfigOrNow === 'number'
+      ? adminConfigOrNow
+      : typeof maybeNowMs === 'number'
+      ? maybeNowMs
+      : Date.now();
+
+  if (!session || !ownerConfig) return false;
   const expiresMs = new Date(session.expiresAt).getTime();
   if (!Number.isFinite(expiresMs) || expiresMs <= nowMs) return false;
-  return session.passwordHashSnapshot === config.passwordHash;
+
+  if (session.authSource === 'supabase') {
+    return true;
+  }
+
+  const targetCfg =
+    session.role === 'admin' && adminConfig ? adminConfig : ownerConfig;
+  if (!session.passwordHashSnapshot) return false;
+  return session.passwordHashSnapshot === targetCfg.passwordHash;
 }

@@ -241,13 +241,9 @@ assert(supaSrc.includes('reconstructMissingProductsFromOrders'), 'supabase.ts mu
 
 const settingsSrc = fs.readFileSync('src/pages/SettingsPage.tsx', 'utf8');
 const restoreStart = settingsSrc.indexOf('const handleRestore =');
-const resetStart = settingsSrc.indexOf('const handleResetData =');
-const vaultStart = settingsSrc.indexOf('const handleRestoreVault =');
 const printStart = settingsSrc.indexOf('const handleTestPrint =');
-const restoreBody = settingsSrc.slice(restoreStart, resetStart);
-const vaultBody = settingsSrc.slice(vaultStart, printStart);
+const restoreBody = settingsSrc.slice(restoreStart, printStart);
 assert(!restoreBody.includes('window.location.reload()'), 'handleRestore must NOT reload page while async cloud syncs run');
-assert(!vaultBody.includes('window.location.reload()'), 'handleRestoreVault must NOT reload page while async cloud syncs run');
 
 console.log('✓ All ADR-0022 no-demo, product/order tombstone, vault scrub, safe backup merge & auto-push tests passed!');
 console.log('🎉 ALL ADR-0022 DEMO PURGE, AUTO-HEAL SYNC & SAFE BACKUP RESTORE TESTS PASSED!');

@@ -1,8 +1,20 @@
 # Mexucxich Cuisine
 
-A lightweight, offline-first point-of-sale, debt ledger, and cloud synchronization system for Mexucxich Cuisine artisanal delicatessen and specialty foods.
+A lightweight, cloud-first point-of-sale, debt ledger, and real-time multi-device synchronization system (with transient offline outbox) for Mexucxich Cuisine artisanal delicatessen and specialty foods.
 
 ## Language
+
+**Cloud-First POS**:
+An operational architecture where the remote cloud database is the single source of truth; opening or signing in on any browser downloads the authoritative catalog, customer directory, order history, and settings directly without local configuration or competing browser databases.
+_Avoid_: Offline-first DB, local storage DB, Emergency Vault
+
+**Offline Outbox**:
+A minimal browser queue holding only uncommitted mutations created while the device lacks network connectivity, automatically flushed to the cloud upon reconnection.
+_Avoid_: Secondary DB, vault snapshot, conflict backup
+
+**Store Account**:
+An authenticated operator credential (`mexucxich` Store Owner, `admin` System Admin, or staff) used to sign in and access store data across devices via Supabase Auth.
+_Avoid_: User record, Customer
 
 **Customer Combobox**:
 A keyboard-navigable autocomplete input at the point-of-sale that filters customers in real time with Vietnamese diacritics insensitivity, phone search, ranked matching, and inline customer creation.

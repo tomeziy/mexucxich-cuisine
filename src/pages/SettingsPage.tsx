@@ -11,31 +11,23 @@ import {
   Store,
   Check,
   Save,
-  RotateCcw,
   Sparkles,
   Download,
   Upload,
   Database,
   AlertTriangle,
-  Cloud,
-  CloudUpload,
-  CloudDownload,
-  RefreshCw,
   Copy,
-  ExternalLink,
   HelpCircle,
   CheckCircle2,
-  ShieldAlert,
   Lock,
   KeyRound,
   ShieldCheck,
+  UserPlus,
+  LogOut,
+  Shield,
 } from 'lucide-react';
-import {
-  testSupabaseConnection,
-  SUPABASE_SCHEMA_SQL,
-  DEFAULT_SUPABASE_URL,
-  DEFAULT_SUPABASE_ANON_KEY,
-} from '../services/supabase';
+import { SUPABASE_SCHEMA_SQL } from '../services/supabase';
+import type { StoreRole } from '../utils/auth';
 
 const VIETNAM_BANKS = [
   { code: 'MB', name: 'MB Bank (Ngân hàng Quân Đội)' },
@@ -114,19 +106,15 @@ export const SettingsPage: React.FC = () => {
     debtPayments,
     receiptSettings,
     updateReceiptSettings,
-    cloudConfig,
-    updateCloudConfig,
-    syncLocalToCloud,
-    syncCloudToLocal,
     exportAllData,
     importAllData,
-    resetToMockData,
-    restoreFromVault,
-    authConfig,
-    isAuthenticated,
-    updateAuthConfig,
+    currentUser,
+    changeOwnPassword,
+    adminManageStoreUser,
     logoutOrLockScreen,
   } = useStore();
+
+  const isAdmin = currentUser?.role === 'admin';
 
   const [settings, setSettings] = useState<ReceiptSettings>(receiptSettings);
   const [savedSuccess, setSavedSuccess] = useState(false);
@@ -142,150 +130,71 @@ export const SettingsPage: React.FC = () => {
     }
   }, [receiptSettings]);
 
-  // Security & Fast Username+Password Sign-In states (ADR-0024)
-  const [secRequireSignIn, setSecRequireSignIn] = useState<boolean>(authConfig.requireSignIn);
-  const [secUsername, setSecUsername] = useState<string>(authConfig.username || 'hang');
-  const [secPassword, setSecPassword] = useState<string>('');
-  const [secSaving, setSecSaving] = useState<boolean>(false);
-  const [secStatus, setSecStatus] = useState<{ success?: boolean; message?: string } | null>(null);
+  // Personal password change states
+  const [newOwnPassword, setNewOwnPassword] = useState('');
+  const [confirmOwnPassword, setConfirmOwnPassword] = useState('');
+  const [ownPassSaving, setOwnPassSaving] = useState(false);
+  const [ownPassStatus, setOwnPassStatus] = useState<{ success?: boolean; message?: string } | null>(null);
 
-  React.useEffect(() => {
-    setSecRequireSignIn(authConfig.requireSignIn);
-    setSecUsername(authConfig.username || 'hang');
-  }, [authConfig.requireSignIn, authConfig.username]);
-
-  const handleSaveSecurity = async () => {
-    const cleanUser = secUsername.trim();
-    if (!cleanUser) {
-      setSecStatus({ success: false, message: 'Tên đăng nhập không được để trống!' });
-      return;
-    }
-    if (cleanUser.toLowerCase() !== authConfig.username.toLowerCase() && !secPassword) {
-      setSecStatus({
-        success: false,
-        message: 'Khi đổi Tên đăng nhập, vui lòng nhập Mật khẩu mới để đồng bộ mã bảo mật!',
-      });
-      return;
-    }
-
-    setSecSaving(true);
-    setSecStatus(null);
-    try {
-      const ok = await updateAuthConfig({
-        requireSignIn: secRequireSignIn,
-        newUsername: cleanUser,
-        newPassword: secPassword || undefined,
-      });
-      setSecPassword('');
-      setSecStatus({
-        success: true,
-        message: ok
-          ? 'Đã lưu & đồng bộ cấu hình đăng nhập lên Cloud cho mọi thiết bị!'
-          : 'Đã lưu cấu hình trên máy này (sẽ đồng bộ lên Cloud khi có mạng).',
-      });
-    } catch (err: any) {
-      setSecStatus({ success: false, message: `Lỗi lưu cấu hình: ${err?.message || err}` });
-    } finally {
-      setSecSaving(false);
-    }
-  };
-
-  // Cloud Supabase states
-  const [cloudUrl, setCloudUrl] = useState(cloudConfig.supabaseUrl || DEFAULT_SUPABASE_URL);
-  const [cloudKey, setCloudKey] = useState(cloudConfig.supabaseAnonKey || DEFAULT_SUPABASE_ANON_KEY);
-  const [autoSync, setAutoSync] = useState(cloudConfig.autoSync ?? true);
-  const [cloudTesting, setCloudTesting] = useState(false);
-  const [cloudStatus, setCloudStatus] = useState<{ success?: boolean; message?: string } | null>(null);
-  const [isSyncing, setIsSyncing] = useState(false);
-  const [showSqlGuide, setShowSqlGuide] = useState(false);
+  // Admin-only account creation / password reset & SQL setup helper states
+  const [targetUsername, setTargetUsername] = useState('');
+  const [targetPassword, setTargetPassword] = useState('');
+  const [targetRole, setTargetRole] = useState<StoreRole>('staff');
+  const [adminUserSaving, setAdminUserSaving] = useState(false);
+  const [adminUserStatus, setAdminUserStatus] = useState<{
+    success?: boolean;
+    message?: string;
+    needsEdgeDeploy?: boolean;
+  } | null>(null);
+  const [showAdminInfraGuide, setShowAdminInfraGuide] = useState(false);
   const [copiedSql, setCopiedSql] = useState(false);
 
-  // Tự động ghim cấu hình Cloud mặc định nếu máy tính/điện thoại chưa có
-  React.useEffect(() => {
-    if (!cloudUrl && (cloudConfig.supabaseUrl || DEFAULT_SUPABASE_URL)) {
-      setCloudUrl(cloudConfig.supabaseUrl || DEFAULT_SUPABASE_URL);
+  const handleChangeOwnPassword = async () => {
+    setOwnPassStatus(null);
+    if (newOwnPassword.trim().length < 6) {
+      setOwnPassStatus({ success: false, message: 'Mật khẩu mới cần tối thiểu 6 ký tự!' });
+      return;
     }
-    if (!cloudKey && (cloudConfig.supabaseAnonKey || DEFAULT_SUPABASE_ANON_KEY)) {
-      setCloudKey(cloudConfig.supabaseAnonKey || DEFAULT_SUPABASE_ANON_KEY);
+    if (newOwnPassword !== confirmOwnPassword) {
+      setOwnPassStatus({ success: false, message: 'Mật khẩu nhập lại chưa khớp!' });
+      return;
     }
-  }, [cloudConfig.supabaseUrl, cloudConfig.supabaseAnonKey]);
-
-  const handleResetToDefaultCloud = () => {
-    setCloudUrl(DEFAULT_SUPABASE_URL);
-    setCloudKey(DEFAULT_SUPABASE_ANON_KEY);
-    updateCloudConfig({
-      supabaseUrl: DEFAULT_SUPABASE_URL,
-      supabaseAnonKey: DEFAULT_SUPABASE_ANON_KEY,
-      autoSync: true,
-      lastSyncedAt: new Date().toISOString(),
-    });
-    setCloudStatus({ success: true, message: 'Đã kết nối lại tài khoản Cloud chính thức của tiệm MexucxichCuisine!' });
-  };
-
-  const handleTestCloud = async () => {
-    setCloudTesting(true);
-    setCloudStatus(null);
+    setOwnPassSaving(true);
     try {
-      const res = await testSupabaseConnection(cloudUrl.trim(), cloudKey.trim());
-      setCloudStatus(res);
+      const res = await changeOwnPassword(newOwnPassword);
+      setOwnPassStatus(res);
       if (res.success) {
-        updateCloudConfig({
-          supabaseUrl: cloudUrl.trim(),
-          supabaseAnonKey: cloudKey.trim(),
-          autoSync,
-          lastSyncedAt: new Date().toISOString(),
-        });
+        setNewOwnPassword('');
+        setConfirmOwnPassword('');
       }
-    } catch (e: any) {
-      setCloudStatus({ success: false, message: e.message || 'Lỗi không xác định' });
     } finally {
-      setCloudTesting(false);
+      setOwnPassSaving(false);
     }
   };
 
-  const handleSaveCloudSettings = () => {
-    updateCloudConfig({
-      supabaseUrl: cloudUrl.trim(),
-      supabaseAnonKey: cloudKey.trim(),
-      autoSync,
-      lastSyncedAt: cloudConfig.lastSyncedAt,
-    });
-    alert('Đã lưu cấu hình kết nối Cloud Supabase!');
-  };
-
-  const handlePushCloud = async () => {
-    if (!cloudUrl.trim() || !cloudKey.trim()) {
-      alert('Vui lòng nhập URL và Anon Key trước khi đẩy dữ liệu!');
+  const handleAdminManageUser = async () => {
+    setAdminUserStatus(null);
+    if (!targetUsername.trim() || targetPassword.trim().length < 6) {
+      setAdminUserStatus({
+        success: false,
+        message: 'Nhập Tên đăng nhập và Mật khẩu (>= 6 ký tự)!',
+      });
       return;
     }
-    setIsSyncing(true);
+    setAdminUserSaving(true);
     try {
-      const res = await syncLocalToCloud();
-      alert(res.message);
-    } catch (e: any) {
-      alert(`Đồng bộ thất bại: ${e.message || e}`);
+      const res = await adminManageStoreUser({
+        username: targetUsername.trim(),
+        password: targetPassword,
+        role: targetRole,
+      });
+      setAdminUserStatus(res);
+      if (res.success) {
+        setTargetUsername('');
+        setTargetPassword('');
+      }
     } finally {
-      setIsSyncing(false);
-    }
-  };
-
-  const handlePullCloud = async () => {
-    if (!cloudUrl.trim() || !cloudKey.trim()) {
-      alert('Vui lòng nhập URL và Anon Key trước khi tải dữ liệu!');
-      return;
-    }
-    if (!window.confirm('Hành động này sẽ tải toàn bộ dữ liệu từ Cloud về máy và ghi đè dữ liệu hiện tại trên trình duyệt này. Bạn có chắc chắn?')) {
-      return;
-    }
-    setIsSyncing(true);
-    try {
-      const res = await syncCloudToLocal();
-      alert(res.message);
-      window.location.reload();
-    } catch (e: any) {
-      alert(`Tải dữ liệu thất bại: ${e.message || e}`);
-    } finally {
-      setIsSyncing(false);
+      setAdminUserSaving(false);
     }
   };
 
@@ -362,32 +271,6 @@ export const SettingsPage: React.FC = () => {
       }
     };
     reader.readAsText(file);
-  };
-
-  const handleResetData = () => {
-    const input = window.prompt(
-      'CẢNH BÁO NGUY HIỂM: Hành động này sẽ đặt lại toàn bộ sản phẩm, khách hàng và xóa lịch sử đơn hàng về dữ liệu mẫu ban đầu!\n\nNếu bạn chắc chắn muốn xóa, hãy nhập đúng chữ: "XAC NHAN" hoặc "RESET":'
-    );
-    if (!input) return;
-    const clean = input.trim().toUpperCase();
-    if (clean === 'XAC NHAN' || clean === 'XÁC NHẬN' || clean === 'RESET') {
-      resetToMockData();
-      alert('Đã khôi phục dữ liệu về mặc định ban đầu! (Bản sao lưu trước khi xóa đã được cất an toàn trong Hầm Cứu Hộ)');
-      window.location.reload();
-    } else {
-      alert('Đã hủy thao tác. Bạn đã không nhập đúng từ xác nhận.');
-    }
-  };
-
-  const handleRestoreVault = () => {
-    if (
-      window.confirm(
-        'Khôi phục toàn bộ danh mục sản phẩm và lịch sử đơn hàng từ Hầm Cứu Hộ Khẩn Cấp (Emergency Vault)?\nDữ liệu sẽ được hợp nhất bảo toàn nguyên vẹn (loại bỏ món demo) và tự đồng bộ lên Cloud.'
-      )
-    ) {
-      const res = restoreFromVault();
-      alert(res.message);
-    }
   };
 
   const handleTestPrint = () => {
@@ -882,328 +765,121 @@ export const SettingsPage: React.FC = () => {
             <span>Lưu tất cả cài đặt hóa đơn</span>
           </button>
 
-          {/* Cloud Database Sync (ADR-0006) */}
-          <div className="bg-white p-4 rounded-2xl border border-slate-200 shadow-xs space-y-3">
-            <div className="flex flex-wrap items-center justify-between gap-2">
-              <h3 className="font-extrabold text-xs uppercase tracking-wider text-slate-400 flex items-center gap-1.5">
-                <Cloud className="w-3.5 h-3.5 text-blue-500" />
-                <span>Đồng bộ Cloud Supabase (Cửa hàng & Nhà)</span>
-              </h3>
-              <div className="flex items-center gap-1.5">
-                {cloudConfig.supabaseUrl && cloudConfig.supabaseAnonKey ? (
-                  <span className="text-[10px] font-bold text-emerald-700 bg-emerald-100 px-2.5 py-0.5 rounded-full flex items-center gap-1">
-                    <span className="w-1.5 h-1.5 rounded-full bg-emerald-500 animate-pulse" />
-                    <span>Đã kết nối Cloud chính của quán</span>
-                  </span>
-                ) : (
-                  <span className="text-[10px] font-bold text-slate-500 bg-slate-100 px-2 py-0.5 rounded-full">
-                    Chưa kết nối Cloud (Đang chạy Offline)
-                  </span>
-                )}
-                <button
-                  type="button"
-                  onClick={handleResetToDefaultCloud}
-                  className="text-[10px] font-bold text-amber-700 bg-amber-50 hover:bg-amber-100 border border-amber-200 px-2.5 py-0.5 rounded-full transition flex items-center gap-1"
-                  title="Nhấn để tự động khôi phục cấu hình Cloud chính thức của tiệm MexucxichCuisine mà không cần nhập tay"
-                >
-                  <RotateCcw className="w-2.5 h-2.5" />
-                  <span>Dùng Cloud chuẩn của Quán</span>
-                </button>
-              </div>
-            </div>
-
-            <p className="text-xs text-slate-500">
-              Đồng bộ dữ liệu thời gian thực giữa máy tính ở cửa hàng và điện thoại/máy ở nhà qua dịch vụ cơ sở dữ liệu Supabase miễn phí. Dễ dàng chuyển giao toàn bộ tài khoản cho Hằng.
-            </p>
-
-            <div className="space-y-2.5 text-xs">
-              <div>
-                <label className="font-bold text-slate-700 block mb-1">
-                  Supabase Project URL
-                </label>
-                <input
-                  type="text"
-                  value={cloudUrl}
-                  onChange={e => setCloudUrl(e.target.value)}
-                  placeholder="https://xyzcompany.supabase.co"
-                  className="w-full bg-slate-50 border border-slate-200 rounded-xl px-3 py-2 font-mono text-slate-800 text-xs focus:outline-none focus:ring-1 focus:ring-amber-500"
-                />
-              </div>
-
-              <div>
-                <label className="font-bold text-slate-700 block mb-1">
-                  Anon Public Key
-                </label>
-                <input
-                  type="password"
-                  value={cloudKey}
-                  onChange={e => setCloudKey(e.target.value)}
-                  placeholder="eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9..."
-                  className="w-full bg-slate-50 border border-slate-200 rounded-xl px-3 py-2 font-mono text-slate-800 text-xs focus:outline-none focus:ring-1 focus:ring-amber-500"
-                />
-              </div>
-
-              <div className="flex items-center justify-between pt-1">
-                <label className="flex items-center gap-2 cursor-pointer font-bold text-slate-700">
-                  <input
-                    type="checkbox"
-                    checked={autoSync}
-                    onChange={e => setAutoSync(e.target.checked)}
-                    className="w-4 h-4 rounded text-amber-500"
-                  />
-                  <span>Tự động đồng bộ khi mở ứng dụng (Auto-sync)</span>
-                </label>
-
-                {cloudConfig.lastSyncedAt && (
-                  <span className="text-[10px] text-slate-400">
-                    Lần đồng bộ gần nhất: {new Date(cloudConfig.lastSyncedAt).toLocaleString('vi-VN')}
-                  </span>
-                )}
-              </div>
-
-              {/* Status message */}
-              {cloudStatus && (
-                <div
-                  className={`p-2.5 rounded-xl border text-xs font-semibold flex items-center gap-2 ${
-                    cloudStatus.success
-                      ? 'bg-emerald-50 border-emerald-200 text-emerald-800'
-                      : 'bg-rose-50 border-rose-200 text-rose-800'
-                  }`}
-                >
-                  {cloudStatus.success ? (
-                    <CheckCircle2 className="w-4 h-4 text-emerald-600 shrink-0" />
-                  ) : (
-                    <AlertTriangle className="w-4 h-4 text-rose-600 shrink-0" />
-                  )}
-                  <span>{cloudStatus.message}</span>
-                </div>
-              )}
-
-              {/* Action Buttons */}
-              <div className="grid grid-cols-2 sm:grid-cols-4 gap-2 pt-1 font-bold">
-                <button
-                  type="button"
-                  onClick={handleTestCloud}
-                  disabled={cloudTesting}
-                  className="py-2 px-2.5 rounded-xl border border-blue-200 bg-blue-50 hover:bg-blue-100 text-blue-700 transition flex items-center justify-center gap-1.5 text-center disabled:opacity-50"
-                >
-                  <RefreshCw className={`w-3.5 h-3.5 ${cloudTesting ? 'animate-spin' : ''}`} />
-                  <span>{cloudTesting ? 'Đang kiểm tra...' : 'Kiểm tra kết nối'}</span>
-                </button>
-
-                <button
-                  type="button"
-                  onClick={handleSaveCloudSettings}
-                  className="py-2 px-2.5 rounded-xl border border-slate-200 bg-white hover:bg-slate-100 text-slate-700 transition flex items-center justify-center gap-1.5 text-center"
-                >
-                  <Save className="w-3.5 h-3.5 text-amber-600" />
-                  <span>Lưu cấu hình</span>
-                </button>
-
-                <button
-                  type="button"
-                  onClick={handlePushCloud}
-                  disabled={isSyncing}
-                  className="py-2 px-2.5 rounded-xl bg-amber-500 hover:bg-amber-600 text-white shadow-2xs transition flex items-center justify-center gap-1.5 text-center disabled:opacity-50"
-                  title="Đẩy toàn bộ món ăn, khách hàng, đơn hàng hiện tại lên Supabase"
-                >
-                  <CloudUpload className="w-3.5 h-3.5" />
-                  <span>Đẩy lên Cloud</span>
-                </button>
-
-                <button
-                  type="button"
-                  onClick={handlePullCloud}
-                  disabled={isSyncing}
-                  className="py-2 px-2.5 rounded-xl border border-slate-200 bg-white hover:bg-slate-100 text-slate-700 transition flex items-center justify-center gap-1.5 text-center disabled:opacity-50"
-                  title="Tải toàn bộ dữ liệu từ Cloud về máy này"
-                >
-                  <CloudDownload className="w-3.5 h-3.5 text-emerald-600" />
-                  <span>Tải từ Cloud về</span>
-                </button>
-              </div>
-
-              {/* Handover & SQL Helper dropdown */}
-              <div className="pt-2 border-t border-slate-100">
-                <button
-                  type="button"
-                  onClick={() => setShowSqlGuide(!showSqlGuide)}
-                  className="text-slate-500 hover:text-slate-800 text-[11px] font-bold flex items-center gap-1 transition"
-                >
-                  <HelpCircle className="w-3.5 h-3.5 text-amber-500" />
-                  <span>Hướng dẫn tạo tài khoản Supabase & mã SQL tạo bảng (1 phút)</span>
-                </button>
-
-                {showSqlGuide && (
-                  <div className="mt-2 p-3 bg-slate-50 border border-slate-200 rounded-xl space-y-2 text-[11px] text-slate-600">
-                    <ol className="list-decimal list-inside space-y-1">
-                      <li>Đăng nhập <a href="https://supabase.com/dashboard" target="_blank" rel="noreferrer" className="text-amber-600 font-bold underline inline-flex items-center gap-0.5">supabase.com <ExternalLink className="w-2.5 h-2.5" /></a> bằng Google (miễn phí 100%).</li>
-                      <li>Tạo New Project (Đặt tên: <code>mexucxich-cuisine</code>, chọn mật khẩu database).</li>
-                      <li>Vào mục <strong>SQL Editor</strong> ở thanh menu bên trái, dán đoạn mã SQL bên dưới và ấn <strong>Run</strong>.</li>
-                      <li>Vào <strong>Project Settings &rarr; Data API</strong>, sao chép <code>Project URL</code> và <code>anon public key</code> dán vào 2 ô bên trên.</li>
-                    </ol>
-
-                    <div className="flex items-center justify-between pt-1">
-                      <span className="font-mono text-[10px] text-slate-400">Tệp: supabase_schema.sql (5 bảng chuẩn)</span>
-                      <button
-                        type="button"
-                        onClick={handleCopySql}
-                        className="px-2.5 py-1 rounded-lg bg-white border border-slate-200 hover:bg-amber-50 text-slate-700 hover:text-amber-700 font-bold flex items-center gap-1 transition"
-                      >
-                        <Copy className="w-3 h-3" />
-                        <span>{copiedSql ? '✓ Đã sao chép SQL!' : 'Sao chép mã SQL'}</span>
-                      </button>
-                    </div>
-                  </div>
-                )}
-              </div>
-            </div>
-          </div>
-
-          {/* Security & Fast Username+Password Sign-In Card (ADR-0024) */}
+          {/* Account & Security Card (ADR-0025 - clean for Hang & Admin) */}
           <div className="bg-white p-4 rounded-2xl border border-slate-200 shadow-xs space-y-3">
             <div className="flex flex-wrap items-center justify-between gap-2">
               <h3 className="font-extrabold text-xs uppercase tracking-wider text-slate-400 flex items-center gap-1.5">
                 <Lock className="w-3.5 h-3.5 text-amber-500" />
-                <span>Bảo mật & Đăng nhập nhanh (Username & Password)</span>
+                <span>Tài khoản & Bảo mật đăng nhập</span>
               </h3>
               <span
                 className={`text-[10px] font-bold px-2.5 py-0.5 rounded-full ${
-                  isAuthenticated
-                    ? 'bg-emerald-100 text-emerald-800'
-                    : 'bg-slate-100 text-slate-600'
+                  isAdmin
+                    ? 'bg-slate-900 text-amber-300'
+                    : 'bg-emerald-100 text-emerald-800'
                 }`}
               >
-                {isAuthenticated ? 'Đã xác thực (Nhớ 30 ngày)' : 'Chưa khóa bắt buộc'}
+                {currentUser
+                  ? `${currentUser.username} • ${isAdmin ? 'Admin Hệ thống' : 'Chủ quán'}`
+                  : 'Đã đăng nhập'}
               </span>
             </div>
 
-            <p className="text-xs text-slate-500">
-              Bảo vệ dữ liệu bán hàng khi mở trên thiết bị mới hoặc máy chung bằng tên đăng nhập và mật khẩu (hỗ trợ Trình quản lý mật khẩu trình duyệt tự điền trong 1 giây, tự nhớ phiên 30 ngày).
-            </p>
-
-            <label className="flex items-center justify-between p-2.5 rounded-xl border border-slate-200 bg-slate-50/70 cursor-pointer text-xs">
-              <div>
-                <span className="font-bold text-slate-800 block">
-                  Bắt buộc đăng nhập khi mở ứng dụng trên thiết bị mới
-                </span>
-                <span className="text-[10px] text-slate-400">
-                  Đồng bộ quy tắc khóa cho tất cả thiết bị kết nối Cloud
-                </span>
-              </div>
-              <input
-                type="checkbox"
-                checked={secRequireSignIn}
-                onChange={e => setSecRequireSignIn(e.target.checked)}
-                className="w-4 h-4 rounded text-amber-500 focus:ring-amber-500"
-              />
-            </label>
-
             <div className="grid grid-cols-1 sm:grid-cols-2 gap-2.5 text-xs">
               <div>
-                <label className="font-bold text-slate-700 block mb-1">Tên đăng nhập (Username)</label>
-                <input
-                  type="text"
-                  value={secUsername}
-                  onChange={e => setSecUsername(e.target.value)}
-                  placeholder="hang"
-                  className="w-full bg-slate-50 border border-slate-200 rounded-xl px-3 py-2 font-bold text-slate-800 focus:outline-none focus:ring-1 focus:ring-amber-500"
-                />
-              </div>
-
-              <div>
-                <label className="font-bold text-slate-700 block mb-1">
-                  Mật khẩu mới (để trống nếu giữ nguyên)
-                </label>
+                <label className="font-bold text-slate-700 block mb-1">Mật khẩu mới</label>
                 <div className="relative">
                   <KeyRound className="w-3.5 h-3.5 text-slate-400 absolute left-3 top-1/2 -translate-y-1/2" />
                   <input
                     type="password"
-                    value={secPassword}
-                    onChange={e => setSecPassword(e.target.value)}
-                    placeholder="Mặc định ban đầu: mexucxich"
+                    autoComplete="new-password"
+                    value={newOwnPassword}
+                    onChange={e => setNewOwnPassword(e.target.value)}
+                    placeholder="Ít nhất 6 ký tự..."
                     className="w-full bg-slate-50 border border-slate-200 rounded-xl pl-8 pr-3 py-2 text-slate-800 focus:outline-none focus:ring-1 focus:ring-amber-500"
                   />
                 </div>
               </div>
+
+              <div>
+                <label className="font-bold text-slate-700 block mb-1">Nhập lại mật khẩu mới</label>
+                <input
+                  type="password"
+                  autoComplete="new-password"
+                  value={confirmOwnPassword}
+                  onChange={e => setConfirmOwnPassword(e.target.value)}
+                  placeholder="Xác nhận mật khẩu mới..."
+                  className="w-full bg-slate-50 border border-slate-200 rounded-xl px-3 py-2 text-slate-800 focus:outline-none focus:ring-1 focus:ring-amber-500"
+                />
+              </div>
             </div>
 
-            {secStatus && (
+            {ownPassStatus && (
               <div
                 className={`p-2.5 rounded-xl border text-xs font-semibold flex items-center gap-2 ${
-                  secStatus.success
+                  ownPassStatus.success
                     ? 'bg-emerald-50 border-emerald-200 text-emerald-800'
                     : 'bg-rose-50 border-rose-200 text-rose-800'
                 }`}
               >
-                {secStatus.success ? (
+                {ownPassStatus.success ? (
                   <CheckCircle2 className="w-4 h-4 text-emerald-600 shrink-0" />
                 ) : (
                   <AlertTriangle className="w-4 h-4 text-rose-600 shrink-0" />
                 )}
-                <span>{secStatus.message}</span>
+                <span>{ownPassStatus.message}</span>
               </div>
             )}
 
             <div className="flex flex-wrap items-center gap-2 pt-1 text-xs font-bold">
               <button
                 type="button"
-                onClick={handleSaveSecurity}
-                disabled={secSaving}
+                onClick={handleChangeOwnPassword}
+                disabled={ownPassSaving}
                 className="flex-1 py-2.5 px-3 rounded-xl bg-amber-500 hover:bg-amber-600 text-white shadow-2xs transition flex items-center justify-center gap-1.5 disabled:opacity-50"
               >
                 <ShieldCheck className="w-4 h-4" />
-                <span>{secSaving ? 'Đang lưu...' : 'Lưu cài đặt bảo mật & Đồng bộ'}</span>
+                <span>{ownPassSaving ? 'Đang cập nhật...' : 'Đổi mật khẩu tài khoản này'}</span>
               </button>
               <button
                 type="button"
                 onClick={() => logoutOrLockScreen()}
                 className="py-2.5 px-3.5 rounded-xl border border-slate-200 bg-slate-50 hover:bg-rose-50 hover:border-rose-200 hover:text-rose-700 text-slate-700 transition flex items-center justify-center gap-1.5"
               >
-                <Lock className="w-3.5 h-3.5" />
-                <span>Khóa máy ngay</span>
+                <LogOut className="w-3.5 h-3.5" />
+                <span>Đăng xuất</span>
               </button>
             </div>
           </div>
 
-          {/* Backup & Restore Card (ADR-0001) */}
+          {/* Backup & Restore Card (Retained cleanly for JSON/Backup workflows per user Q3A) */}
           <div className="bg-white p-4 rounded-2xl border border-slate-200 shadow-xs space-y-3">
             <div className="flex items-center justify-between">
               <h3 className="font-extrabold text-xs uppercase tracking-wider text-slate-400 flex items-center gap-1.5">
                 <Database className="w-3.5 h-3.5 text-blue-500" />
-                <span>Sao lưu & Khôi phục dữ liệu (1-Click)</span>
+                <span>Sao lưu & Nhập tệp dự phòng (JSON)</span>
               </h3>
-              <span className="text-[10px] font-bold text-slate-400 bg-slate-100 px-2 py-0.5 rounded-md">
-                LocalStorage Offline
+              <span className="text-[10px] font-bold text-emerald-700 bg-emerald-50 px-2 py-0.5 rounded-md">
+                Cloud Backup
               </span>
             </div>
             <p className="text-xs text-slate-500">
-              Xuất toàn bộ danh mục sản phẩm, khách hàng, dư nợ và đơn hàng thành file JSON an toàn. Không phụ thuộc máy chủ, không lo mất mạng.
+              Tải về bản sao lưu toàn bộ thực đơn, khách hàng, công nợ và đơn hàng dạng JSON để lưu trữ ngoài, hoặc nạp lại có kiểm tra đối soát trước khi gộp.
             </p>
 
-            <div className="grid grid-cols-1 sm:grid-cols-3 gap-2.5 pt-1 text-xs font-bold">
-              <button
-                type="button"
-                onClick={handleRestoreVault}
-                className="py-2.5 px-3 rounded-xl border border-amber-300 bg-amber-50 hover:bg-amber-100 text-amber-900 transition flex items-center justify-center gap-2"
-                title="Khôi phục toàn bộ danh mục 83+ món và đơn hàng từ Hầm Cứu Hộ Khẩn Cấp (Emergency Vault)"
-              >
-                <ShieldAlert className="w-4 h-4 text-amber-600" />
-                <span>Khôi phục Hầm Cứu Hộ</span>
-              </button>
-
+            <div className="grid grid-cols-1 sm:grid-cols-2 gap-2.5 pt-1 text-xs font-bold">
               <button
                 type="button"
                 onClick={handleBackup}
                 className="py-2.5 px-3 rounded-xl border border-slate-200 bg-slate-50 hover:bg-slate-100 text-slate-700 transition flex items-center justify-center gap-2"
               >
                 <Download className="w-4 h-4 text-emerald-600" />
-                <span>Sao lưu (JSON)</span>
+                <span>Xuất file Sao lưu (JSON)</span>
               </button>
 
               <label className="py-2.5 px-3 rounded-xl border border-slate-200 bg-slate-50 hover:bg-slate-100 text-slate-700 transition flex items-center justify-center gap-2 cursor-pointer">
                 <Upload className="w-4 h-4 text-blue-600" />
-                <span>Khôi phục file</span>
+                <span>Nhập file Sao lưu (JSON)</span>
                 <input
                   type="file"
                   accept=".json"
@@ -1212,19 +888,116 @@ export const SettingsPage: React.FC = () => {
                 />
               </label>
             </div>
+          </div>
 
-            <div className="pt-2 border-t border-slate-100 flex items-center justify-between">
-              <span className="text-[11px] text-slate-400">Kiểm thử lại với dữ liệu ban đầu?</span>
+          {/* Admin-Only Console: Edge Function User Creation & Database Security SQL */}
+          {isAdmin && (
+            <div className="bg-slate-900 text-slate-100 p-4 rounded-2xl border border-slate-800 shadow-md space-y-3">
+              <div className="flex items-center justify-between gap-2">
+                <h3 className="font-extrabold text-xs uppercase tracking-wider text-amber-300 flex items-center gap-1.5">
+                  <Shield className="w-4 h-4" />
+                  <span>Quản trị Tài khoản & Bảo mật (Chỉ Admin)</span>
+                </h3>
+                <span className="text-[10px] font-bold bg-amber-500/20 text-amber-300 border border-amber-500/30 px-2 py-0.5 rounded-full">
+                  admin tools
+                </span>
+              </div>
+
+              <p className="text-xs text-slate-300">
+                Tạo tài khoản nhân viên mới hoặc đặt lại mật khẩu cho Hằng (<code>mexucxich</code>) trực tiếp qua Supabase Edge Function <code>create-store-user</code>.
+              </p>
+
+              <div className="grid grid-cols-1 sm:grid-cols-3 gap-2 text-xs">
+                <div>
+                  <label className="font-bold text-slate-300 block mb-1">Tên đăng nhập</label>
+                  <input
+                    type="text"
+                    value={targetUsername}
+                    onChange={e => setTargetUsername(e.target.value)}
+                    placeholder="vd: nhanvien1 hoặc mexucxich"
+                    className="w-full bg-slate-800 border border-slate-700 rounded-xl px-3 py-2 text-white font-bold focus:outline-none focus:ring-1 focus:ring-amber-400"
+                  />
+                </div>
+                <div>
+                  <label className="font-bold text-slate-300 block mb-1">Mật khẩu</label>
+                  <input
+                    type="text"
+                    value={targetPassword}
+                    onChange={e => setTargetPassword(e.target.value)}
+                    placeholder="Tối thiểu 6 ký tự"
+                    className="w-full bg-slate-800 border border-slate-700 rounded-xl px-3 py-2 text-white focus:outline-none focus:ring-1 focus:ring-amber-400"
+                  />
+                </div>
+                <div>
+                  <label className="font-bold text-slate-300 block mb-1">Vai trò</label>
+                  <select
+                    value={targetRole}
+                    onChange={e => setTargetRole(e.target.value as StoreRole)}
+                    className="w-full bg-slate-800 border border-slate-700 rounded-xl px-3 py-2 text-white font-bold focus:outline-none focus:ring-1 focus:ring-amber-400"
+                  >
+                    <option value="staff">Nhân viên</option>
+                    <option value="owner">Chủ quán (Hằng)</option>
+                    <option value="admin">Admin</option>
+                  </select>
+                </div>
+              </div>
+
+              {adminUserStatus && (
+                <div
+                  className={`p-2.5 rounded-xl border text-xs font-semibold flex items-start gap-2 ${
+                    adminUserStatus.success
+                      ? 'bg-emerald-950/60 border-emerald-700 text-emerald-200'
+                      : 'bg-rose-950/60 border-rose-700 text-rose-200'
+                  }`}
+                >
+                  {adminUserStatus.success ? (
+                    <CheckCircle2 className="w-4 h-4 text-emerald-400 shrink-0 mt-0.5" />
+                  ) : (
+                    <AlertTriangle className="w-4 h-4 text-rose-400 shrink-0 mt-0.5" />
+                  )}
+                  <span>{adminUserStatus.message}</span>
+                </div>
+              )}
+
               <button
                 type="button"
-                onClick={handleResetData}
-                className="text-xs text-rose-600 hover:text-rose-700 font-bold hover:underline flex items-center gap-1"
+                onClick={handleAdminManageUser}
+                disabled={adminUserSaving}
+                className="w-full py-2.5 px-3 rounded-xl bg-amber-500 hover:bg-amber-600 text-slate-950 font-extrabold text-xs transition flex items-center justify-center gap-1.5 disabled:opacity-50"
               >
-                <RotateCcw className="w-3.5 h-3.5" />
-                <span>Đặt lại dữ liệu mẫu</span>
+                <UserPlus className="w-4 h-4" />
+                <span>{adminUserSaving ? 'Đang xử lý...' : 'Tạo tài khoản / Đặt lại mật khẩu ngay'}</span>
               </button>
+
+              <div className="pt-2 border-t border-slate-800">
+                <button
+                  type="button"
+                  onClick={() => setShowAdminInfraGuide(!showAdminInfraGuide)}
+                  className="text-slate-300 hover:text-amber-300 text-[11px] font-bold flex items-center gap-1 transition"
+                >
+                  <HelpCircle className="w-3.5 h-3.5 text-amber-400" />
+                  <span>Cài đặt khóa bảo mật RLS + Edge Function (1 lần duy nhất)</span>
+                </button>
+
+                {showAdminInfraGuide && (
+                  <div className="mt-2 p-3 bg-slate-800/80 border border-slate-700 rounded-xl space-y-2 text-[11px] text-slate-300">
+                    <ol className="list-decimal list-inside space-y-1">
+                      <li>Mở Supabase SQL Editor, dán mã SQL và nhấn <strong>Run</strong> để tạo sẵn user <code>mexucxich</code> / <code>admin</code> và khóa RLS <code>authenticated</code>.</li>
+                      <li>Deploy Edge Function <code>supabase/functions/create-store-user/index.ts</code> (<code>supabase functions deploy create-store-user</code>) để nút tạo tài khoản bên trên hoạt động vĩnh viễn.</li>
+                    </ol>
+                    <button
+                      type="button"
+                      onClick={handleCopySql}
+                      className="px-3 py-1.5 rounded-lg bg-slate-900 border border-slate-600 hover:border-amber-400 text-amber-300 font-bold inline-flex items-center gap-1.5 transition"
+                    >
+                      <Copy className="w-3.5 h-3.5" />
+                      <span>{copiedSql ? '✓ Đã sao chép SQL khóa bảo mật!' : 'Sao chép SQL (supabase_schema.sql)'}</span>
+                    </button>
+                  </div>
+                )}
+              </div>
             </div>
-          </div>
+          )}
         </form>
 
         {/* RIGHT: LIVE PREVIEW (5 Cols) */}
